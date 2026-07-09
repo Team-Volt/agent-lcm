@@ -1,5 +1,6 @@
 node_modules/
 .codex-lcm/
+.omo/
 **/docs/*plan*.md
 *.sqlite
 *.sqlite-shm
