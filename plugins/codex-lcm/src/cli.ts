@@ -1,5 +1,5 @@
 import { loadConfig, pluginRoot } from "./config.ts";
-import { runLongContextBenchmark } from "./benchmark.ts";
+import { runLongContextBenchmark, runRetrievalQualityBenchmark } from "./benchmark.ts";
 import { importCodexSessions } from "./codex-import.ts";
 import { buildDoctorReport } from "./doctor.ts";
 import { runHook } from "./hook.ts";
@@ -61,13 +61,21 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (command === "benchmark") {
     const benchmarkName = rest[0];
-    if (benchmarkName !== "long-context") throw new Error("Usage: codex-lcm benchmark long-context [--events N] [--budget-tokens N] [--home PATH] [--json]");
-    printObjectOrText(runLongContextBenchmark({
-      events: numberOptionValue(rest, "--events"),
-      budgetTokens: numberOptionValue(rest, "--budget-tokens"),
-      home: optionValue(rest, "--home"),
-    }));
-    return;
+    if (benchmarkName === "long-context") {
+      printObjectOrText(runLongContextBenchmark({
+        events: numberOptionValue(rest, "--events"),
+        budgetTokens: numberOptionValue(rest, "--budget-tokens"),
+        home: optionValue(rest, "--home"),
+      }));
+      return;
+    }
+    if (benchmarkName === "retrieval-quality") {
+      printObjectOrText(runRetrievalQualityBenchmark({
+        home: optionValue(rest, "--home"),
+      }));
+      return;
+    }
+    throw new Error("Usage: codex-lcm benchmark long-context|retrieval-quality [options] [--json]");
   }
   if (command === "health") {
     const storage = createStorage({ config: loadConfig(), readOnly: true });
@@ -166,6 +174,7 @@ Commands:
   codex-lcm usage [--since ISO] [--until ISO] [--cwd PATH] [--repo-root PATH] [--parent-session-id ID] [--roots-only] [--json]
   codex-lcm context-plan [--session-id ID] [--cwd PATH] [--repo-root PATH] [--model-context-window N] [--auto-compact-token-limit N] [--recent-event-limit N] [--json]
   codex-lcm benchmark long-context [--events N] [--budget-tokens N] [--home PATH] [--json]
+  codex-lcm benchmark retrieval-quality [--home PATH] [--json]
   codex-lcm import-codex-sessions [--from PATH] [--dry-run] [--progress] [--batch-size N] [--json]
 `);
 }
