@@ -658,6 +658,100 @@ test("MCP describe inspects large file references without loading content", () =
   assert.match(fileDescription.file_ref.exploration_summary, /rows/u);
 });
 
+test("MCP describe recovers bounded chunks from sanitized overflow payloads", () => {
+  const home = tempHome();
+  const marker = "RECOVERED-OVERFLOW-CHUNK";
+  const hook = runCli(["hook", "PostToolUse"], {
+    input: JSON.stringify({
+      session_id: "mcp-overflow-session",
+      cwd: "/tmp/mcp-overflow",
+      tool_name: "build",
+      tool_response: `${"x".repeat(70 * 1024)}${marker}`,
+    }),
+    env: { CODEX_LCM_HOME: home },
+  });
+  assert.equal(hook.status, 0, hook.stderr);
+
+  const sessionResponses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "lcm_get_session",
+        arguments: { sessionId: "mcp-overflow-session" },
+      },
+    },
+  ], { CODEX_LCM_HOME: home });
+  const sha = sessionResponses[1].result.structuredContent.events[0].payload.overflow_ref.sha256;
+
+  const descriptionResponses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "lcm_describe",
+        arguments: {
+          fileId: `overflow:${sha}`,
+          offset: 64 * 1024,
+          maxBytes: 16 * 1024,
+        },
+      },
+    },
+  ], { CODEX_LCM_HOME: home });
+
+  const description = descriptionResponses[1].result.structuredContent.description;
+  assert.equal(description.target, "overflow_ref");
+  assert.equal(description.overflow_ref.file_ref_id, `overflow:${sha}`);
+  assert.equal(description.overflow_ref.offset, 64 * 1024);
+  assert.match(description.overflow_ref.content, new RegExp(marker, "u"));
+  assert.equal(description.overflow_ref.next_offset, undefined);
+});
+
+test("MCP grep searches bounded sanitized overflow content on request", () => {
+  const home = tempHome();
+  const marker = "OVERFLOW-SEARCH-ONLY-MARKER";
+  const hook = runCli(["hook", "PostToolUse"], {
+    input: JSON.stringify({
+      session_id: "mcp-overflow-search-session",
+      cwd: "/tmp/mcp-overflow-search",
+      tool_name: "test",
+      tool_response: `${"x".repeat(70 * 1024)}\n${marker}\n`,
+    }),
+    env: { CODEX_LCM_HOME: home },
+  });
+  assert.equal(hook.status, 0, hook.stderr);
+
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "lcm_grep",
+        arguments: {
+          query: marker,
+          contentScope: "overflow",
+          limit: 5,
+        },
+      },
+    },
+  ], { CODEX_LCM_HOME: home });
+
+  const result = responses[1].result.structuredContent;
+  assert.deepEqual(result.matches, []);
+  assert.equal(result.overflow_matches.length, 1);
+  assert.match(result.overflow_matches[0].file_ref_id, /^overflow:[a-f0-9]{64}$/u);
+  assert.equal(result.overflow_matches[0].session_id, "mcp-overflow-search-session");
+  assert.equal(result.overflow_matches[0].line_number, 1);
+  assert.equal(result.overflow_matches[0].byte_offset > 64 * 1024, true);
+  assert.match(result.overflow_matches[0].snippet, new RegExp(marker, "u"));
+});
+
 test("MCP expand_query returns recursive evidence for a focused query", () => {
   const home = tempHome();
   const cwd = "/tmp/mcp-expand-query";

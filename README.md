@@ -44,9 +44,13 @@ A typical retrieval flow is:
 1. Locate the current or latest relevant session by cwd, repo root, or session ID.
 2. Use `lcm_grep` to search across summary nodes, session summaries, and
    high-signal events. Search tries exact FTS first, then relaxes broad queries
-   so one missing word does not make retrieval look empty.
+   so one missing word does not make retrieval look empty. When an exact error
+   or tool-output marker may have been truncated from the indexed event, set
+   `contentScope: "overflow"` or `"both"` to scan bounded sanitized overflow
+   payloads.
 3. Use `lcm_describe` on a promising session or summary node to inspect the
-   summary, depth, source IDs, and lineage before loading more.
+   summary, depth, source IDs, and lineage before loading more. Overflow search
+   results use `overflow:<sha256>` file IDs and support byte-offset paging.
 4. Use `lcm_expand` on a chosen summary node, `lcm_expand_query` when the query
    should pick and recursively expand matching nodes, or `lcm_pack_context` when
    Codex needs a ready-to-use context block. Pass `overview: true` to

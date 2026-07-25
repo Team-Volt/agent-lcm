@@ -65,8 +65,8 @@ can still be recovered through `lcm_pack_context`.
 
 Standard recall workflow:
 
-- `lcm_grep`: find relevant sessions by searching summary nodes, session summaries, and high-signal events.
-- `lcm_describe`: inspect a session, summary node, or indexed file reference with compact source counts. Set `includeLineage: true` when exact source ID arrays are needed.
+- `lcm_grep`: find relevant sessions by searching summary nodes, session summaries, and high-signal events. Set `contentScope: "overflow"` or `"both"` to scan the first 512 KiB of recent sanitized overflow payloads.
+- `lcm_describe`: inspect a session, summary node, or indexed file reference with compact source counts. Overflow results use stable `overflow:<sha256>` IDs; pass `offset` and `maxBytes` to page their content in chunks of at most 512 KiB. Set `includeLineage: true` when exact source ID arrays are needed.
 - `lcm_expand`: expand one summary node into bounded source summary nodes and high-signal source events.
 - `lcm_expand_query`: answer a focused retrieval need by searching matching summary nodes and recursively expanding their source lineage into bounded evidence. The default budget is 2000 tokens. Use `overview: true` for broad, source-rich lineage views. `sourceLimit` is per matched node/source expansion, and tight budgets reserve room for a focused source-event excerpt when one exists.
 - `lcm_pack_context`: pack relevant summary-node context into a model-ready Markdown block.
@@ -121,7 +121,7 @@ Hooks capture the JSON payload Codex sends on stdin for:
 - `SubagentStop`
 - `Stop`
 
-Events store session ID, cwd, optional project string, optional git repo root, optional git branch, hook event name, sanitized payload, redaction metadata, truncation metadata, timestamps, and hashes. Inputs over 512 KiB keep the normal bounded event plus a redacted, content-addressed overflow file; inputs over 8 MiB are rejected. Large path-backed outputs are indexed as file references with path, byte count, SHA-256, MIME guess, and a compact exploration summary; the indexed metadata does not reload the full content.
+Events store session ID, cwd, optional project string, optional git repo root, optional git branch, hook event name, sanitized payload, redaction metadata, truncation metadata, timestamps, and hashes. Any valid hook input that exceeds an inline string or payload limit keeps the normal bounded event plus a sanitized, content-addressed overflow file; inputs over 8 MiB are rejected. Overflow recovery accepts only integrity-checked regular files inside the plugin's managed overflow directory. Large path-backed outputs are indexed as file references with path, byte count, SHA-256, MIME guess, and a compact exploration summary; the indexed metadata does not reload the full content.
 
 Project and git data are metadata only. Search and retrieval are session-first and work for projectless sessions.
 
