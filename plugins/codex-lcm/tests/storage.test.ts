@@ -6,6 +6,7 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 
 import { normalizeHookEvent, type NormalizedEvent } from "../src/events.ts";
+import { sha256 } from "../src/redact.ts";
 import { createStorage } from "../src/storage.ts";
 import { clearDerivedSummaries, readJsonl, tempHome } from "./helpers.ts";
 
@@ -962,6 +963,74 @@ test("indexes large path-backed tool outputs as file references", () => {
   const described = storage.getFileRef(refs[0].file_ref_id);
   assert.deepEqual(described, refs[0]);
 
+  storage.close();
+});
+
+test("overflow recovery refuses event-supplied paths outside managed storage", () => {
+  const home = tempHome();
+  const storage = createStorage({ home });
+  const content = "must not be read";
+  const externalPath = path.join(tempHome("codex-lcm-external-overflow-"), "payload.json");
+  fs.writeFileSync(externalPath, content);
+  const hash = sha256(content);
+
+  storage.ingest(normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: "untrusted-overflow-session",
+      cwd: "/tmp/untrusted-overflow",
+      overflow_ref: {
+        sha256: hash,
+        byte_count: Buffer.byteLength(content),
+        sanitized_byte_count: Buffer.byteLength(content),
+        path: externalPath,
+      },
+    }),
+    env: {},
+    now,
+  }));
+
+  assert.throws(
+    () => storage.describeMemory({ fileId: `overflow:${hash}` }),
+    /outside the managed overflow directory/u,
+  );
+  storage.close();
+});
+
+test("overflow recovery advances past a multibyte character with a tiny byte request", () => {
+  const home = tempHome();
+  const storage = createStorage({ home });
+  const content = "😀tail";
+  const hash = sha256(content);
+  const overflowPath = path.join(home, "overflow", `${hash}.json`);
+  fs.mkdirSync(path.dirname(overflowPath), { recursive: true });
+  fs.writeFileSync(overflowPath, content);
+
+  storage.ingest(normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: "utf8-overflow-session",
+      cwd: "/tmp/utf8-overflow",
+      overflow_ref: {
+        sha256: hash,
+        byte_count: Buffer.byteLength(content),
+        sanitized_byte_count: Buffer.byteLength(content),
+        path: overflowPath,
+      },
+    }),
+    env: {},
+    now,
+  }));
+
+  const description = storage.describeMemory({
+    fileId: `overflow:${hash}`,
+    maxBytes: 1,
+  });
+  assert.equal(description.target, "overflow_ref");
+  if (description.target === "overflow_ref") {
+    assert.equal(description.overflow_ref.content, "😀");
+    assert.equal((description.overflow_ref.next_offset ?? 0) > 0, true);
+  }
   storage.close();
 });
 
