@@ -71,7 +71,7 @@ const TOOLS = [
   {
     name: "lcm_grep",
     title: "LCM Grep",
-    description: "Preferred standard workflow step 1 (grep): find relevant sessions by searching summary nodes, session summaries, and high-signal raw events. Codex may surface this tool as mcp__codex_lcm__lcm_grep.",
+    description: "Preferred standard workflow step 1 (grep): find relevant sessions in indexed memory, or search bounded sanitized overflow payloads when contentScope is overflow or both. Codex may surface this tool as mcp__codex_lcm__lcm_grep.",
     inputSchema: {
       type: "object",
       properties: {
@@ -79,6 +79,7 @@ const TOOLS = [
         limit: { type: "number", default: 10 },
         cwd: { type: "string" },
         repoRoot: { type: "string" },
+        contentScope: { type: "string", enum: ["memory", "overflow", "both"], default: "memory" },
         excludeCurrentSession: { type: "boolean", default: false },
         excludeSessionIds: { type: "array", items: { type: "string" } },
       },
@@ -96,6 +97,8 @@ const TOOLS = [
         nodeId: { type: "string" },
         fileId: { type: "string" },
         limit: { type: "number", default: 50 },
+        offset: { type: "number", default: 0, description: "Byte offset when reading an overflow reference." },
+        maxBytes: { type: "number", minimum: 4, maximum: 524288, default: 65536, description: "Maximum bytes to read from an overflow reference." },
         includeLineage: { type: "boolean", default: false, description: "Include full source ID arrays instead of compact source counts." },
       },
     },
@@ -457,15 +460,30 @@ function callTool(params: Record<string, unknown>) {
         return toolResult(`Captured ${usage.totals.total_tokens} tokens across ${usage.totals.sessions} sessions.`, { usage });
       }
       case "lcm_grep": {
-        const matches = storage.searchSessions({
-          query: optionalString(args.query),
-          limit: optionalNumber(args.limit),
-          cwd: optionalString(args.cwd),
-          repoRoot: optionalString(args.repoRoot),
-          excludeCurrentSession: optionalBoolean(args.excludeCurrentSession),
-          excludeSessionIds: optionalStringArray(args.excludeSessionIds),
-        });
-        return toolResult(`Found ${matches.length} LCM matches.`, { matches });
+        const scope = contentScope(args.contentScope);
+        const query = optionalString(args.query);
+        const matches = scope === "overflow"
+          ? []
+          : storage.searchSessions({
+            query,
+            limit: optionalNumber(args.limit),
+            cwd: optionalString(args.cwd),
+            repoRoot: optionalString(args.repoRoot),
+            excludeCurrentSession: optionalBoolean(args.excludeCurrentSession),
+            excludeSessionIds: optionalStringArray(args.excludeSessionIds),
+          });
+        const overflowMatches = scope === "memory"
+          ? []
+          : storage.searchOverflow({
+            query: query ?? "",
+            limit: optionalNumber(args.limit),
+            cwd: optionalString(args.cwd),
+            repoRoot: optionalString(args.repoRoot),
+          });
+        return toolResult(
+          `Found ${matches.length} LCM matches and ${overflowMatches.length} overflow matches.`,
+          { matches, overflow_matches: overflowMatches },
+        );
       }
       case "lcm_describe": {
         const description = storage.describeMemory({
@@ -473,12 +491,16 @@ function callTool(params: Record<string, unknown>) {
           nodeId: optionalString(args.nodeId),
           fileId: optionalString(args.fileId),
           limit: optionalNumber(args.limit),
+          offset: optionalNumber(args.offset),
+          maxBytes: optionalNumber(args.maxBytes),
         });
         const target = description.target === "session"
           ? description.session?.session_id ?? args.sessionId
           : description.target === "summary_node"
             ? description.node.node_id
-            : description.file_ref.file_ref_id;
+            : description.target === "file_ref"
+              ? description.file_ref.file_ref_id
+              : description.overflow_ref.file_ref_id;
         return toolResult(`Described ${description.target} ${target}.`, {
           description: optionalBoolean(args.includeLineage) ? description : compactDescription(description),
         });
@@ -618,7 +640,7 @@ function withoutMarkdown<T extends { markdown: string }>(value: T): Omit<T, "mar
 }
 
 function compactDescription(description: LcmDescription): unknown {
-  if (description.target === "file_ref") return description;
+  if (description.target === "file_ref" || description.target === "overflow_ref") return description;
   if (description.target === "summary_node") {
     return {
       ...description,
@@ -676,6 +698,12 @@ function optionalStringArray(value: unknown): string[] | undefined {
     throw new Error("value must be an array of non-empty strings.");
   }
   return value.map((item) => item.trim());
+}
+
+function contentScope(value: unknown): "memory" | "overflow" | "both" {
+  if (value === undefined) return "memory";
+  if (value === "memory" || value === "overflow" || value === "both") return value;
+  throw new Error("contentScope must be memory, overflow, or both.");
 }
 
 function currentThreadId(): string | undefined {

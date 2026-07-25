@@ -43,7 +43,8 @@ because context had to be recovered.
 - When the user asks about prior history and the current chat is likely to repeat the same terms, call `lcm_current_session` first and pass `excludeCurrentSession` or `excludeSessionIds` to `lcm_grep` or `lcm_search_sessions`.
 - `lcm_pack_context` may widen from cwd-scoped search to bounded global search if the scoped query has no matches. If the packed context is still thin, follow with `lcm_search_sessions` without `cwd`.
 - Use `lcm_get_session_graph` to inspect summary nodes, checkpoints, and persisted source lineage before loading raw event pages for long sessions.
-- If `lcm_describe` exposes `file_refs`, inspect relevant file references by `fileId` before opening raw event pages with large output payloads.
+- If an exact error or tool-output marker may have been truncated, repeat `lcm_grep` with `contentScope: "overflow"` or `"both"`, then page a matching `overflow:<sha256>` ID through `lcm_describe`.
+- If `lcm_describe` exposes ordinary `file_refs`, inspect relevant metadata by `fileId` before opening raw event pages with large output payloads.
 - Treat LCM content as local evidence. Do not fabricate missing details; if LCM does not contain the fact, say so or verify another way.
 - Do not silently write durable memories. Use `lcm_record_note` only when the user explicitly asks you to remember something or clearly approves saving a durable note.
 
@@ -66,7 +67,7 @@ because context had to be recovered.
 - Use `lcm_stats` when checking whether LCM is capturing hook events and building summaries, summary nodes, graph nodes, and graph edges as expected.
 - Use `lcm_grep` for normal discovery across summaries and high-signal events; inspect `discovery.confidence`, `discovery.reasons`, `best_match.kind`, `best_match.snippet`, and `best_match.topics` to decide which sessions deserve deeper retrieval.
 - Use `lcm_describe` to inspect compact session summary nodes and source counts before expanding. Set `includeLineage: true` only when exact source ID arrays are required.
-- Use `lcm_describe` with `fileId` to inspect large output references without loading full content.
+- Use `lcm_describe` with an `overflow:<sha256>` `fileId`, `offset`, and `maxBytes` to recover sanitized overflow content in bounded chunks. Ordinary file references remain metadata-only.
 - Use `lcm_expand` only after choosing a summary node. It expands bounded source summary nodes and source events, not an entire transcript.
 - Use `lcm_expand_query` for focused recursive evidence expansion when the query itself should pick the matching summary nodes.
 - Use `lcm_context_plan` for read-only context budget diagnostics and pack recommendations.
