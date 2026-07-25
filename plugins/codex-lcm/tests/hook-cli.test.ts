@@ -64,6 +64,28 @@ test("hook command stores a sanitized overflow reference for oversized valid inp
   assert.match(overflow, /\[REDACTED:secret\]/u);
 });
 
+test("hook command preserves truncated large tool output below the input overflow threshold", () => {
+  const home = tempHome();
+  const marker = "RECOVERABLE-LARGE-OUTPUT-MARKER";
+  const result = runCli(["hook", "PostToolUse"], {
+    input: JSON.stringify({
+      session_id: "large-tool-output-session",
+      cwd: "/tmp/large-tool-output",
+      tool_name: "build",
+      tool_response: `${"x".repeat(70 * 1024)}${marker}`,
+    }),
+    env: { CODEX_LCM_HOME: home },
+  });
+
+  assertCliOk(result);
+  const [event] = readJsonl(path.join(home, "events.jsonl")) as Array<{
+    payload: { overflow_ref?: { path?: string } };
+  }>;
+  const overflowPath = event.payload.overflow_ref?.path ?? "";
+  assert.equal(fs.existsSync(overflowPath), true);
+  assert.match(fs.readFileSync(overflowPath, "utf8"), new RegExp(marker, "u"));
+});
+
 test("hook command still rejects input above the overflow safety ceiling", () => {
   const home = tempHome();
   const result = runCli(["hook", "UserPromptSubmit"], {

@@ -24,7 +24,7 @@ export async function runHook(args: string[]): Promise<void> {
     env: process.env,
     repo,
   });
-  if (Buffer.byteLength(rawInput, "utf8") > config.limits.maxInputBytes) {
+  if (event.truncations.length > 0 || Buffer.byteLength(rawInput, "utf8") > config.limits.maxInputBytes) {
     const fullEvent = normalizeHookEvent({
       hookEvent,
       rawInput,

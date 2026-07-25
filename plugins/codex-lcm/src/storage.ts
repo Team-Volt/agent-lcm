@@ -6,6 +6,14 @@ import { loadConfig, type LcmConfig } from "./config.ts";
 import { createNoteEvent, type NormalizedEvent } from "./events.ts";
 import { extractFileReferences, type FileReference } from "./file-refs.ts";
 import {
+  overflowReferenceFromEvent,
+  readOverflowContent,
+  searchOverflowContent,
+  type OverflowContent,
+  type OverflowReference,
+  type OverflowSearchMatch,
+} from "./overflow.ts";
+import {
   SUMMARY_ALGORITHM_VERSION,
   SUMMARY_NODE_CHUNK_SIZE,
   SUMMARY_NODE_FANOUT,
@@ -39,6 +47,7 @@ import {
 } from "./summary.ts";
 
 export type { FileReference } from "./file-refs.ts";
+export type { OverflowContent, OverflowReference, OverflowSearchMatch } from "./overflow.ts";
 export type { SessionMemorySummary, SummaryNode, SummarySourceType } from "./summary.ts";
 
 export type StorageOptions = {
@@ -64,6 +73,13 @@ export type SearchSessionArgs = {
   repoRoot?: string;
   excludeCurrentSession?: boolean;
   excludeSessionIds?: string[];
+};
+
+export type SearchOverflowArgs = {
+  query: string;
+  limit?: number;
+  cwd?: string;
+  repoRoot?: string;
 };
 
 export type ListSessionsArgs = {
@@ -249,6 +265,10 @@ export type LcmDescription =
   | {
     target: "file_ref";
     file_ref: FileReference;
+  }
+  | {
+    target: "overflow_ref";
+    overflow_ref: OverflowContent;
   };
 
 export type LcmExpansion = {
@@ -1200,6 +1220,43 @@ export class LcmStorage {
     return rankSessionRows(rows, query).slice(0, limit);
   }
 
+  searchOverflow(args: SearchOverflowArgs): OverflowSearchMatch[] {
+    const limit = clampLimit(args.limit, 10, 50);
+    const events = this.db
+      ? (this.db.prepare(`
+          SELECT raw_json
+          FROM events
+          WHERE json_extract(raw_json, '$.payload.overflow_ref.sha256') IS NOT NULL
+            AND (?1 IS NULL OR cwd = ?1)
+            AND (?2 IS NULL OR repo_root = ?2)
+          ORDER BY timestamp DESC, rowid DESC
+          LIMIT 256
+        `).all(args.cwd ?? null, args.repoRoot ?? null) as Array<{ raw_json: string }>)
+        .map((row) => JSON.parse(row.raw_json) as NormalizedEvent)
+      : readRawEvents(this.config.rawLogPath)
+        .filter((event) => !args.cwd || event.cwd === args.cwd)
+        .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
+        .slice(-256)
+        .reverse();
+    const matches: OverflowSearchMatch[] = [];
+    for (const event of events) {
+      const reference = overflowReferenceFromEvent(event);
+      if (!reference) continue;
+      try {
+        const match = searchOverflowContent({
+          overflowDir: this.config.overflowDir,
+          reference,
+          query: args.query,
+        });
+        if (match) matches.push(match);
+      } catch {
+        // A missing, moved, or invalid overflow file cannot block other recall.
+      }
+      if (matches.length >= limit) break;
+    }
+    return matches;
+  }
+
   private excludedSearchSessionIds(args: SearchSessionArgs): Set<string> {
     const excluded = new Set(args.excludeSessionIds?.filter((sessionId) => sessionId.trim().length > 0) ?? []);
     if (args.excludeCurrentSession) {
@@ -1509,8 +1566,48 @@ export class LcmStorage {
     return row ? rowToFileReference(row) : undefined;
   }
 
-  describeMemory(args: { sessionId?: string; nodeId?: string; fileId?: string; limit?: number }): LcmDescription {
+  getOverflowRef(fileRefId: string): OverflowReference | undefined {
+    if (!fileRefId.startsWith("overflow:")) return undefined;
+    const hash = fileRefId.slice("overflow:".length);
+    if (!/^[a-f0-9]{64}$/u.test(hash)) return undefined;
+    if (!this.db) {
+      return readRawEvents(this.config.rawLogPath)
+        .map(overflowReferenceFromEvent)
+        .find((reference) => reference?.sha256 === hash);
+    }
+    const row = this.db.prepare(`
+      SELECT raw_json
+      FROM events
+      WHERE json_extract(raw_json, '$.payload.overflow_ref.sha256') = ?1
+      ORDER BY timestamp DESC, rowid DESC
+      LIMIT 1
+    `).get(hash) as { raw_json?: string } | undefined;
+    if (!row?.raw_json) return undefined;
+    return overflowReferenceFromEvent(JSON.parse(row.raw_json) as NormalizedEvent);
+  }
+
+  describeMemory(args: {
+    sessionId?: string;
+    nodeId?: string;
+    fileId?: string;
+    limit?: number;
+    offset?: number;
+    maxBytes?: number;
+  }): LcmDescription {
     if (args.fileId) {
+      if (args.fileId.startsWith("overflow:")) {
+        const reference = this.getOverflowRef(args.fileId);
+        if (!reference) throw new Error(`Overflow reference not found: ${args.fileId}`);
+        return {
+          target: "overflow_ref",
+          overflow_ref: readOverflowContent({
+            overflowDir: this.config.overflowDir,
+            reference,
+            offset: args.offset,
+            maxBytes: args.maxBytes,
+          }),
+        };
+      }
       const fileRef = this.getFileRef(args.fileId);
       if (!fileRef) throw new Error(`File reference not found: ${args.fileId}`);
       return {
