@@ -26,6 +26,7 @@ node bin/codex-lcm usage --since 2026-07-13T00:00:00Z
 node bin/codex-lcm cleanup
 node bin/codex-lcm context-plan
 node bin/codex-lcm benchmark long-context
+node bin/codex-lcm benchmark retrieval-quality
 ```
 
 Storage defaults to `~/.codex-lcm`. Override storage for hook and MCP operations with:
@@ -42,6 +43,7 @@ node bin/codex-lcm import-codex-sessions --dry-run --json
 node bin/codex-lcm import-codex-sessions --json
 node bin/codex-lcm context-plan --session-id SESSION --json
 node bin/codex-lcm benchmark long-context --json
+node bin/codex-lcm benchmark retrieval-quality --json
 node bin/codex-lcm cleanup --apply --json
 ```
 
@@ -217,6 +219,12 @@ lineage over arbitrary raw tool output.
 retrieval check. It creates temporary storage, imports a long session with an old
 needle event, and verifies `lcm_pack_context` recovers that source under a
 bounded budget. Pass `--home PATH` to keep the benchmark storage for inspection.
+
+`node bin/codex-lcm benchmark retrieval-quality --json` runs a fixed,
+dependency-free corpus through production session search. It reports Recall@1,
+Recall@5, mean reciprocal rank, and per-case ranks across exact, cross-session,
+temporal, and paraphrase queries. The paraphrase cases expose lexical retrieval
+gaps instead of hiding them behind exact needles.
 
 ## Privacy And Safety
 
