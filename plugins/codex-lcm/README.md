@@ -67,7 +67,7 @@ can still be recovered through `lcm_pack_context`.
 
 Standard recall workflow:
 
-- `lcm_grep`: find relevant sessions by searching summary nodes, session summaries, and high-signal events. Set `contentScope: "overflow"` or `"both"` to scan the first 512 KiB of recent sanitized overflow payloads.
+- `lcm_grep`: find relevant sessions by searching summary nodes, session summaries, and high-signal events. Set `contentScope: "overflow"` or `"both"` to scan recent sanitized overflow payloads in full, subject to the 8 MiB input safety limit.
 - `lcm_describe`: inspect a session, summary node, or indexed file reference with compact source counts. Overflow results use stable `overflow:<sha256>` IDs; pass `offset` and `maxBytes` to page their content in chunks of at most 512 KiB. Set `includeLineage: true` when exact source ID arrays are needed.
 - `lcm_expand`: expand one summary node into bounded source summary nodes and high-signal source events.
 - `lcm_expand_query`: answer a focused retrieval need by searching matching summary nodes and recursively expanding their source lineage into bounded evidence. The default budget is 2000 tokens. Use `overview: true` for broad, source-rich lineage views. `sourceLimit` is per matched node/source expansion, and tight budgets reserve room for a focused source-event excerpt when one exists.

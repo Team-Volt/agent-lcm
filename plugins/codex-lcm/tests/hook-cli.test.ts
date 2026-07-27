@@ -36,6 +36,48 @@ test("hook command ingests a synthetic projectless prompt event", () => {
   assert.equal(JSON.parse(health.stdout).event_count, 1);
 });
 
+test("hook command redacts credential URI passwords before persistence", () => {
+  const home = tempHome();
+  const password = "audit-password";
+  const result = runCli(["hook", "UserPromptSubmit"], {
+    input: JSON.stringify({
+      session_id: "credential-uri-session",
+      cwd: "/tmp/credential-uri",
+      prompt: `connect to postgres://audit:${password}@db.example.test/app`,
+    }),
+    env: { CODEX_LCM_HOME: home },
+  });
+
+  assertCliOk(result);
+  const persisted = fs.readFileSync(path.join(home, "events.jsonl"), "utf8");
+  assert.doesNotMatch(persisted, new RegExp(password, "u"));
+  assert.match(persisted, /postgres:\/\/audit:\[REDACTED:secret\]@db\.example\.test\/app/u);
+});
+
+test("cleanup --json treats a fresh home as an empty no-op", () => {
+  const home = tempHome();
+  const result = runCli(["cleanup", "--json"], {
+    env: { CODEX_LCM_HOME: home },
+  });
+
+  assertCliOk(result);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    applied: false,
+    raw_log_preserved: true,
+    index_path: path.join(home, "index.sqlite"),
+    database_bytes_before: 0,
+    database_bytes_after: 0,
+    event_fts_rows_before: 0,
+    event_fts_rows_after: 0,
+    projected_event_fts_rows: 0,
+    event_text_bytes_before: 0,
+    event_text_bytes_after: 0,
+    projected_summaries_to_rebuild: 0,
+    summaries_rebuilt: 0,
+    vacuumed: false,
+  });
+});
+
 test("hook command stores a sanitized overflow reference for oversized valid input", () => {
   const home = tempHome();
   const secret = "sk-test-overflow-secret-1234567890";
@@ -336,7 +378,7 @@ test("PostCompact pending marker blocks same-turn completion until LCM recovery"
   assert.equal(output.reason, "Post-compaction LCM recovery required: call `lcm_pack_context`, then continue.");
 });
 
-test("post-compaction LCM nudge is emitted once per compacted session", () => {
+test("post-compaction recovery stays pending until lcm_pack_context completes", () => {
   const home = tempHome();
   const env = { CODEX_LCM_HOME: home };
   const postCompact = runCli(["hook", "PostCompact"], {
@@ -358,12 +400,37 @@ test("post-compaction LCM nudge is emitted once per compacted session", () => {
     source: "compact",
   });
   const first = runCli(["hook", "SessionStart"], { input: payload, env });
-  const second = runCli(["hook", "SessionStart"], { input: payload, env });
+  const blocked = runCli(["hook", "Stop"], {
+    input: JSON.stringify({
+      session_id: "compact-once-session",
+      cwd: "/tmp/compact-once-project",
+    }),
+    env,
+  });
+  const recovered = runCli(["hook", "PostToolUse"], {
+    input: JSON.stringify({
+      session_id: "compact-once-session",
+      cwd: "/tmp/compact-once-project",
+      tool_name: "mcp__codex_lcm__lcm_pack_context",
+    }),
+    env,
+  });
+  const stopped = runCli(["hook", "Stop"], {
+    input: JSON.stringify({
+      session_id: "compact-once-session",
+      cwd: "/tmp/compact-once-project",
+    }),
+    env,
+  });
 
   assertCliOk(first);
-  assertCliOk(second);
+  assertCliOk(blocked);
+  assertCliOk(recovered);
+  assertCliOk(stopped);
   assert.match(first.stdout, /lcm_pack_context/u);
-  assert.equal(second.stdout, "");
+  assert.equal(JSON.parse(blocked.stdout).decision, "block");
+  assert.equal(recovered.stdout, "");
+  assert.equal(stopped.stdout, "");
 });
 
 test("stats command reports aggregate summary depth and graph counts", () => {

@@ -104,7 +104,7 @@ function postCompactRecoveryOutput(args: {
     args.hookEvent !== "UserPromptSubmit" &&
     (args.hookEvent !== "SessionStart" || (args.payload.source !== "compact" && args.payload.source !== "resume"))
   ) return "";
-  if (!claimPostCompactPending(args.home, args.sessionId)) return "";
+  if (!hasPostCompactPending(args.home, args.sessionId)) return "";
   return formatAdditionalContextOutput(args.hookEvent, buildPostCompactLcmDirective());
 }
 
