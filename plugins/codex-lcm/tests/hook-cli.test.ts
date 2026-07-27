@@ -392,6 +392,10 @@ test("post-compaction recovery stays pending until lcm_pack_context completes", 
   });
   assertCliOk(postCompact);
   assert.equal(postCompact.stdout, "");
+  const recoveryDir = path.join(home, "post-compact-recovery");
+  const [marker] = fs.readdirSync(recoveryDir);
+  assert.equal(fs.statSync(recoveryDir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(recoveryDir, marker)).mode & 0o777, 0o600);
 
   const payload = JSON.stringify({
     session_id: "compact-once-session",

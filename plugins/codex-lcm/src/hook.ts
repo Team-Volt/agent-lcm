@@ -109,8 +109,12 @@ function postCompactRecoveryOutput(args: {
 }
 
 function markPostCompactPending(home: string, sessionId: string): void {
-  fs.mkdirSync(postCompactRecoveryDir(home), { recursive: true });
-  fs.writeFileSync(postCompactRecoveryPath(home, sessionId), JSON.stringify({ pending: true }));
+  const recoveryDir = postCompactRecoveryDir(home);
+  const markerPath = postCompactRecoveryPath(home, sessionId);
+  fs.mkdirSync(recoveryDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(recoveryDir, 0o700);
+  fs.writeFileSync(markerPath, JSON.stringify({ pending: true }), { mode: 0o600 });
+  fs.chmodSync(markerPath, 0o600);
 }
 
 function claimPostCompactPending(home: string, sessionId: string): boolean {
