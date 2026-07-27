@@ -32,6 +32,11 @@ type TokenPattern = {
 
 const TOKEN_PATTERNS: TokenPattern[] = [
   {
+    regex: /\b([a-z][a-z0-9+.-]*:\/\/[^:\s/@]*:)(?!\[REDACTED:secret\])([^@\s/]+)(@)/giu,
+    replacement: (_match: string, prefix: string, _password: string, suffix: string) =>
+      `${prefix}[REDACTED:secret]${suffix}`,
+  },
+  {
     regex: /Authorization:\s*Bearer\s+(?!\[REDACTED:token\])[^\s"']+/giu,
     replacement: "Authorization: Bearer [REDACTED:token]",
   },
