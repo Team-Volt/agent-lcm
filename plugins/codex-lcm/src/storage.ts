@@ -383,6 +383,7 @@ export class LcmStorage {
     this.readOnly = options.readOnly ?? false;
     if (!this.readOnly) {
       fs.mkdirSync(this.config.home, { recursive: true, mode: 0o700 });
+      fs.chmodSync(this.config.home, 0o700);
     }
     if (this.readOnly && !fs.existsSync(this.config.indexPath)) {
       return;
@@ -390,6 +391,7 @@ export class LcmStorage {
     try {
       this.db = new DatabaseSync(this.config.indexPath, { readOnly: this.readOnly, timeout: 5_000 });
       if (!this.readOnly) {
+        fs.chmodSync(this.config.indexPath, 0o600);
         this.initialize();
         this.replayRawLogToIndex();
         this.backfillDelegationParents();
@@ -607,6 +609,23 @@ export class LcmStorage {
   }
 
   cleanupIndex(options: { apply?: boolean } = {}): IndexCleanupReport {
+    if (!this.db && !fs.existsSync(this.config.rawLogPath) && !fs.existsSync(this.config.indexPath)) {
+      return {
+        applied: false,
+        raw_log_preserved: true,
+        index_path: this.config.indexPath,
+        database_bytes_before: 0,
+        database_bytes_after: 0,
+        event_fts_rows_before: 0,
+        event_fts_rows_after: 0,
+        projected_event_fts_rows: 0,
+        event_text_bytes_before: 0,
+        event_text_bytes_after: 0,
+        projected_summaries_to_rebuild: 0,
+        summaries_rebuilt: 0,
+        vacuumed: false,
+      };
+    }
     if (!this.db) throw new Error("SQLite index is unavailable; the raw event log was not changed.");
     const apply = options.apply === true;
     if (apply && this.readOnly) throw new Error("Cleanup --apply requires writable storage.");

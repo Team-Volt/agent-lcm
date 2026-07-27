@@ -12,6 +12,18 @@ import { clearDerivedSummaries, readJsonl, tempHome } from "./helpers.ts";
 
 const now = () => new Date("2026-06-09T12:00:00.000Z");
 
+test("writable storage restricts its home and SQLite index permissions", () => {
+  if (process.platform === "win32") return;
+  const home = tempHome();
+  fs.chmodSync(home, 0o777);
+
+  const storage = createStorage({ home });
+  storage.close();
+
+  assert.equal(fs.statSync(home).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(home, "index.sqlite")).mode & 0o777, 0o600);
+});
+
 test("appends JSONL and indexes searchable cross-session events", () => {
   const home = tempHome();
   const storage = createStorage({ home });

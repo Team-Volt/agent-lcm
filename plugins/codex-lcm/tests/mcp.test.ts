@@ -711,7 +711,7 @@ test("MCP describe recovers bounded chunks from sanitized overflow payloads", ()
   assert.equal(description.overflow_ref.next_offset, undefined);
 });
 
-test("MCP grep searches bounded sanitized overflow content on request", () => {
+test("MCP grep searches the full bounded sanitized overflow content", () => {
   const home = tempHome();
   const marker = "OVERFLOW-SEARCH-ONLY-MARKER";
   const hook = runCli(["hook", "PostToolUse"], {
@@ -719,7 +719,7 @@ test("MCP grep searches bounded sanitized overflow content on request", () => {
       session_id: "mcp-overflow-search-session",
       cwd: "/tmp/mcp-overflow-search",
       tool_name: "test",
-      tool_response: `${"x".repeat(70 * 1024)}\n${marker}\n`,
+      tool_response: `${"x".repeat(600 * 1024)}\n${marker}\n`,
     }),
     env: { CODEX_LCM_HOME: home },
   });
@@ -748,8 +748,9 @@ test("MCP grep searches bounded sanitized overflow content on request", () => {
   assert.match(result.overflow_matches[0].file_ref_id, /^overflow:[a-f0-9]{64}$/u);
   assert.equal(result.overflow_matches[0].session_id, "mcp-overflow-search-session");
   assert.equal(result.overflow_matches[0].line_number, 1);
-  assert.equal(result.overflow_matches[0].byte_offset > 64 * 1024, true);
+  assert.equal(result.overflow_matches[0].byte_offset > 512 * 1024, true);
   assert.match(result.overflow_matches[0].snippet, new RegExp(marker, "u"));
+  assert.equal(result.overflow_matches[0].scan_truncated, false);
 });
 
 test("MCP expand_query returns recursive evidence for a focused query", () => {

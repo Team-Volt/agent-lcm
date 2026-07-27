@@ -62,6 +62,23 @@ export function readOverflowContent(args: {
   offset?: number;
   maxBytes?: number;
 }): OverflowContent {
+  const buffer = readVerifiedOverflowBuffer(args);
+  const requestedOffset = clampInteger(args.offset, 0, buffer.length, 0);
+  const maxBytes = clampInteger(args.maxBytes, 4, MAX_OVERFLOW_READ_BYTES, DEFAULT_OVERFLOW_READ_BYTES);
+  const offset = nextUtf8Boundary(buffer, requestedOffset);
+  const end = previousUtf8Boundary(buffer, Math.min(buffer.length, offset + maxBytes));
+  return {
+    ...args.reference,
+    offset,
+    content: buffer.subarray(offset, end).toString("utf8"),
+    ...(end < buffer.length ? { next_offset: end } : {}),
+  };
+}
+
+function readVerifiedOverflowBuffer(args: {
+  overflowDir: string;
+  reference: OverflowReference;
+}): Buffer {
   const expectedPath = path.join(path.resolve(args.overflowDir), `${args.reference.sha256}.json`);
   if (path.resolve(args.reference.path) !== expectedPath) {
     throw new Error("Overflow reference is outside the managed overflow directory.");
@@ -74,17 +91,7 @@ export function readOverflowContent(args: {
     }
     const buffer = fs.readFileSync(file);
     if (sha256(buffer) !== args.reference.sha256) throw new Error("Overflow payload integrity check failed.");
-
-    const requestedOffset = clampInteger(args.offset, 0, buffer.length, 0);
-    const maxBytes = clampInteger(args.maxBytes, 4, MAX_OVERFLOW_READ_BYTES, DEFAULT_OVERFLOW_READ_BYTES);
-    const offset = nextUtf8Boundary(buffer, requestedOffset);
-    const end = previousUtf8Boundary(buffer, Math.min(buffer.length, offset + maxBytes));
-    return {
-      ...args.reference,
-      offset,
-      content: buffer.subarray(offset, end).toString("utf8"),
-      ...(end < buffer.length ? { next_offset: end } : {}),
-    };
+    return buffer;
   } finally {
     fs.closeSync(file);
   }
@@ -95,26 +102,22 @@ export function searchOverflowContent(args: {
   reference: OverflowReference;
   query: string;
 }): OverflowSearchMatch | undefined {
-  const chunk = readOverflowContent({
-    overflowDir: args.overflowDir,
-    reference: args.reference,
-    maxBytes: MAX_OVERFLOW_READ_BYTES,
-  });
   const query = args.query.trim();
   if (query.length === 0) return undefined;
-  const index = chunk.content.toLowerCase().indexOf(query.toLowerCase());
+  const content = readVerifiedOverflowBuffer(args).toString("utf8");
+  const index = content.toLowerCase().indexOf(query.toLowerCase());
   if (index < 0) return undefined;
-  const byteOffset = Buffer.byteLength(chunk.content.slice(0, index), "utf8");
+  const byteOffset = Buffer.byteLength(content.slice(0, index), "utf8");
   const snippetStart = Math.max(0, index - 120);
-  const snippetEnd = Math.min(chunk.content.length, index + query.length + 120);
+  const snippetEnd = Math.min(content.length, index + query.length + 120);
   return {
     file_ref_id: args.reference.file_ref_id,
     session_id: args.reference.session_id,
     timestamp: args.reference.timestamp,
     byte_offset: byteOffset,
-    line_number: chunk.content.slice(0, index).split(/\r?\n/u).length,
-    snippet: chunk.content.slice(snippetStart, snippetEnd).replace(/\s+/gu, " ").trim(),
-    scan_truncated: chunk.next_offset !== undefined,
+    line_number: content.slice(0, index).split(/\r?\n/u).length,
+    snippet: content.slice(snippetStart, snippetEnd).replace(/\s+/gu, " ").trim(),
+    scan_truncated: false,
   };
 }
 

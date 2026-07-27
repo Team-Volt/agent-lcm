@@ -63,6 +63,18 @@ test("redacts obvious bearer and provider tokens inside strings", () => {
   assert.equal(result.redactions.length, 2);
 });
 
+test("redacts passwords embedded in credential URIs", () => {
+  const result = sanitizeForStorage({
+    text: "Use postgres://audit:password123@db.example.test/app and https://me:p%40ss@example.test/path",
+  });
+
+  assert.equal(
+    (result.value as { text: string }).text,
+    "Use postgres://audit:[REDACTED:secret]@db.example.test/app and https://me:[REDACTED:secret]@example.test/path",
+  );
+  assert.equal(result.redactions.length, 2);
+});
+
 test("redacts secret-like assignments inside strings", () => {
   const result = sanitizeForStorage({
     env: [
