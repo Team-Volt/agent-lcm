@@ -36,7 +36,7 @@ test("retrieval-quality benchmark reports ranked results across labeled query ca
   assert.equal(result.recall_at_5 >= result.recall_at_1 && result.recall_at_5 <= 1, true);
   assert.equal(result.mean_reciprocal_rank >= 0 && result.mean_reciprocal_rank <= 1, true);
   assert.equal(result.by_category.exact.recall_at_5, 1);
-  assert.equal(result.by_category.paraphrase.recall_at_5 < 1, true);
+  assert.equal(result.by_category.paraphrase.recall_at_5 >= 0.5, true);
   assert.equal(result.cases.every((entry) => entry.split === "development" || entry.split === "holdout"), true);
   assert.equal(result.cases.every((entry) => entry.rank === null || entry.rank > 0), true);
   assert.equal(result.duration_ms >= 0, true);
