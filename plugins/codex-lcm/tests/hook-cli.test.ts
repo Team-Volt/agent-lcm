@@ -43,7 +43,7 @@ test("hook command redacts credential URI passwords before persistence", () => {
     input: JSON.stringify({
       session_id: "credential-uri-session",
       cwd: "/tmp/credential-uri",
-      prompt: `connect to postgres://audit:${password}@db.example.test/app`,
+      prompt: `connect to redis://:${password}@cache.example.test/0`,
     }),
     env: { CODEX_LCM_HOME: home },
   });
@@ -51,7 +51,7 @@ test("hook command redacts credential URI passwords before persistence", () => {
   assertCliOk(result);
   const persisted = fs.readFileSync(path.join(home, "events.jsonl"), "utf8");
   assert.doesNotMatch(persisted, new RegExp(password, "u"));
-  assert.match(persisted, /postgres:\/\/audit:\[REDACTED:secret\]@db\.example\.test\/app/u);
+  assert.match(persisted, /redis:\/\/:\[REDACTED:secret\]@cache\.example\.test\/0/u);
 });
 
 test("cleanup --json treats a fresh home as an empty no-op", () => {
