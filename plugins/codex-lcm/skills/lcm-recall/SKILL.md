@@ -1,6 +1,6 @@
 ---
 name: lcm-recall
-description: Use when a task may depend on prior Codex session context, long-running work, compaction recovery, projectless memory, or a user asks what happened before.
+description: Recover or resume Codex work after compaction, interruption, or handoff with lcm_pack_context; also use for prior session context, long-running work, projectless memory, or questions about what happened before.
 ---
 
 # LCM Recall
