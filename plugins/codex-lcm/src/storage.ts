@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig, type LcmConfig } from "./config.ts";
+import { decodePersistedEvent } from "./event-codec.ts";
 import { createNoteEvent, type NormalizedEvent } from "./events.ts";
 import { extractFileReferences, type FileReference } from "./file-refs.ts";
 import {
@@ -13,6 +13,25 @@ import {
   type OverflowReference,
   type OverflowSearchMatch,
 } from "./overflow.ts";
+import {
+  appendRawEvents,
+  rawLogState,
+  rawLogStat,
+  readRawEventIds,
+  readRawEvents,
+  readRawLog,
+  type RawLogState,
+} from "./raw-log.ts";
+import { initializeStorageSchema } from "./storage-schema.ts";
+import {
+  parseStringArray,
+  rowToFileReference,
+  rowToGraphEdge,
+  rowToGraphNode,
+  rowToSessionMemorySummary,
+  rowToSessionSummary,
+  rowToSummaryNode,
+} from "./storage-rows.ts";
 import {
   SUMMARY_ALGORITHM_VERSION,
   SUMMARY_NODE_CHUNK_SIZE,
@@ -365,12 +384,6 @@ type RawEventIdCache = {
   eventIds: Set<string>;
 };
 
-type RawLogState = {
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-};
-
 export class LcmStorage {
   readonly config: LcmConfig;
   private db?: DatabaseSync;
@@ -501,8 +514,7 @@ export class LcmStorage {
 
     if (eventsToAppend.length > 0) {
       try {
-        fs.mkdirSync(path.dirname(this.config.rawLogPath), { recursive: true, mode: 0o700 });
-        fs.appendFileSync(this.config.rawLogPath, `${eventsToAppend.map((event) => JSON.stringify(event)).join("\n")}\n`, { mode: 0o600 });
+        appendRawEvents(this.config.rawLogPath, eventsToAppend);
       } catch (error) {
         if (this.db) {
           try {
@@ -584,8 +596,7 @@ export class LcmStorage {
   }
 
   private rawLogStat(): fs.Stats | undefined {
-    if (!fs.existsSync(this.config.rawLogPath)) return undefined;
-    return fs.statSync(this.config.rawLogPath);
+    return rawLogStat(this.config.rawLogPath);
   }
 
   rebuildSessionMemorySummaries(sessionIds: Iterable<string>): string[] {
@@ -637,7 +648,7 @@ export class LcmStorage {
         WHERE hook_event IN ${SUMMARY_SOURCE_HOOKS}
         ORDER BY timestamp ASC, rowid ASC
       `).all() as Array<{ raw_json: string }>)
-        .map((row) => JSON.parse(row.raw_json) as NormalizedEvent)
+        .map((row) => decodePersistedEvent(row.raw_json))
         .filter(isSearchIndexEvent)
         .filter((event) => !isCodexLcmToolEvent(event));
       const summarySessionIds = new Set(searchableEvents
@@ -947,10 +958,7 @@ export class LcmStorage {
   }
 
   private rawLogState(): RawLogState {
-    const stat = this.rawLogStat();
-    return stat
-      ? { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs }
-      : { size: 0, mtimeMs: 0, ctimeMs: 0 };
+    return rawLogState(this.config.rawLogPath);
   }
 
   private rebuildTouchedSummarySessions(sessionIds: Iterable<string>): string[] {
@@ -1251,7 +1259,7 @@ export class LcmStorage {
           ORDER BY timestamp DESC, rowid DESC
           LIMIT 256
         `).all(args.cwd ?? null, args.repoRoot ?? null) as Array<{ raw_json: string }>)
-        .map((row) => JSON.parse(row.raw_json) as NormalizedEvent)
+        .map((row) => decodePersistedEvent(row.raw_json))
       : readRawEvents(this.config.rawLogPath)
         .filter((event) => !args.cwd || event.cwd === args.cwd)
         .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
@@ -1354,7 +1362,7 @@ export class LcmStorage {
           ORDER BY timestamp ASC, rowid ASC
           LIMIT ?2 OFFSET ?3
         `).all(sessionId, limit, offset);
-    const events = rows.map((row) => JSON.parse((row as { raw_json: string }).raw_json) as NormalizedEvent);
+    const events = rows.map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json));
     const total = session?.event_count ?? events.length;
     return {
       session,
@@ -1449,7 +1457,7 @@ export class LcmStorage {
     `).all(session.session_id, limit);
     return {
       session_id: session.session_id,
-      events: rows.map((row) => JSON.parse((row as { raw_json: string }).raw_json) as NormalizedEvent),
+      events: rows.map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json)),
     };
   }
 
@@ -1602,7 +1610,7 @@ export class LcmStorage {
       LIMIT 1
     `).get(hash) as { raw_json?: string } | undefined;
     if (!row?.raw_json) return undefined;
-    return overflowReferenceFromEvent(JSON.parse(row.raw_json) as NormalizedEvent);
+    return overflowReferenceFromEvent(decodePersistedEvent(row.raw_json));
   }
 
   describeMemory(args: {
@@ -1996,7 +2004,7 @@ export class LcmStorage {
       ORDER BY timestamp ASC, rowid ASC
     `).all(...selectedIds);
     return rows
-      .map((row) => JSON.parse((row as { raw_json: string }).raw_json) as NormalizedEvent)
+      .map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json))
       .filter(isSummarySourceEvent)
       .filter((event) => !isCodexLcmToolEvent(event))
       .sort((a, b) =>
@@ -2019,7 +2027,7 @@ export class LcmStorage {
       WHERE event_id IN (${placeholders})
       ORDER BY timestamp ASC, rowid ASC
     `).all(...summary.source_event_ids) as Array<{ raw_json: string }>)
-      .map((row) => JSON.parse(row.raw_json) as NormalizedEvent)
+      .map((row) => decodePersistedEvent(row.raw_json))
       .filter(isSummarySourceEvent)
       .filter((event) => !isCodexLcmToolEvent(event));
     const matching = events.filter((event) => matchesQueryText(eventSignalText(event), query));
@@ -2047,7 +2055,7 @@ export class LcmStorage {
       )
       ORDER BY timestamp ASC, rowid ASC
     `).all(sessionId, limit);
-    return rows.map((row) => JSON.parse((row as { raw_json: string }).raw_json) as NormalizedEvent);
+    return rows.map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json));
   }
 
   private getContextPlanSummaryStats(sessionId: string): { summaryNodeCount: number; estimatedSummaryTokens: number } {
@@ -2269,172 +2277,7 @@ export class LcmStorage {
 
   private initialize(): void {
     if (!this.db) return;
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS sessions (
-        session_id TEXT PRIMARY KEY,
-        first_seen TEXT NOT NULL,
-        last_seen TEXT NOT NULL,
-        cwd TEXT NOT NULL,
-        repo_root TEXT,
-        git_branch TEXT,
-        event_count INTEGER NOT NULL DEFAULT 0,
-        parent_session_id TEXT,
-        agent_role TEXT,
-        agent_nickname TEXT,
-        model TEXT,
-        reasoning_effort TEXT,
-        total_input_tokens INTEGER,
-        cached_input_tokens INTEGER,
-        output_tokens INTEGER,
-        reasoning_output_tokens INTEGER,
-        total_tokens INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS events (
-        event_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        hook_event TEXT NOT NULL,
-        cwd TEXT NOT NULL,
-        repo_root TEXT,
-        git_branch TEXT,
-        turn_id TEXT,
-        tool_use_id TEXT,
-        text TEXT NOT NULL DEFAULT '',
-        raw_json TEXT NOT NULL
-      );
-      CREATE VIRTUAL TABLE IF NOT EXISTS event_fts USING fts5(
-        event_id UNINDEXED,
-        session_id,
-        cwd,
-        repo_root,
-        hook_event,
-        content
-      );
-      CREATE TABLE IF NOT EXISTS graph_nodes (
-        node_id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        event_id TEXT,
-        turn_id TEXT,
-        timestamp TEXT NOT NULL,
-        cwd TEXT NOT NULL,
-        repo_root TEXT,
-        git_branch TEXT,
-        label TEXT NOT NULL,
-        metadata_json TEXT NOT NULL,
-        UNIQUE(event_id)
-      );
-      CREATE TABLE IF NOT EXISTS graph_edges (
-        from_node_id TEXT NOT NULL,
-        to_node_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        position INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        PRIMARY KEY (from_node_id, to_node_id, kind),
-        CHECK (from_node_id <> to_node_id)
-      );
-      CREATE TABLE IF NOT EXISTS session_summaries (
-        session_id TEXT PRIMARY KEY,
-        summary_version INTEGER NOT NULL DEFAULT ${SUMMARY_ALGORITHM_VERSION},
-        updated_at TEXT NOT NULL,
-        cwd TEXT NOT NULL,
-        repo_root TEXT,
-        git_branch TEXT,
-        title TEXT NOT NULL,
-        overview TEXT NOT NULL,
-        topics_json TEXT NOT NULL,
-        key_prompts_json TEXT NOT NULL,
-        outcomes_json TEXT NOT NULL,
-        tools_json TEXT NOT NULL,
-        source_event_ids_json TEXT NOT NULL,
-        summary_text TEXT NOT NULL
-      );
-      CREATE VIRTUAL TABLE IF NOT EXISTS session_summary_fts USING fts5(
-        session_id UNINDEXED,
-        cwd,
-        repo_root,
-        content
-      );
-      CREATE TABLE IF NOT EXISTS summary_nodes (
-        node_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        summary_version INTEGER NOT NULL DEFAULT ${SUMMARY_NODE_VERSION},
-        depth INTEGER NOT NULL,
-        summary_text TEXT NOT NULL,
-        token_count INTEGER NOT NULL,
-        source_token_count INTEGER NOT NULL,
-        source_type TEXT NOT NULL,
-        source_ids_json TEXT NOT NULL,
-        source_event_ids_json TEXT NOT NULL,
-        earliest_at TEXT NOT NULL,
-        latest_at TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        cwd TEXT NOT NULL,
-        repo_root TEXT,
-        git_branch TEXT,
-        topics_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS file_refs (
-        file_ref_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        observed_event_id TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        path TEXT NOT NULL,
-        mime_type TEXT NOT NULL,
-        byte_count INTEGER NOT NULL,
-        sha256 TEXT NOT NULL,
-        exploration_summary TEXT NOT NULL,
-        metadata_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS index_metadata (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE VIRTUAL TABLE IF NOT EXISTS summary_node_fts USING fts5(
-        node_id UNINDEXED,
-        session_id,
-        cwd,
-        repo_root,
-        depth,
-        content
-      );
-      CREATE INDEX IF NOT EXISTS idx_graph_nodes_session_kind_time ON graph_nodes(session_id, kind, timestamp);
-      CREATE INDEX IF NOT EXISTS idx_graph_nodes_event ON graph_nodes(event_id);
-      CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_node_id, kind);
-      CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_node_id, kind);
-      CREATE INDEX IF NOT EXISTS idx_graph_edges_session ON graph_edges(session_id, kind, position);
-      CREATE INDEX IF NOT EXISTS idx_session_summaries_updated ON session_summaries(updated_at);
-      CREATE INDEX IF NOT EXISTS idx_summary_nodes_session_depth_latest ON summary_nodes(session_id, depth, latest_at);
-      CREATE INDEX IF NOT EXISTS idx_summary_nodes_session_latest ON summary_nodes(session_id, latest_at);
-      CREATE INDEX IF NOT EXISTS idx_file_refs_session_time ON file_refs(session_id, timestamp);
-      CREATE INDEX IF NOT EXISTS idx_file_refs_path ON file_refs(path);
-    `);
-    this.ensureColumn("events", "turn_id", "TEXT");
-    this.ensureColumn("events", "tool_use_id", "TEXT");
-    this.ensureColumn("session_summaries", "summary_version", "INTEGER");
-    const backfillSessionMetadata = [
-      this.ensureColumn("sessions", "parent_session_id", "TEXT"),
-      this.ensureColumn("sessions", "agent_role", "TEXT"),
-      this.ensureColumn("sessions", "agent_nickname", "TEXT"),
-      this.ensureColumn("sessions", "model", "TEXT"),
-      this.ensureColumn("sessions", "reasoning_effort", "TEXT"),
-      this.ensureColumn("sessions", "total_input_tokens", "INTEGER"),
-      this.ensureColumn("sessions", "cached_input_tokens", "INTEGER"),
-      this.ensureColumn("sessions", "output_tokens", "INTEGER"),
-      this.ensureColumn("sessions", "reasoning_output_tokens", "INTEGER"),
-      this.ensureColumn("sessions", "total_tokens", "INTEGER"),
-    ].some(Boolean);
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_events_session_turn ON events(session_id, turn_id, timestamp);
-      CREATE INDEX IF NOT EXISTS idx_events_tool_use ON events(session_id, tool_use_id, hook_event, timestamp);
-      CREATE INDEX IF NOT EXISTS idx_events_session_hook_time ON events(session_id, hook_event, timestamp);
-      CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, timestamp);
-      CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id, last_seen);
-      CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen);
-    `);
+    const { backfillSessionMetadata } = initializeStorageSchema(this.db);
     if (backfillSessionMetadata) this.backfillExistingSessionMetadata();
   }
 
@@ -2769,20 +2612,6 @@ export class LcmStorage {
     return row !== undefined;
   }
 
-  private ensureColumn(table: string, column: string, type: string): boolean {
-    if (!this.db) return false;
-    const tableName = sqlIdentifier(table);
-    const columnName = sqlIdentifier(column);
-    const columnType = sqlColumnType(type);
-    const columns = this.db.prepare(`PRAGMA table_info(${tableName})`).all()
-      .map((row) => String((row as { name: string }).name));
-    if (!columns.includes(columnName)) {
-      this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
-      return true;
-    }
-    return false;
-  }
-
   private backfillExistingSessionMetadata(): void {
     if (!this.db) return;
     const rows = this.db.prepare("SELECT raw_json FROM events WHERE hook_event = 'SessionStart'").all() as Array<{ raw_json: string }>;
@@ -2790,7 +2619,7 @@ export class LcmStorage {
       UPDATE sessions SET parent_session_id = ?2, agent_role = ?3, agent_nickname = ?4 WHERE session_id = ?1
     `);
     for (const row of rows) {
-      const event = JSON.parse(row.raw_json) as NormalizedEvent;
+      const event = decodePersistedEvent(row.raw_json);
       const metadata = extractSessionMetadata(event);
       update.run(event.session_id, metadata.parent_session_id ?? null, metadata.agent_role ?? null, metadata.agent_nickname ?? null);
     }
@@ -2816,7 +2645,7 @@ export class LcmStorage {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       for (const row of rows) {
-        const event = JSON.parse(row.raw_json) as NormalizedEvent;
+        const event = decodePersistedEvent(row.raw_json);
         const parentId = extractSessionMetadata(event).parent_session_id;
         if (parentId && parentId !== event.session_id) update.run(event.session_id, parentId);
       }
@@ -2852,7 +2681,7 @@ export class LcmStorage {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       for (const row of rows) {
-        const event = JSON.parse((row as { raw_json: string }).raw_json) as NormalizedEvent;
+        const event = decodePersistedEvent((row as { raw_json: string }).raw_json);
         const metadata = extractEventMetadata(event);
         const count = (counts.get(event.session_id) ?? Number(this.db.prepare(`
           SELECT COUNT(*) AS count FROM graph_nodes WHERE session_id = ?1 AND kind = 'event'
@@ -2897,7 +2726,7 @@ export class LcmStorage {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       for (const row of rows) {
-        const event = JSON.parse((row as { raw_json: string }).raw_json) as NormalizedEvent;
+        const event = decodePersistedEvent((row as { raw_json: string }).raw_json);
         this.indexFileRefsForEvent(event);
       }
       this.db.prepare(`
@@ -3180,7 +3009,7 @@ export class LcmStorage {
       ORDER BY timestamp ASC, rowid ASC
     `).all(sessionId);
     return rows
-      .map((row) => JSON.parse((row as { raw_json: string }).raw_json) as NormalizedEvent)
+      .map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json))
       .filter((event) => !isCodexLcmToolEvent(event))
       .filter(isSummarySourceEvent);
   }
@@ -3208,7 +3037,7 @@ export class LcmStorage {
       LIMIT ?2
     `).all(sessionId, SUMMARY_RECENT_EVENT_LIMIT);
     const events = uniqueEvents([...earlySignals, ...latestSignals, ...recentEvents]
-      .map((row) => JSON.parse((row as { raw_json: string }).raw_json) as NormalizedEvent)
+      .map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json))
       .filter((event) => !isCodexLcmToolEvent(event))
       .filter((event) => !isSummaryHook(event.hook_event) || isSummarySourceEvent(event)))
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.event_id.localeCompare(b.event_id));
@@ -3218,104 +3047,6 @@ export class LcmStorage {
 
 export function createStorage(options: StorageOptions = {}): LcmStorage {
   return new LcmStorage(options);
-}
-
-function rowToSessionSummary(row: unknown): SessionSummary {
-  const record = row as Record<string, unknown>;
-  return {
-    session_id: String(record.session_id),
-    first_seen: String(record.first_seen),
-    last_seen: String(record.last_seen),
-    cwd: String(record.cwd),
-    ...(record.repo_root ? { repo_root: String(record.repo_root) } : {}),
-    ...(record.git_branch ? { git_branch: String(record.git_branch) } : {}),
-    event_count: Number(record.event_count),
-    ...(record.parent_session_id ? { parent_session_id: String(record.parent_session_id) } : {}),
-    ...(record.agent_role ? { agent_role: String(record.agent_role) } : {}),
-    ...(record.agent_nickname ? { agent_nickname: String(record.agent_nickname) } : {}),
-    ...(record.model ? { model: String(record.model) } : {}),
-    ...(record.reasoning_effort ? { reasoning_effort: String(record.reasoning_effort) } : {}),
-    ...(record.total_input_tokens !== null && record.total_input_tokens !== undefined
-      ? { total_input_tokens: Number(record.total_input_tokens) }
-      : {}),
-    ...(record.cached_input_tokens !== null && record.cached_input_tokens !== undefined
-      ? { cached_input_tokens: Number(record.cached_input_tokens) }
-      : {}),
-    ...(record.output_tokens !== null && record.output_tokens !== undefined ? { output_tokens: Number(record.output_tokens) } : {}),
-    ...(record.reasoning_output_tokens !== null && record.reasoning_output_tokens !== undefined
-      ? { reasoning_output_tokens: Number(record.reasoning_output_tokens) }
-      : {}),
-    ...(record.total_tokens !== null && record.total_tokens !== undefined ? { total_tokens: Number(record.total_tokens) } : {}),
-    ...(record.match_count !== undefined ? { match_count: Number(record.match_count) } : {}),
-    ...(record.summary_title ? {
-      summary: {
-        updated_at: String(record.summary_updated_at),
-        title: String(record.summary_title),
-        overview: String(record.summary_overview),
-        topics: parseStringArray(record.summary_topics_json),
-        key_prompts: parseStringArray(record.summary_key_prompts_json),
-        outcomes: parseStringArray(record.summary_outcomes_json),
-        source_event_count: parseStringArray(record.summary_source_event_ids_json).length,
-      },
-    } : {}),
-  };
-}
-
-function rowToSessionMemorySummary(row: unknown): SessionMemorySummary {
-  const record = row as Record<string, unknown>;
-  return {
-    session_id: String(record.session_id),
-    updated_at: String(record.updated_at),
-    cwd: String(record.cwd),
-    ...(record.repo_root ? { repo_root: String(record.repo_root) } : {}),
-    ...(record.git_branch ? { git_branch: String(record.git_branch) } : {}),
-    title: String(record.title),
-    overview: String(record.overview),
-    topics: parseStringArray(record.topics_json),
-    key_prompts: parseStringArray(record.key_prompts_json),
-    outcomes: parseStringArray(record.outcomes_json),
-    tools: parseStringArray(record.tools_json),
-    source_event_ids: parseStringArray(record.source_event_ids_json),
-  };
-}
-
-function rowToSummaryNode(row: unknown): SummaryNode {
-  const record = row as Record<string, unknown>;
-  const sourceType = String(record.source_type) === "nodes" ? "nodes" : "events";
-  return {
-    node_id: String(record.node_id),
-    session_id: String(record.session_id),
-    depth: Number(record.depth),
-    summary_text: String(record.summary_text),
-    token_count: Number(record.token_count),
-    source_token_count: Number(record.source_token_count),
-    source_type: sourceType,
-    source_ids: parseStringArray(record.source_ids_json),
-    source_event_ids: parseStringArray(record.source_event_ids_json),
-    earliest_at: String(record.earliest_at),
-    latest_at: String(record.latest_at),
-    created_at: String(record.created_at),
-    cwd: String(record.cwd),
-    ...(record.repo_root ? { repo_root: String(record.repo_root) } : {}),
-    ...(record.git_branch ? { git_branch: String(record.git_branch) } : {}),
-    topics: parseStringArray(record.topics_json),
-  };
-}
-
-function rowToFileReference(row: unknown): FileReference {
-  const record = row as Record<string, unknown>;
-  return {
-    file_ref_id: String(record.file_ref_id),
-    session_id: String(record.session_id),
-    observed_event_id: String(record.observed_event_id),
-    timestamp: String(record.timestamp),
-    path: String(record.path),
-    mime_type: String(record.mime_type),
-    byte_count: Number(record.byte_count),
-    sha256: String(record.sha256),
-    exploration_summary: String(record.exploration_summary),
-    metadata: parseMetadata(record.metadata_json),
-  };
 }
 
 function summaryNodeToGraphNode(node: SummaryNode): GraphNode {
@@ -3526,7 +3257,7 @@ function isSearchDiscoveryRow(row: unknown, query: string): boolean {
   if (searchMatchKind(record.match_kind) !== "event") return true;
   if (typeof record.match_text !== "string") return true;
   try {
-    return isSearchDiscoveryEvent(JSON.parse(record.match_text) as NormalizedEvent, query);
+    return isSearchDiscoveryEvent(decodePersistedEvent(record.match_text), query);
   } catch {
     return true;
   }
@@ -3588,7 +3319,7 @@ function searchMatchText(kind: SessionSearchMatch["kind"], value: unknown): stri
   if (typeof value !== "string") return "";
   if (kind !== "event") return value;
   try {
-    const event = JSON.parse(value) as NormalizedEvent;
+    const event = decodePersistedEvent(value);
     return eventSignalText(event) || `${event.hook_event}: ${JSON.stringify(event.payload)}`;
   } catch {
     return value;
@@ -3630,56 +3361,6 @@ function truncateSnippet(text: string, maxChars: number): string {
 
 function compactWhitespace(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
-}
-
-function rowToGraphNode(row: unknown): GraphNode {
-  const record = row as Record<string, unknown>;
-  return {
-    node_id: String(record.node_id),
-    kind: String(record.kind) as GraphNode["kind"],
-    session_id: String(record.session_id),
-    ...(record.event_id ? { event_id: String(record.event_id) } : {}),
-    ...(record.turn_id ? { turn_id: String(record.turn_id) } : {}),
-    timestamp: String(record.timestamp),
-    cwd: String(record.cwd),
-    ...(record.repo_root ? { repo_root: String(record.repo_root) } : {}),
-    ...(record.git_branch ? { git_branch: String(record.git_branch) } : {}),
-    label: String(record.label),
-    metadata: parseMetadata(record.metadata_json),
-  };
-}
-
-function rowToGraphEdge(row: unknown): GraphEdge {
-  const record = row as Record<string, unknown>;
-  return {
-    from_node_id: String(record.from_node_id),
-    to_node_id: String(record.to_node_id),
-    kind: String(record.kind),
-    session_id: String(record.session_id),
-    position: Number(record.position),
-    created_at: String(record.created_at),
-    metadata: parseMetadata(record.metadata_json),
-  };
-}
-
-function parseMetadata(value: unknown): Record<string, unknown> {
-  if (typeof value !== "string") return {};
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
-function parseStringArray(value: unknown): string[] {
-  if (typeof value !== "string") return [];
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
 }
 
 function clampLimit(limit: number | undefined, fallback: number, max = 200): number {
@@ -3785,20 +3466,6 @@ function parseTimestamp(value: string | undefined, name: string): string | undef
   return timestamp.toISOString();
 }
 
-function sqlIdentifier(value: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value)) {
-    throw new Error(`Invalid SQL identifier: ${value}`);
-  }
-  return value;
-}
-
-function sqlColumnType(value: string): string {
-  if (!/^[A-Z][A-Z0-9_]*(?:\s+[A-Z][A-Z0-9_]*)*$/u.test(value)) {
-    throw new Error(`Invalid SQL column type: ${value}`);
-  }
-  return value;
-}
-
 function eventSearchText(event: NormalizedEvent): string {
   const metadata = extractEventMetadata(event);
   return [
@@ -3826,29 +3493,6 @@ function checkpointToMarkdown(node: GraphNode): string {
     JSON.stringify(node.metadata),
     "",
   ].join("\n");
-}
-
-function readRawLog(rawLogPath: string): { events: NormalizedEvent[]; malformedLineCount: number } {
-  if (!fs.existsSync(rawLogPath)) return { events: [], malformedLineCount: 0 };
-  const events: NormalizedEvent[] = [];
-  let malformedLineCount = 0;
-  for (const line of fs.readFileSync(rawLogPath, "utf8").split(/\r?\n/u)) {
-    if (line.trim().length === 0) continue;
-    try {
-      events.push(JSON.parse(line) as NormalizedEvent);
-    } catch {
-      malformedLineCount += 1;
-    }
-  }
-  return { events, malformedLineCount };
-}
-
-function readRawEvents(rawLogPath: string): NormalizedEvent[] {
-  return readRawLog(rawLogPath).events;
-}
-
-function readRawEventIds(rawLogPath: string): Set<string> {
-  return new Set(readRawEvents(rawLogPath).map((event) => event.event_id));
 }
 
 function countEventsByHook(events: NormalizedEvent[]): Record<string, number> {
