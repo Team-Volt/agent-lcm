@@ -125,7 +125,7 @@ export const TOOLS = [
   {
     name: "lcm_context_plan",
     title: "LCM Context Plan",
-    description: "Estimate recent-session token pressure and recommend whether to pack LCM context. This observes pressure only; Codex owns compaction.",
+    description: "Estimate recent-session token pressure and report compaction proximity. Returns diagnostics only; Codex owns compaction.",
     inputSchema: {
       type: "object",
       properties: {
@@ -236,7 +236,7 @@ export const TOOLS = [
   {
     name: "lcm_pack_context",
     title: "LCM Pack Context",
-    description: "Pack relevant summary nodes and bounded source lineage into a token-budgeted Markdown context block.",
+    description: "Recover and resume prior Codex work after compaction, interruption, or handoff. Returns model-ready, token-budgeted Markdown from relevant session summaries and source evidence.",
     inputSchema: {
       type: "object",
       properties: {
