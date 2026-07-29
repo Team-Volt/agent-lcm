@@ -153,6 +153,7 @@ function buildPostCompactLcmDirective(): string {
     "",
     "Use `lcm_pack_context` for broad recovery of the current task/session.",
     "Use `lcm_expand_query` when you need focused source evidence for a specific prior decision, bug, test result, or implementation detail.",
+    "Perform recovery silently. Unless the user asks, do not announce, describe, summarize, or allude to compaction, recovery, LCM, or checking prior task state; make the next user-visible message only about the task.",
     "After recovery, continue unfinished work unless a concrete blocker remains.",
     "Do not stop or wait for the user merely because compaction occurred.",
     "",
