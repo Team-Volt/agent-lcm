@@ -1,7 +1,8 @@
 import type { RedactionRecord } from "./redact.ts";
 
 const PRIVATE_KEY_BLOCK_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu;
-const SECRET_ASSIGNMENT_RE = /(^|[\s{,;])((?:"[^"\n:=]+"|'[^'\n:=]+'|[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]\s*)(?:"([^"\n]*)"|'([^'\n]*)'|((?:Bearer|Basic|Digest|Token|OAuth)\s+[^\s,;}]+|[^\s,;{}]+))/giu;
+const ASSIGNMENT_PREFIX_RE = /(?<![A-Za-z0-9_.-])(?:"[^"\n:=]+"|'[^'\n:=]+'|[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]/giu;
+const ASSIGNMENT_AT_START_RE = /^(?:"[^"\n:=]+"|'[^'\n:=]+'|[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]/iu;
 const SECRET_ASSIGNMENT_HINTS = [
   "api",
   "auth",
@@ -25,6 +26,12 @@ const BENIGN_TOKEN_METRIC_TERMS = [
   "used",
   "window",
 ] as const;
+
+type QuoteContext = {
+  plain: string | undefined;
+  escaped: string | undefined;
+  offset: number;
+};
 
 export function redactSecretAssignments(value: string, path: string, redactions: RedactionRecord[]): string {
   const redactPrivateKeys = value.replace(PRIVATE_KEY_BLOCK_RE, () => {
@@ -66,49 +73,109 @@ export function shouldRedactSecretKey(key: string, value: unknown): boolean {
 function redactSecretAssignmentLine(value: string, path: string, redactions: RedactionRecord[]): string {
   if (!value.includes(":") && !value.includes("=")) return value;
 
-  return value.replace(
-    SECRET_ASSIGNMENT_RE,
-    (
-      match: string,
-      prefix: string,
-      assignmentPrefix: string,
-      doubleQuotedValue: string | undefined,
-      singleQuotedValue: string | undefined,
-      bareValue: string | undefined,
-    ) => redactSecretAssignmentMatch({
-      match,
-      prefix,
-      assignmentPrefix,
-      value: doubleQuotedValue ?? singleQuotedValue ?? bareValue ?? "",
-      quote: doubleQuotedValue !== undefined ? "\"" : singleQuotedValue !== undefined ? "'" : "",
-      path,
-      redactions,
-    }),
-  );
+  let output = "";
+  let copiedUntil = 0;
+  const quoteContext: QuoteContext = { plain: undefined, escaped: undefined, offset: 0 };
+  ASSIGNMENT_PREFIX_RE.lastIndex = 0;
+  for (let match = ASSIGNMENT_PREFIX_RE.exec(value); match; match = ASSIGNMENT_PREFIX_RE.exec(value)) {
+    advanceQuoteContext(value, match.index, quoteContext);
+    const key = assignmentKey(match[0]);
+    if (!isSecretAssignmentKey(key)) continue;
+
+    const wrapper = quoteContext.escaped
+      ? { quote: quoteContext.escaped, escaped: true }
+      : quoteContext.plain
+        ? { quote: quoteContext.plain, escaped: false }
+        : undefined;
+    const bounds = assignmentValueBounds(value, ASSIGNMENT_PREFIX_RE.lastIndex, wrapper);
+    const assignmentValue = value.slice(bounds.start, bounds.end);
+    if (assignmentValue.length === 0 ||
+        isBenignTokenMetricAssignment(key, assignmentValue) ||
+        assignmentValue.startsWith("[REDACTED:secret]")) {
+      continue;
+    }
+
+    output += value.slice(copiedUntil, bounds.start);
+    output += /^Bearer\s+/u.test(assignmentValue)
+      ? assignmentValue.replace(/^Bearer\s+[^\s"']+/u, "Bearer [REDACTED:token]")
+      : "[REDACTED:secret]";
+    copiedUntil = bounds.end;
+    ASSIGNMENT_PREFIX_RE.lastIndex = bounds.end;
+    redactions.push({ path, reason: "token-pattern" });
+  }
+  return output + value.slice(copiedUntil);
 }
 
-function redactSecretAssignmentMatch(args: {
-  readonly match: string;
-  readonly prefix: string;
-  readonly assignmentPrefix: string;
-  readonly value: string;
-  readonly quote: string;
-  readonly path: string;
-  readonly redactions: RedactionRecord[];
-}): string {
-  const key = assignmentKey(args.assignmentPrefix);
-  if (!isSecretAssignmentKey(key)) return args.match;
-  if (isBenignTokenMetricAssignment(key, args.value)) return args.match;
-  if (args.value.startsWith("[REDACTED:secret]")) return args.match;
-
-  if (/^Bearer\s+[^\s"']+/u.test(args.value)) {
-    args.redactions.push({ path: args.path, reason: "token-pattern" });
-    return `${args.prefix}${args.assignmentPrefix}${args.quote}${args.value.replace(/^Bearer\s+[^\s"']+/u, "Bearer [REDACTED:token]")}${args.quote}`;
+function assignmentValueBounds(
+  value: string,
+  start: number,
+  wrapper?: { readonly quote: string; readonly escaped: boolean },
+): {
+  readonly start: number;
+  readonly end: number;
+} {
+  const firstNonWhitespace = value.slice(start).search(/\S/u);
+  if (firstNonWhitespace > 0 &&
+      !ASSIGNMENT_AT_START_RE.test(value.slice(start + firstNonWhitespace))) {
+    start += firstNonWhitespace;
+  }
+  const openingQuote = value[start];
+  if (openingQuote === "\"" || openingQuote === "'") {
+    return { start: start + 1, end: closingQuoteIndex(value, start + 1, openingQuote, false) };
+  }
+  if (openingQuote === "\\" && (value[start + 1] === "\"" || value[start + 1] === "'")) {
+    return { start: start + 2, end: closingQuoteIndex(value, start + 2, value[start + 1], true) };
   }
 
-  if (args.value.length === 0) return args.match;
-  args.redactions.push({ path: args.path, reason: "token-pattern" });
-  return `${args.prefix}${args.assignmentPrefix}${args.quote}[REDACTED:secret]${args.quote}`;
+  const end = bareValueEnd(
+    value,
+    start,
+    wrapper?.quote,
+    wrapper?.escaped,
+  );
+  return { start, end };
+}
+
+function advanceQuoteContext(value: string, end: number, context: QuoteContext): void {
+  for (let index = context.offset; index < end; index += 1) {
+    const quote = value[index];
+    if (quote !== "\"" && quote !== "'") continue;
+    if (hasOddBackslashPrefix(value, index)) {
+      context.escaped = context.escaped === quote ? undefined : context.escaped ?? quote;
+    } else {
+      context.plain = context.plain === quote ? undefined : context.plain ?? quote;
+    }
+  }
+  context.offset = end;
+}
+
+function closingQuoteIndex(value: string, start: number, quote: string, escaped: boolean): number {
+  for (let index = start; index < value.length; index += 1) {
+    if (value[index] !== quote) continue;
+    if (escaped === hasOddBackslashPrefix(value, index)) {
+      return escaped ? index - 1 : index;
+    }
+  }
+  return value.length;
+}
+
+function bareValueEnd(value: string, start: number, wrapperQuote?: string, escapedWrapper = false): number {
+  const scheme = /^(?:Bearer|Basic|Digest|Token|OAuth)\s+/iu.exec(value.slice(start));
+  const scanStart = start + (scheme?.[0].length ?? 0);
+  for (let index = scanStart; index < value.length; index += 1) {
+    if (wrapperQuote && value[index] === wrapperQuote &&
+        escapedWrapper === hasOddBackslashPrefix(value, index)) {
+      return escapedWrapper ? index - 1 : index;
+    }
+    if (/[\s,;{}]/u.test(value[index])) return index;
+  }
+  return value.length;
+}
+
+function hasOddBackslashPrefix(value: string, index: number): boolean {
+  let count = 0;
+  while (index > count && value[index - count - 1] === "\\") count += 1;
+  return count % 2 === 1;
 }
 
 function assignmentKey(assignmentPrefix: string): string {
@@ -121,8 +188,8 @@ function assignmentKey(assignmentPrefix: string): string {
 
 function isBenignTokenMetricAssignment(key: string, value: string): boolean {
   if (!isTokenMetricKey(key)) return false;
-  return /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?[.!?]?\s*$/u.test(value) ||
-    /^(?:true|false|null)[.!?]?\s*$/iu.test(value);
+  return /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?[.!?]?(?:\\?["'])*\s*$/u.test(value) ||
+    /^(?:true|false|null)[.!?]?(?:\\?["'])*\s*$/iu.test(value);
 }
 
 function isTokenMetricKey(key: string): boolean {
