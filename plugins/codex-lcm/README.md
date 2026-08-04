@@ -71,7 +71,7 @@ Standard recall workflow:
 - `lcm_describe`: inspect a session, summary node, or indexed file reference with compact source counts. Overflow results use stable `overflow:<sha256>` IDs; pass `offset` and `maxBytes` to page their content in chunks of at most 512 KiB. Set `includeLineage: true` when exact source ID arrays are needed.
 - `lcm_expand`: expand one summary node into bounded source summary nodes and high-signal source events.
 - `lcm_expand_query`: answer a focused retrieval need by searching matching summary nodes and recursively expanding their source lineage into bounded evidence. The default budget is 2000 tokens. Use `overview: true` for broad, source-rich lineage views. `sourceLimit` is per matched node/source expansion, and tight budgets reserve room for a focused source-event excerpt when one exists.
-- `lcm_pack_context`: pack relevant summary-node context into a model-ready Markdown block.
+- `lcm_pack_context`: call once to pack relevant context, then read the model-ready Markdown from that result's `structuredContent.markdown`.
 
 Diagnostics and lower-level tools:
 
