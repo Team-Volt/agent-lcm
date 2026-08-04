@@ -92,7 +92,8 @@ function postCompactRecoveryOutput(args: {
   }
   if (args.hookEvent === "PostToolUse" && hasPostCompactPending(args.home, args.sessionId)) {
     const toolName = args.payload.tool_name;
-    if (typeof toolName === "string" && toolName.endsWith("lcm_pack_context")) {
+    const isPackTool = toolName === "lcm_pack_context" || toolName === "mcp__codex_lcm__lcm_pack_context";
+    if (isPackTool && hasPackedContextResult(args.payload)) {
       claimPostCompactPending(args.home, args.sessionId);
       return "";
     }
@@ -107,6 +108,23 @@ function postCompactRecoveryOutput(args: {
   ) return "";
   if (!hasPostCompactPending(args.home, args.sessionId)) return "";
   return formatAdditionalContextOutput(args.hookEvent, buildPostCompactLcmDirective());
+}
+
+function hasPackedContextResult(payload: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(payload, "tool_response")) return false;
+  const response = payload.tool_response;
+  if (!isRecord(response)) return false;
+  if (Object.hasOwn(response, "isError") && response.isError !== false) return false;
+  const structuredContent = Object.hasOwn(response, "structuredContent")
+    ? response.structuredContent
+    : undefined;
+  return isRecord(structuredContent)
+    && Object.hasOwn(structuredContent, "markdown")
+    && typeof structuredContent.markdown === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function markPostCompactPending(home: string, sessionId: string): void {
@@ -152,7 +170,8 @@ function buildPostCompactLcmDirective(): string {
     "",
     "Context compaction just ran. Before continuing any task that may depend on earlier turns, call Codex LCM now.",
     "",
-    "Use `lcm_pack_context` for broad recovery of the current task/session.",
+    "Call `lcm_pack_context` once for broad recovery of the current task/session.",
+    "Consume `structuredContent.markdown` from that same result; do not call it again to retrieve the Markdown.",
     "Use `lcm_expand_query` when you need focused source evidence for a specific prior decision, bug, test result, or implementation detail.",
     "Perform recovery silently. Unless the user asks, do not announce, describe, summarize, or allude to compaction, recovery, LCM, or checking prior task state; make the next user-visible message only about the task.",
     "After recovery, continue unfinished work unless a concrete blocker remains.",

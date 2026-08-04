@@ -15,7 +15,7 @@ Treat Codex LCM as the first lookup for local work memory. Search it before aski
 
 The standard path is `lcm_grep` -> `lcm_describe` -> `lcm_expand`. If Codex exposes only host-qualified names, use the matching `mcp__codex_lcm__...` tools.
 
-Use `lcm_expand_query` when the query should select and recursively expand evidence. Use `lcm_pack_context` for model-ready recovery after compaction, interruption, or handoff; it includes bounded summary, exact-match, and recent-event evidence.
+Use `lcm_expand_query` when the query should select and recursively expand evidence. For recovery after compaction, interruption, or handoff, call `lcm_pack_context` once and consume `structuredContent.markdown` from that same result. Do not call it again to retrieve the Markdown. The result includes bounded summary, exact-match, and recent-event evidence.
 
 Keep ordinary memory lookups quick: expect two to four calls. Choose the standard path or `lcm_expand_query`, not both, unless the first path misses. Inspect each result before the next call, never repeat an identical search, and stop once the evidence answers the question.
 

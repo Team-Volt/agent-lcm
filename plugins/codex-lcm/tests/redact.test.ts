@@ -31,6 +31,17 @@ test("preserves a benign private package flag", () => {
   assert.equal(result.redactions.length, 0);
 });
 
+test("preserves __proto__ as inert own data", () => {
+  const input = JSON.parse('{"__proto__":{"polluted":true}}') as Record<string, unknown>;
+  const result = sanitizeForStorage(input);
+  const value = result.value as Record<string, unknown>;
+
+  assert.equal(Object.hasOwn(value, "__proto__"), true);
+  assert.equal(Object.getPrototypeOf(value), Object.prototype);
+  assert.deepEqual(value.__proto__, { polluted: true });
+  assert.equal((value as { polluted?: boolean }).polluted, undefined);
+});
+
 test("preserves benign token budget and count metadata", () => {
   const result = sanitizeForStorage({
     token_budget: 1200,
