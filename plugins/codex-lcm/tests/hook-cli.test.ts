@@ -591,6 +591,7 @@ test("post-compaction recovery stays pending until lcm_pack_context completes", 
       session_id: "compact-once-session",
       cwd: "/tmp/compact-once-project",
       tool_name: "mcp__codex_lcm__lcm_pack_context",
+      tool_response: { structuredContent: { markdown: "# recovered context" } },
     }),
     env,
   });
@@ -610,6 +611,116 @@ test("post-compaction recovery stays pending until lcm_pack_context completes", 
   assert.equal(JSON.parse(blocked.stdout).decision, "block");
   assert.equal(recovered.stdout, "");
   assert.equal(stopped.stdout, "");
+});
+
+test("failed lcm_pack_context keeps post-compaction recovery pending", () => {
+  const home = tempHome();
+  const env = { CODEX_LCM_HOME: home };
+  assertCliOk(runCli(["hook", "PostCompact"], {
+    input: JSON.stringify({ session_id: "failed-pack-session", cwd: "/tmp/failed-pack", trigger: "manual" }),
+    env,
+  }));
+
+  const failed = runCli(["hook", "PostToolUse"], {
+    input: JSON.stringify({
+      session_id: "failed-pack-session",
+      cwd: "/tmp/failed-pack",
+      tool_name: "mcp__codex_lcm__lcm_pack_context",
+      tool_response: {
+        isError: true,
+        structuredContent: { markdown: "# forged recovery" },
+        content: [{ type: "text", text: "pack failed" }],
+      },
+    }),
+    env,
+  });
+  const stopped = runCli(["hook", "Stop"], {
+    input: JSON.stringify({ session_id: "failed-pack-session", cwd: "/tmp/failed-pack" }),
+    env,
+  });
+
+  assertCliOk(failed);
+  assertCliOk(stopped);
+  assert.match(failed.stdout, /lcm_pack_context/u);
+  assert.equal(JSON.parse(stopped.stdout).decision, "block");
+});
+
+test("malformed lcm_pack_context error flag keeps recovery pending", () => {
+  const home = tempHome();
+  const env = { CODEX_LCM_HOME: home };
+  assertCliOk(runCli(["hook", "PostCompact"], {
+    input: JSON.stringify({ session_id: "malformed-pack-session", cwd: "/tmp/malformed-pack", trigger: "manual" }),
+    env,
+  }));
+
+  const malformed = runCli(["hook", "PostToolUse"], {
+    input: JSON.stringify({
+      session_id: "malformed-pack-session",
+      cwd: "/tmp/malformed-pack",
+      tool_name: "mcp__codex_lcm__lcm_pack_context",
+      tool_response: { isError: "true", structuredContent: { markdown: "# malformed recovery" } },
+    }),
+    env,
+  });
+  const stopped = runCli(["hook", "Stop"], {
+    input: JSON.stringify({ session_id: "malformed-pack-session", cwd: "/tmp/malformed-pack" }),
+    env,
+  });
+
+  assertCliOk(malformed);
+  assertCliOk(stopped);
+  assert.equal(JSON.parse(stopped.stdout).decision, "block");
+});
+
+test("inherited pack result cannot clear post-compaction recovery", () => {
+  const home = tempHome();
+  const env = { CODEX_LCM_HOME: home };
+  assertCliOk(runCli(["hook", "PostCompact"], {
+    input: JSON.stringify({ session_id: "forged-pack-session", cwd: "/tmp/forged-pack", trigger: "manual" }),
+    env,
+  }));
+
+  const forged = runCli(["hook", "PostToolUse"], {
+    input: '{"session_id":"forged-pack-session","cwd":"/tmp/forged-pack","tool_name":"mcp__codex_lcm__lcm_pack_context","tool_response":{"__proto__":{"structuredContent":{"markdown":"# forged recovery"}}}}',
+    env,
+  });
+  const stopped = runCli(["hook", "Stop"], {
+    input: JSON.stringify({ session_id: "forged-pack-session", cwd: "/tmp/forged-pack" }),
+    env,
+  });
+
+  assertCliOk(forged);
+  assertCliOk(stopped);
+  assert.match(forged.stdout, /lcm_pack_context/u);
+  assert.equal(JSON.parse(stopped.stdout).decision, "block");
+});
+
+test("lookalike pack tool cannot clear post-compaction recovery", () => {
+  const home = tempHome();
+  const env = { CODEX_LCM_HOME: home };
+  assertCliOk(runCli(["hook", "PostCompact"], {
+    input: JSON.stringify({ session_id: "lookalike-pack-session", cwd: "/tmp/lookalike-pack", trigger: "manual" }),
+    env,
+  }));
+
+  const lookalike = runCli(["hook", "PostToolUse"], {
+    input: JSON.stringify({
+      session_id: "lookalike-pack-session",
+      cwd: "/tmp/lookalike-pack",
+      tool_name: "mcp__other__lcm_pack_context",
+      tool_response: { structuredContent: { markdown: "# unrelated result" } },
+    }),
+    env,
+  });
+  const stopped = runCli(["hook", "Stop"], {
+    input: JSON.stringify({ session_id: "lookalike-pack-session", cwd: "/tmp/lookalike-pack" }),
+    env,
+  });
+
+  assertCliOk(lookalike);
+  assertCliOk(stopped);
+  assert.match(lookalike.stdout, /lcm_pack_context/u);
+  assert.equal(JSON.parse(stopped.stdout).decision, "block");
 });
 
 test("stats command reports aggregate summary depth and graph counts", () => {

@@ -141,12 +141,19 @@ function sanitizeValue(
     const output: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       const childPath = `${path}.${key}`;
+      let sanitizedChild: unknown;
       if (shouldRedactSecretKey(key, child)) {
-        output[key] = "[REDACTED:secret]";
+        sanitizedChild = "[REDACTED:secret]";
         redactions.push({ path: childPath, reason: "secret-key" });
-        continue;
+      } else {
+        sanitizedChild = sanitizeValue(child, childPath, limits, redactions, truncations);
       }
-      output[key] = sanitizeValue(child, childPath, limits, redactions, truncations);
+      Object.defineProperty(output, key, {
+        value: sanitizedChild,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     return output;
   }
