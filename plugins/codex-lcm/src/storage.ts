@@ -2,387 +2,99 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig, type LcmConfig } from "./config.ts";
-import { decodePersistedEvent } from "./event-codec.ts";
 import { createNoteEvent, type NormalizedEvent } from "./events.ts";
-import { extractFileReferences, type FileReference } from "./file-refs.ts";
-import {
-  overflowReferenceFromEvent,
-  readOverflowContent,
-  searchOverflowContent,
-  type OverflowContent,
-  type OverflowReference,
-  type OverflowSearchMatch,
-} from "./overflow.ts";
+import type { FileReference } from "./file-refs.ts";
+import type { OverflowReference, OverflowSearchMatch } from "./overflow.ts";
 import {
   appendRawEvents,
-  rawLogState,
-  rawLogStat,
   readRawEventIds,
   readRawEvents,
   readRawLog,
+  RawLogLockTimeoutError,
+  withRawLogLock,
   type RawLogState,
 } from "./raw-log.ts";
-import { initializeStorageSchema } from "./storage-schema.ts";
 import {
-  parseStringArray,
-  rowToFileReference,
-  rowToGraphEdge,
-  rowToGraphNode,
-  rowToSessionMemorySummary,
-  rowToSessionSummary,
-  rowToSummaryNode,
-} from "./storage-rows.ts";
+  describeMemory as describeStoredMemory,
+  expandMemory as expandStoredMemory,
+  expandQuery as expandStoredQuery,
+  getContextPlan as readContextPlan,
+  getFileRef as readFileRef,
+  getFileRefsForSession as readFileRefsForSession,
+  getOverflowRef as readOverflowRef,
+  getRecentContext as readRecentContext,
+  parseCursor,
+  parseTimestamp,
+} from "./storage-context.ts";
+import { packContext as packStoredContext } from "./storage-pack.ts";
 import {
-  SUMMARY_ALGORITHM_VERSION,
-  SUMMARY_NODE_CHUNK_SIZE,
-  SUMMARY_NODE_FANOUT,
-  SUMMARY_NODE_MAX_DEPTH,
-  SUMMARY_NODE_PACK_LIMIT,
-  SUMMARY_NODE_SOURCE_EVENT_LIMIT,
-  SUMMARY_NODE_VERSION,
-  HISTORICAL_SOURCE_TEXT_NOTICE,
-  buildCondensedSummaryNode,
-  buildLeafSummaryNode,
-  buildSessionMemorySummary,
-  estimateTokenCount,
-  eventSignalText,
-  isGeneratedSuggestionEvent,
-  isSummarySourceEvent,
-  matchesQueryText,
-  queryTermHitCount,
-  quoteHistoricalText,
-  rankSummaryNodesForContext,
-  sessionSummaryToMarkdown,
-  summaryNodeExpansionToMarkdown,
-  summaryNodeSearchText,
-  summaryNodeTitle,
-  summaryNodeToCompactMarkdown,
-  summaryNodeToMarkdown,
-  summarySearchText,
-  takeHeadTail,
-  toFtsQueries,
+  derivedGraphEdgeCounts,
+  derivedGraphNodeCounts,
+  getStoredSessionGraph,
+} from "./storage-graph.ts";
+import {
+  DerivedIndexError,
+  appliedCleanupReport,
+  backfillDelegationParents as runDelegationParentBackfill,
+  backfillFileRefs as runFileRefBackfill,
+  backfillSessionMemorySummaries as runSummaryBackfill,
+  cacheRawEventIds,
+  clearDerivedIndex as clearStoredDerivedIndex,
+  currentRawLogState,
+  emptyCleanupReport,
+  indexedEventsById as readIndexedEventsById,
+  indexedRawLogState as readIndexedRawLogState,
+  indexEventInTransaction as indexStoredEventInTransaction,
+  initializeIndex,
+  inspectIndexForCleanup,
+  isRawLogIndexed,
+  knownEventIds as readKnownEventIds,
+  optimizeIndex,
+  previewCleanupReport,
+  rawHealth as readRawHealth,
+  readCachedRawEventIds,
+  recordRawLogState as storeRawLogState,
+  replaceCleanupSearchIndex,
+  rollbackPreservingError,
+  writableIndexHealth,
+  type IndexEventResult,
+  type RawEventIdCache,
+} from "./storage-persistence.ts";
+import {
+  clampLimit,
+  searchStoredOverflow,
+  searchStoredSessions,
+} from "./storage-search.ts";
+import {
+  getSessionMemorySummary as readSessionMemorySummary,
+  getSummaryNodesForSession as readSummaryNodesForSession,
+  rebuildSessionMemorySummary as materializeSessionMemorySummary,
+} from "./storage-summaries.ts";
+import {
+  getCurrentStoredSession,
+  getStoredSession,
+  listStoredSessions,
+  sortedSessionIds,
+  storageStats,
+  storedUsage,
+} from "./storage-sessions.ts";
+import {
   type SessionMemorySummary,
   type SummaryNode,
 } from "./summary.ts";
 
-export type { FileReference } from "./file-refs.ts";
-export type { OverflowContent, OverflowReference, OverflowSearchMatch } from "./overflow.ts";
-export type { SessionMemorySummary, SummaryNode, SummarySourceType } from "./summary.ts";
+export type {
+  ContextPlan, ContextPlanState, GraphEdge, GraphNode, Health, IndexCleanupReport, IngestManyOptions,
+  IngestManyResult, LcmDescription, LcmExpansion, LcmQueryExpansion, LcmStats, ListSessionsArgs, PackedContext,
+  PackContextArgs, QueryExpansionSource, RecentContext, SearchOverflowArgs, SearchSessionArgs, SessionDetail,
+  SessionDiscovery, SessionGraph, SessionListSummary, SessionPage, SessionSearchMatch, SessionSummary,
+  StorageOptions, UsageReport,
+} from "./storage-types.ts";
+export type { FileReference, OverflowContent, OverflowReference, OverflowSearchMatch, SessionMemorySummary, SummaryNode, SummarySourceType } from "./storage-types.ts";
 
-export type StorageOptions = {
-  home?: string;
-  config?: LcmConfig;
-  readOnly?: boolean;
-};
-
-export type IngestManyResult = {
-  imported: number;
-  skippedDuplicate: number;
-  touchedSessions: string[];
-};
-
-export type IngestManyOptions = {
-  readonly rebuildSummaries?: boolean;
-};
-
-export type SearchSessionArgs = {
-  query?: string;
-  limit?: number;
-  cwd?: string;
-  repoRoot?: string;
-  excludeCurrentSession?: boolean;
-  excludeSessionIds?: string[];
-};
-
-export type SearchOverflowArgs = {
-  query: string;
-  limit?: number;
-  cwd?: string;
-  repoRoot?: string;
-};
-
-export type ListSessionsArgs = {
-  since?: string;
-  until?: string;
-  cwd?: string;
-  repoRoot?: string;
-  parentSessionId?: string;
-  rootsOnly?: boolean;
-  includeSummaries?: boolean;
-  limit?: number;
-  cursor?: string;
-};
-
-export type SessionPage = {
-  sessions: SessionSummary[];
-  next_cursor?: string;
-};
-
-export type UsageReport = {
-  totals: {
-    sessions: number;
-    input_tokens: number;
-    cached_input_tokens: number;
-    output_tokens: number;
-    reasoning_output_tokens: number;
-    total_tokens: number;
-  };
-};
-
-export type IndexCleanupReport = {
-  applied: boolean;
-  raw_log_preserved: true;
-  index_path: string;
-  database_bytes_before: number;
-  database_bytes_after: number;
-  event_fts_rows_before: number;
-  event_fts_rows_after: number;
-  projected_event_fts_rows: number;
-  event_text_bytes_before: number;
-  event_text_bytes_after: number;
-  projected_summaries_to_rebuild: number;
-  summaries_rebuilt: number;
-  vacuumed: boolean;
-};
-
-type SummaryNodeSearchArgs = SearchSessionArgs & {
-  sessionIds?: string[];
-};
-
-export type SessionSummary = {
-  session_id: string;
-  first_seen: string;
-  last_seen: string;
-  cwd: string;
-  repo_root?: string;
-  git_branch?: string;
-  event_count: number;
-  parent_session_id?: string;
-  agent_role?: string;
-  agent_nickname?: string;
-  model?: string;
-  reasoning_effort?: string;
-  total_input_tokens?: number;
-  cached_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
-  total_tokens?: number;
-  match_count?: number;
-  best_match?: SessionSearchMatch;
-  discovery?: SessionDiscovery;
-  summary?: SessionListSummary;
-};
-
-export type SessionListSummary = {
-  updated_at: string;
-  title: string;
-  overview: string;
-  topics: string[];
-  key_prompts: string[];
-  outcomes: string[];
-  source_event_count: number;
-};
-
-export type SessionSearchMatch = {
-  kind: "summary_node" | "session_summary" | "event";
-  snippet: string;
-  timestamp: string;
-  score: number;
-  node_id?: string;
-  event_id?: string;
-  depth?: number;
-  topics?: string[];
-  source_event_count?: number;
-  source_token_count?: number;
-};
-
-export type SessionDiscovery = {
-  confidence: "high" | "medium" | "low";
-  score: number;
-  reasons: string[];
-};
-
-export type SessionDetail = {
-  session: SessionSummary | undefined;
-  events: NormalizedEvent[];
-  next_cursor?: string;
-};
-
-export type RecentContext = {
-  session_id?: string;
-  events: NormalizedEvent[];
-};
-
-export type ContextPlanState = "empty" | "under_limit" | "near_limit" | "over_limit" | "over_context";
-
-export type ContextPlan = {
-  session_id?: string;
-  cwd?: string;
-  repo_root?: string;
-  model_context_window: number;
-  auto_compact_token_limit: number;
-  recent_event_limit: number;
-  estimated_recent_tokens: number;
-  estimated_summary_tokens: number;
-  estimated_total_tokens: number;
-  summary_node_count: number;
-  latest_event_at: string | null;
-  state: ContextPlanState;
-  recommendation: string;
-  suggested_tools: string[];
-  can_control_compaction: false;
-};
-
-export type PackedContext = {
-  markdown: string;
-  estimated_tokens: number;
-  sources: Array<{ kind: "event" | "note" | "checkpoint" | "summary"; session_id: string; event_id?: string; node_id?: string; timestamp: string }>;
-};
-
-export type PackContextArgs = {
-  query?: string;
-  sessionIds?: string[];
-  currentThreadId?: string;
-  budgetTokens?: number;
-  cwd?: string;
-};
-
-export type QueryExpansionSource = {
-  kind: "summary" | "event";
-  session_id: string;
-  timestamp: string;
-  node_id?: string;
-  event_id?: string;
-  depth?: number;
-  hook_event?: string;
-};
-
-export type LcmQueryExpansion = {
-  query: string;
-  markdown: string;
-  estimated_tokens: number;
-  truncated: boolean;
-  nodes: SummaryNode[];
-  events: NormalizedEvent[];
-  sources: QueryExpansionSource[];
-};
-
-export type LcmDescription =
-  | {
-    target: "session";
-    session: SessionSummary | undefined;
-    summary: SessionMemorySummary | undefined;
-    summary_nodes: SummaryNode[];
-    file_refs: FileReference[];
-  }
-  | {
-    target: "summary_node";
-    node: SummaryNode;
-    source_nodes: SummaryNode[];
-    source_event_count: number;
-  }
-  | {
-    target: "file_ref";
-    file_ref: FileReference;
-  }
-  | {
-    target: "overflow_ref";
-    overflow_ref: OverflowContent;
-  };
-
-export type LcmExpansion = {
-  target: "summary_node";
-  node: SummaryNode;
-  source_nodes: SummaryNode[];
-  source_events: NormalizedEvent[];
-  markdown: string;
-};
-
-export type GraphNode = {
-  node_id: string;
-  kind: "session" | "turn" | "event" | "checkpoint" | "summary";
-  session_id: string;
-  event_id?: string;
-  turn_id?: string;
-  timestamp: string;
-  cwd: string;
-  repo_root?: string;
-  git_branch?: string;
-  label: string;
-  metadata: Record<string, unknown>;
-};
-
-export type GraphEdge = {
-  from_node_id: string;
-  to_node_id: string;
-  kind: "contains" | "next" | "tool_result" | "checkpoint" | string;
-  session_id: string;
-  position: number;
-  created_at: string;
-  metadata: Record<string, unknown>;
-};
-
-export type SessionGraph = {
-  session_id: string;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-};
-
-export type Health = {
-  home: string;
-  raw_log_path: string;
-  index_path: string;
-  raw_log_exists: boolean;
-  index_exists: boolean;
-  index_available: boolean;
-  index_error?: string;
-  event_count: number;
-  session_count: number;
-  graph_node_count?: number;
-  graph_edge_count?: number;
-  summary_count?: number;
-  session_summary_count?: number;
-  summary_node_count?: number;
-};
-
-export type LcmStats = Health & {
-  hook_event_counts: Record<string, number>;
-  summary_nodes_by_depth: Record<string, number>;
-  summary_nodes_by_source_type: Record<string, number>;
-  graph_nodes_by_kind: Record<string, number>;
-  graph_edges_by_kind: Record<string, number>;
-  sessions_with_session_summary: number;
-  sessions_with_summary_nodes: number;
-  max_summary_depth: number | null;
-  latest_event_at: string | null;
-  latest_summary_node_at: string | null;
-};
-
-const CHECKPOINT_INTERVAL = 50;
-const SUMMARY_EARLY_SIGNAL_LIMIT = 120;
-const SUMMARY_LATEST_SIGNAL_LIMIT = 240;
-const SUMMARY_RECENT_EVENT_LIMIT = 40;
-const SUMMARY_SOURCE_HOOKS = "('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')";
-const KNOWN_ACYCLIC_EDGE_KINDS = new Set(["contains", "next", "tool_result", "checkpoint", "summary_source"]);
-const DEFAULT_MODEL_CONTEXT_WINDOW = 128_000;
-const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT = 96_000;
-const DEFAULT_CONTEXT_PLAN_RECENT_EVENT_LIMIT = 80;
-const FILE_REF_BACKFILL_KEY = "file_refs_backfilled_v1";
-const DELEGATION_PARENT_BACKFILL_KEY = "delegation_parent_backfilled_v1";
-const RAW_LOG_INDEX_STATE_KEY = "raw_log_index_state_v1";
-
-type IndexEventResult = {
-  inserted: boolean;
-  summaryTouched: boolean;
-};
+import type { StorageOptions, IngestManyResult, IngestManyOptions, SearchSessionArgs, SearchOverflowArgs, ListSessionsArgs, SessionPage, UsageReport, IndexCleanupReport, SessionSummary, SessionDetail, RecentContext, ContextPlan, PackedContext, PackContextArgs, LcmQueryExpansion, LcmDescription, LcmExpansion, SessionGraph, Health, LcmStats } from "./storage-types.ts";
 
 type SummaryRebuildStrategy = "event" | "sessions" | "deferred";
-
-type RawEventIdCache = {
-  size: number;
-  mtimeMs: number;
-  eventIds: Set<string>;
-};
 
 export class LcmStorage {
   readonly config: LcmConfig;
@@ -408,12 +120,12 @@ export class LcmStorage {
         this.initialize();
         this.replayRawLogToIndex();
         this.backfillDelegationParents();
-        this.backfillGraph();
         this.backfillFileRefs();
         this.backfillSessionMemorySummaries();
       }
     } catch (error) {
       this.db = undefined;
+      if (error instanceof RawLogLockTimeoutError) throw error;
       this.indexError = error instanceof Error ? error.message : String(error);
     }
   }
@@ -436,6 +148,7 @@ export class LcmStorage {
     try {
       this.ingestSerialized([event], "event");
     } catch (error) {
+      if (!(error instanceof DerivedIndexError)) throw error;
       let rawDurable: boolean;
       try {
         rawDurable = readRawEventIds(this.config.rawLogPath).has(event.event_id);
@@ -456,147 +169,93 @@ export class LcmStorage {
 
   private ingestSerialized(events: NormalizedEvent[], summaryRebuild: SummaryRebuildStrategy): IngestManyResult {
     if (events.length === 0) return { imported: 0, skippedDuplicate: 0, touchedSessions: [] };
-
-    if (this.db) {
-      try {
-        this.db.exec("BEGIN IMMEDIATE");
-      } catch (error) {
-        this.indexError = error instanceof Error ? error.message : String(error);
-        throw error;
-      }
-    }
-
-    let rawEventIds: Set<string>;
-    let indexedEventIds: Set<string>;
-    let rawLogWasIndexed = false;
+    let indexedRawLogState: string | undefined;
+    let indexedEventIds = new Set<string>();
     try {
-      rawLogWasIndexed = this.db ? this.rawLogIsIndexed() : false;
+      if (this.db && this.indexError) this.replayRawLogToIndex();
       if (this.db) {
+        indexedRawLogState = this.indexedRawLogState();
         indexedEventIds = this.knownEventIds(events.map((event) => event.event_id));
-        rawEventIds = rawLogWasIndexed ? new Set(indexedEventIds) : this.readRawEventIds();
-      } else {
-        rawEventIds = this.readRawEventIds();
-        indexedEventIds = rawEventIds;
       }
     } catch (error) {
-      if (this.db) {
-        try {
-          this.db.exec("ROLLBACK");
-        } catch (rollbackError) {
-          throw new AggregateError([error, rollbackError], "Bulk ingest rollback failed after raw-log read or index lookup failure.");
-        }
-      }
-      throw error;
+      if (error instanceof RawLogLockTimeoutError) throw error;
+      this.indexError = error instanceof Error ? error.message : String(error);
+      indexedRawLogState = undefined;
     }
-    const rawSeen = new Set(rawEventIds);
-    const indexSeen = new Set(indexedEventIds);
-    const eventsToAppend: NormalizedEvent[] = [];
-    const eventsToIndex: NormalizedEvent[] = [];
-    let skippedDuplicate = 0;
-    for (const event of events) {
-      if (rawSeen.has(event.event_id)) {
-        skippedDuplicate += 1;
-        if (this.db && !indexSeen.has(event.event_id)) {
-          indexSeen.add(event.event_id);
-          eventsToIndex.push(event);
-        }
-        continue;
-      }
-      rawSeen.add(event.event_id);
-      indexSeen.add(event.event_id);
-      eventsToAppend.push(event);
-      eventsToIndex.push(event);
-    }
+    const rawWrite = withRawLogLock(this.config.rawLogPath, () => {
+      const rawLogWasIndexed = indexedRawLogState === JSON.stringify(this.rawLogState());
+      const rawEventIds = rawLogWasIndexed ? indexedEventIds : this.readRawEventIds();
 
-    if (!this.db && eventsToAppend.length === 0 && eventsToIndex.length === 0) {
-      return { imported: 0, skippedDuplicate, touchedSessions: [] };
-    }
+      const rawSeen = new Set(rawEventIds);
+      const eventsToAppend: NormalizedEvent[] = [];
+      let skippedDuplicate = 0;
+      for (const event of events) {
+        if (rawSeen.has(event.event_id)) {
+          skippedDuplicate += 1;
+          continue;
+        }
+        rawSeen.add(event.event_id);
+        eventsToAppend.push(event);
+      }
 
-    if (eventsToAppend.length > 0) {
-      try {
+      if (eventsToAppend.length > 0) {
         appendRawEvents(this.config.rawLogPath, eventsToAppend);
-      } catch (error) {
-        if (this.db) {
-          try {
-            this.db.exec("ROLLBACK");
-          } catch (rollbackError) {
-            throw new AggregateError([error, rollbackError], "Bulk ingest rollback failed after raw-log append failure.");
-          }
-        }
-        throw error;
+        this.storeRawEventIds(rawSeen);
       }
-      for (const event of eventsToAppend) {
-        rawEventIds.add(event.event_id);
-      }
-      this.storeRawEventIds(rawEventIds);
+      return {
+        eventsToAppend,
+        rawLogState: rawLogWasIndexed ? this.rawLogState() : undefined,
+        skippedDuplicate,
+      };
+    });
+    if (!this.db) return { imported: rawWrite.eventsToAppend.length, skippedDuplicate: rawWrite.skippedDuplicate, touchedSessions: [] };
+
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+    } catch (error) {
+      this.indexError = error instanceof Error ? error.message : String(error);
+      throw new DerivedIndexError(error);
     }
-    if (!this.db) return { imported: eventsToAppend.length, skippedDuplicate, touchedSessions: [] };
 
     const touchedSessions = new Set<string>();
     try {
-      for (const event of eventsToIndex) {
+      const indexSeen = this.knownEventIds(events.map((event) => event.event_id));
+      for (const event of events) {
+        if (indexSeen.has(event.event_id)) continue;
+        indexSeen.add(event.event_id);
         const result = this.indexEventInTransaction(event, { rebuildSummary: summaryRebuild === "event" });
         if (result.summaryTouched) touchedSessions.add(event.session_id);
       }
       const rebuiltSessions = summaryRebuild === "sessions"
         ? this.rebuildTouchedSummarySessions(touchedSessions)
         : sortedSessionIds(touchedSessions);
-      if (rawLogWasIndexed) this.recordRawLogState();
+      if (rawWrite.rawLogState) this.recordRawLogState(rawWrite.rawLogState);
       this.db.exec("COMMIT");
-      return { imported: eventsToAppend.length, skippedDuplicate, touchedSessions: rebuiltSessions };
+      if (rawWrite.rawLogState) this.indexError = undefined;
+      return {
+        imported: rawWrite.eventsToAppend.length,
+        skippedDuplicate: rawWrite.skippedDuplicate,
+        touchedSessions: rebuiltSessions,
+      };
     } catch (error) {
       let failure = error;
-      try {
-        this.db.exec("ROLLBACK");
-      } catch (rollbackError) {
-        failure = new AggregateError([error, rollbackError], "Bulk ingest rollback failed after indexing failure.");
+      const rollback = rollbackPreservingError(this.db, error);
+      if (rollback.kind !== "rolled_back") {
+        failure = new AggregateError([rollback.original, rollback.rollbackError], "Bulk ingest rollback failed after indexing failure.");
       }
       this.indexError = failure instanceof Error ? failure.message : String(failure);
-      throw failure;
+      throw new DerivedIndexError(failure);
     }
   }
 
   private readRawEventIds(): Set<string> {
-    const stat = this.rawLogStat();
-    const cache = this.rawEventIdCache;
-    if (cache && stat && cache.size === stat.size && cache.mtimeMs === stat.mtimeMs) {
-      return cache.eventIds;
-    }
-
-    const eventIds = readRawEventIds(this.config.rawLogPath);
-    if (stat) {
-      this.rawEventIdCache = {
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-        eventIds,
-      };
-    } else {
-      this.rawEventIdCache = {
-        size: 0,
-        mtimeMs: 0,
-        eventIds,
-      };
-    }
-    return eventIds;
+    const result = readCachedRawEventIds(this.config.rawLogPath, this.rawEventIdCache);
+    this.rawEventIdCache = result.cache;
+    return result.eventIds;
   }
 
   private storeRawEventIds(eventIds: Set<string>): void {
-    const stat = this.rawLogStat();
-    this.rawEventIdCache = stat
-      ? {
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
-          eventIds,
-        }
-      : {
-          size: 0,
-          mtimeMs: 0,
-          eventIds,
-        };
-  }
-
-  private rawLogStat(): fs.Stats | undefined {
-    return rawLogStat(this.config.rawLogPath);
+    this.rawEventIdCache = cacheRawEventIds(this.config.rawLogPath, eventIds);
   }
 
   rebuildSessionMemorySummaries(sessionIds: Iterable<string>): string[] {
@@ -607,108 +266,34 @@ export class LcmStorage {
       this.db.exec("COMMIT");
       return rebuiltSessions;
     } catch (error) {
-      let rollbackError: unknown;
-      try {
-        this.db.exec("ROLLBACK");
-      } catch (caught) {
-        rollbackError = caught;
-      }
+      const rollback = rollbackPreservingError(this.db, error);
       const message = error instanceof Error ? error.message : String(error);
-      this.indexError = rollbackError === undefined ? message : `${message}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`;
+      this.indexError = rollback.kind === "rolled_back" ? message : `${message}; rollback failed: ${rollback.rollbackError instanceof Error ? rollback.rollbackError.message : String(rollback.rollbackError)}`;
       return [];
     }
   }
 
   cleanupIndex(options: { apply?: boolean } = {}): IndexCleanupReport {
     if (!this.db && !fs.existsSync(this.config.rawLogPath) && !fs.existsSync(this.config.indexPath)) {
-      return {
-        applied: false,
-        raw_log_preserved: true,
-        index_path: this.config.indexPath,
-        database_bytes_before: 0,
-        database_bytes_after: 0,
-        event_fts_rows_before: 0,
-        event_fts_rows_after: 0,
-        projected_event_fts_rows: 0,
-        event_text_bytes_before: 0,
-        event_text_bytes_after: 0,
-        projected_summaries_to_rebuild: 0,
-        summaries_rebuilt: 0,
-        vacuumed: false,
-      };
+      return emptyCleanupReport(this.config.indexPath);
     }
     if (!this.db) throw new Error("SQLite index is unavailable; the raw event log was not changed.");
     const apply = options.apply === true;
     if (apply && this.readOnly) throw new Error("Cleanup --apply requires writable storage.");
-
-    const inspectIndex = () => {
-      const searchableEvents = (this.db!.prepare(`
-        SELECT raw_json
-        FROM events
-        WHERE hook_event IN ${SUMMARY_SOURCE_HOOKS}
-        ORDER BY timestamp ASC, rowid ASC
-      `).all() as Array<{ raw_json: string }>)
-        .map((row) => decodePersistedEvent(row.raw_json))
-        .filter(isSearchIndexEvent)
-        .filter((event) => !isCodexLcmToolEvent(event));
-      const summarySessionIds = new Set(searchableEvents
-        .filter(isSummarySourceEvent)
-        .map((event) => event.session_id));
-      return {
-        databaseBytesBefore: fileSize(this.config.indexPath),
-        eventFtsRowsBefore: Number(this.scalar("SELECT COUNT(*) AS count FROM event_fts")),
-        eventTextBytesBefore: Number(this.scalar("SELECT COALESCE(SUM(length(CAST(text AS BLOB))), 0) AS count FROM events")),
-        searchableEvents,
-        sessionIds: this.outdatedSummarySessionIds()
-          .filter((sessionId) => summarySessionIds.has(sessionId)),
-      };
-    };
-
     if (!apply) {
-      const inspection = inspectIndex();
-      return {
-        applied: false,
-        raw_log_preserved: true,
-        index_path: this.config.indexPath,
-        database_bytes_before: inspection.databaseBytesBefore,
-        database_bytes_after: inspection.databaseBytesBefore,
-        event_fts_rows_before: inspection.eventFtsRowsBefore,
-        event_fts_rows_after: inspection.eventFtsRowsBefore,
-        projected_event_fts_rows: inspection.searchableEvents.length,
-        event_text_bytes_before: inspection.eventTextBytesBefore,
-        event_text_bytes_after: inspection.eventTextBytesBefore,
-        projected_summaries_to_rebuild: inspection.sessionIds.length,
-        summaries_rebuilt: 0,
-        vacuumed: false,
-      };
+      return previewCleanupReport(this.config.indexPath, inspectIndexForCleanup(this.db, this.config.indexPath));
     }
-
     this.db.exec("BEGIN IMMEDIATE");
-    let inspection: ReturnType<typeof inspectIndex>;
+    let inspection: ReturnType<typeof inspectIndexForCleanup>;
     try {
-      inspection = inspectIndex();
-      this.db.prepare("DELETE FROM event_fts").run();
-      const insertSearchEvent = this.db.prepare(`
-        INSERT INTO event_fts (event_id, session_id, cwd, repo_root, hook_event, content)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-      `);
-      for (const event of inspection.searchableEvents) {
-        insertSearchEvent.run(
-          event.event_id,
-          event.session_id,
-          event.cwd,
-          event.repo_root ?? "",
-          event.hook_event,
-          eventSearchText(event),
-        );
-      }
-      this.db.prepare("UPDATE events SET text = '' WHERE text <> ''").run();
+      inspection = inspectIndexForCleanup(this.db, this.config.indexPath);
+      replaceCleanupSearchIndex(this.db, inspection.searchableEvents);
       this.db.exec("COMMIT");
     } catch (error) {
       try {
         this.db.exec("ROLLBACK");
       } catch {
-        // Preserve the original cleanup failure.
+        throw error;
       }
       throw error;
     }
@@ -723,29 +308,13 @@ export class LcmStorage {
         try {
           this.db?.exec("ROLLBACK");
         } catch {
-          // Preserve the original summary rebuild failure.
+          throw error;
         }
         throw error;
       }
     }
-
-    this.db.exec("PRAGMA optimize");
-    this.db.exec("VACUUM");
-    return {
-      applied: true,
-      raw_log_preserved: true,
-      index_path: this.config.indexPath,
-      database_bytes_before: inspection.databaseBytesBefore,
-      database_bytes_after: fileSize(this.config.indexPath),
-      event_fts_rows_before: inspection.eventFtsRowsBefore,
-      event_fts_rows_after: Number(this.scalar("SELECT COUNT(*) AS count FROM event_fts")),
-      projected_event_fts_rows: inspection.searchableEvents.length,
-      event_text_bytes_before: inspection.eventTextBytesBefore,
-      event_text_bytes_after: Number(this.scalar("SELECT COALESCE(SUM(length(CAST(text AS BLOB))), 0) AS count FROM events")),
-      projected_summaries_to_rebuild: inspection.sessionIds.length,
-      summaries_rebuilt: inspection.sessionIds.length,
-      vacuumed: true,
-    };
+    optimizeIndex(this.db);
+    return appliedCleanupReport(this.db, this.config.indexPath, inspection);
   }
 
   private reopenWritableIndex(): void {
@@ -753,57 +322,23 @@ export class LcmStorage {
     this.db = new DatabaseSync(this.config.indexPath, { timeout: 5_000 });
   }
 
-  private outdatedSummarySessionIds(): string[] {
-    if (!this.db) return [];
-    return (this.db.prepare(`
-      SELECT s.session_id
-      FROM sessions s
-      LEFT JOIN session_summaries ss ON ss.session_id = s.session_id
-      LEFT JOIN (
-        SELECT session_id, MAX(summary_version) AS summary_node_version
-        FROM summary_nodes
-        GROUP BY session_id
-      ) sn ON sn.session_id = s.session_id
-      WHERE EXISTS (
-        SELECT 1 FROM events e
-        WHERE e.session_id = s.session_id
-          AND e.hook_event IN ${SUMMARY_SOURCE_HOOKS}
-      )
-        AND (
-          ss.session_id IS NULL
-          OR ss.summary_version IS NULL
-          OR ss.summary_version < ${SUMMARY_ALGORITHM_VERSION}
-          OR sn.summary_node_version IS NULL
-          OR sn.summary_node_version < ${SUMMARY_NODE_VERSION}
-        )
-      ORDER BY s.session_id ASC
-    `).all() as Array<{ session_id: string }>).map((row) => row.session_id);
-  }
-
   health(): Health {
     if (!this.db) return this.rawHealth();
     try {
-      return {
-        home: this.config.home,
-        raw_log_path: this.config.rawLogPath,
-        index_path: this.config.indexPath,
-        raw_log_exists: fs.existsSync(this.config.rawLogPath),
-        index_exists: fs.existsSync(this.config.indexPath),
-        index_available: true,
-        ...(this.indexError ? { index_error: this.indexError } : {}),
-        event_count: Number(this.scalar("SELECT COUNT(*) AS count FROM events")),
-        session_count: Number(this.scalar("SELECT COUNT(*) AS count FROM sessions")),
-        graph_node_count: Number(this.scalar("SELECT COUNT(*) AS count FROM graph_nodes")),
-        graph_edge_count: Number(this.scalar("SELECT COUNT(*) AS count FROM graph_edges")),
-        summary_count: Number(this.scalar("SELECT COUNT(*) AS count FROM session_summaries")),
-        summary_node_count: Number(this.scalar("SELECT COUNT(*) AS count FROM summary_nodes")),
-      };
+      return writableIndexHealth(
+        this.db,
+        this.config,
+        this.indexError,
+        derivedGraphNodeCounts(this.db),
+        derivedGraphEdgeCounts(this.db),
+      );
     } catch (error) {
       this.indexError = error instanceof Error ? error.message : String(error);
       try {
         this.db.close();
       } catch {
-        // Ignore close errors while degrading to raw JSONL health.
+        this.db = undefined;
+        return this.rawHealth();
       }
       this.db = undefined;
       return this.rawHealth();
@@ -811,24 +346,17 @@ export class LcmStorage {
   }
 
   private rawHealth(): Health {
-    const rawEvents = readRawEvents(this.config.rawLogPath);
-    return {
-      home: this.config.home,
-      raw_log_path: this.config.rawLogPath,
-      index_path: this.config.indexPath,
-      raw_log_exists: fs.existsSync(this.config.rawLogPath),
-      index_exists: fs.existsSync(this.config.indexPath),
-      index_available: false,
-      ...(this.indexError ? { index_error: this.indexError } : {}),
-      event_count: rawEvents.length,
-      session_count: summarizeSessions(rawEvents).length,
-    };
+    return readRawHealth(this.config, this.indexError);
   }
 
   private replayRawLogToIndex(): void {
     if (!this.db) return;
     if (this.rawLogIsIndexed()) return;
-    const rawLog = readRawLog(this.config.rawLogPath);
+    const snapshot = withRawLogLock(this.config.rawLogPath, () => ({
+      rawLog: readRawLog(this.config.rawLogPath),
+      state: this.rawLogState(),
+    }));
+    const rawLog = snapshot.rawLog;
     const rawEvents = rawLog.events;
     const indexedEvents = this.indexedEventsById();
     const indexedIds = new Set(indexedEvents.keys());
@@ -837,8 +365,8 @@ export class LcmStorage {
       this.indexError = `Raw JSONL contains ${rawLog.malformedLineCount} malformed ${noun}; destructive index reconciliation is disabled until the log is repaired.`;
     }
     if (rawEvents.length === 0) {
-      if (indexedIds.size > 0 && rawLog.malformedLineCount === 0) this.rebuildIndexFromRawEvents([]);
-      else if (rawLog.malformedLineCount === 0) this.recordRawLogState();
+      if (indexedIds.size > 0 && rawLog.malformedLineCount === 0) this.rebuildIndexFromRawEvents([], snapshot.state);
+      else if (rawLog.malformedLineCount === 0) this.recordRawLogState(snapshot.state);
       return;
     }
     const rawIds = new Set(rawEvents.map((event) => event.event_id));
@@ -848,12 +376,12 @@ export class LcmStorage {
       return indexedRaw !== undefined && indexedRaw !== JSON.stringify(event);
     });
     if ((hasStaleIndexedRows || hasChangedIndexedRows) && rawLog.malformedLineCount === 0) {
-      this.rebuildIndexFromRawEvents(rawEvents);
+      this.rebuildIndexFromRawEvents(rawEvents, snapshot.state);
       return;
     }
     const missingEvents = rawEvents.filter((event) => !indexedIds.has(event.event_id));
     if (missingEvents.length === 0) {
-      if (rawLog.malformedLineCount === 0) this.recordRawLogState();
+      if (rawLog.malformedLineCount === 0) this.recordRawLogState(snapshot.state);
       return;
     }
 
@@ -865,19 +393,15 @@ export class LcmStorage {
         if (result.summaryTouched) touchedSessions.add(event.session_id);
       }
       this.rebuildTouchedSummarySessions(touchedSessions);
-      if (rawLog.malformedLineCount === 0) this.recordRawLogState();
+      if (rawLog.malformedLineCount === 0) this.recordRawLogState(snapshot.state);
       this.db.exec("COMMIT");
     } catch (error) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        // Ignore rollback failures; the original replay error is more useful.
-      }
-      this.indexError = error instanceof Error ? error.message : String(error);
+      const failure = rollbackPreservingError(this.db, error).original;
+      this.indexError = failure instanceof Error ? failure.message : String(failure);
     }
   }
 
-  private rebuildIndexFromRawEvents(rawEvents: NormalizedEvent[]): void {
+  private rebuildIndexFromRawEvents(rawEvents: NormalizedEvent[], state: RawLogState): void {
     if (!this.db) return;
     const touchedSessions = new Set<string>();
     this.db.exec("BEGIN IMMEDIATE");
@@ -888,77 +412,41 @@ export class LcmStorage {
         if (result.summaryTouched) touchedSessions.add(event.session_id);
       }
       this.rebuildTouchedSummarySessions(touchedSessions);
-      this.recordRawLogState();
+      this.recordRawLogState(state);
       this.db.exec("COMMIT");
     } catch (error) {
-      let rollbackError: unknown;
-      try {
-        this.db.exec("ROLLBACK");
-      } catch (caught) {
-        rollbackError = caught;
-      }
+      const rollback = rollbackPreservingError(this.db, error);
       const message = error instanceof Error ? error.message : String(error);
-      this.indexError = rollbackError === undefined ? message : `${message}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`;
+      this.indexError = rollback.kind === "rolled_back" ? message : `${message}; rollback failed: ${rollback.rollbackError instanceof Error ? rollback.rollbackError.message : String(rollback.rollbackError)}`;
     }
   }
 
   private clearDerivedIndex(): void {
-    if (!this.db) return;
-    this.db.prepare("DELETE FROM summary_node_fts").run();
-    this.db.prepare("DELETE FROM session_summary_fts").run();
-    this.db.prepare("DELETE FROM event_fts").run();
-    this.db.prepare("DELETE FROM summary_nodes").run();
-    this.db.prepare("DELETE FROM session_summaries").run();
-    this.db.prepare("DELETE FROM file_refs").run();
-    this.db.prepare("DELETE FROM graph_edges").run();
-    this.db.prepare("DELETE FROM graph_nodes").run();
-    this.db.prepare("DELETE FROM events").run();
-    this.db.prepare("DELETE FROM sessions").run();
-    this.db.prepare("DELETE FROM index_metadata").run();
+    if (this.db) clearStoredDerivedIndex(this.db);
   }
 
   private knownEventIds(eventIds: string[]): Set<string> {
-    const uniqueIds = Array.from(new Set(eventIds.filter(Boolean)));
-    if (uniqueIds.length === 0) return new Set();
-    if (!this.db) {
-      const wanted = new Set(uniqueIds);
-      return new Set(readRawEvents(this.config.rawLogPath)
-        .map((event) => event.event_id)
-        .filter((eventId) => wanted.has(eventId)));
-    }
-
-    const known = new Set<string>();
-    for (const chunk of chunkArray(uniqueIds, 500)) {
-      const placeholders = chunk.map((_, index) => `?${index + 1}`).join(", ");
-      const rows = this.db.prepare(`SELECT event_id FROM events WHERE event_id IN (${placeholders})`).all(...chunk) as Array<{ event_id: string }>;
-      for (const row of rows) known.add(row.event_id);
-    }
-    return known;
+    return readKnownEventIds(this.db, this.config.rawLogPath, eventIds);
   }
 
   private indexedEventsById(): Map<string, string> {
-    if (!this.db) return new Map();
-    const rows = this.db.prepare("SELECT event_id, raw_json FROM events").all() as Array<{ event_id: string; raw_json: string }>;
-    return new Map(rows.map((row) => [row.event_id, row.raw_json]));
+    return this.db ? readIndexedEventsById(this.db) : new Map();
   }
 
   private rawLogIsIndexed(): boolean {
-    if (!this.db) return false;
-    const row = this.db.prepare("SELECT value FROM index_metadata WHERE key = ?1").get(RAW_LOG_INDEX_STATE_KEY) as { value?: string } | undefined;
-    return row?.value === JSON.stringify(this.rawLogState());
+    return this.db ? isRawLogIndexed(this.db, this.config.rawLogPath) : false;
   }
 
-  private recordRawLogState(): void {
-    if (!this.db) return;
-    this.db.prepare(`
-      INSERT INTO index_metadata (key, value)
-      VALUES (?1, ?2)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(RAW_LOG_INDEX_STATE_KEY, JSON.stringify(this.rawLogState()));
+  private indexedRawLogState(): string | undefined {
+    return this.db ? readIndexedRawLogState(this.db) : undefined;
+  }
+
+  private recordRawLogState(state: RawLogState): void {
+    if (this.db) storeRawLogState(this.db, state);
   }
 
   private rawLogState(): RawLogState {
-    return rawLogState(this.config.rawLogPath);
+    return currentRawLogState(this.config.rawLogPath);
   }
 
   private rebuildTouchedSummarySessions(sessionIds: Iterable<string>): string[] {
@@ -969,61 +457,13 @@ export class LcmStorage {
 
   stats(): LcmStats {
     const health = this.health();
-    if (!this.db) {
-      return {
-        ...health,
-        hook_event_counts: countEventsByHook(readRawEvents(this.config.rawLogPath)),
-        summary_nodes_by_depth: {},
-        summary_nodes_by_source_type: {},
-        graph_nodes_by_kind: {},
-        graph_edges_by_kind: {},
-        sessions_with_session_summary: 0,
-        sessions_with_summary_nodes: 0,
-        max_summary_depth: null,
-        latest_event_at: null,
-        latest_summary_node_at: null,
-      };
-    }
-
-    return {
-      ...health,
-      hook_event_counts: this.countMap(`
-        SELECT hook_event AS key, COUNT(*) AS count
-        FROM events
-        GROUP BY hook_event
-        ORDER BY hook_event
-      `),
-      summary_nodes_by_depth: this.countMap(`
-        SELECT depth AS key, COUNT(*) AS count
-        FROM summary_nodes
-        GROUP BY depth
-        ORDER BY depth
-      `),
-      summary_nodes_by_source_type: this.countMap(`
-        SELECT source_type AS key, COUNT(*) AS count
-        FROM summary_nodes
-        GROUP BY source_type
-        ORDER BY source_type
-      `),
-      graph_nodes_by_kind: this.countMap(`
-        SELECT kind AS key, COUNT(*) AS count
-        FROM graph_nodes
-        GROUP BY kind
-        ORDER BY kind
-      `),
-      graph_edges_by_kind: this.countMap(`
-        SELECT kind AS key, COUNT(*) AS count
-        FROM graph_edges
-        GROUP BY kind
-        ORDER BY kind
-      `),
-      session_summary_count: Number(this.scalar("SELECT COUNT(*) AS count FROM session_summaries")),
-      sessions_with_session_summary: Number(this.scalar("SELECT COUNT(DISTINCT session_id) AS count FROM session_summaries")),
-      sessions_with_summary_nodes: Number(this.scalar("SELECT COUNT(DISTINCT session_id) AS count FROM summary_nodes")),
-      max_summary_depth: this.optionalNumberScalar("SELECT MAX(depth) AS value FROM summary_nodes"),
-      latest_event_at: this.optionalStringScalar("SELECT MAX(timestamp) AS value FROM events"),
-      latest_summary_node_at: this.optionalStringScalar("SELECT MAX(latest_at) AS value FROM summary_nodes"),
-    };
+    return storageStats(
+      this.db,
+      this.config.rawLogPath,
+      health,
+      derivedGraphNodeCounts(this.db),
+      derivedGraphEdgeCounts(this.db),
+    );
   }
 
   listSessions(args: ListSessionsArgs = {}): SessionPage {
@@ -1031,434 +471,40 @@ export class LcmStorage {
     const offset = parseCursor(args.cursor);
     const since = parseTimestamp(args.since, "since");
     const until = parseTimestamp(args.until, "until");
-    if (!this.db) {
-      const rawEvents = readRawEvents(this.config.rawLogPath);
-      const matches = summarizeSessions(rawEvents)
-        .filter((session) => !since || session.last_seen >= since)
-        .filter((session) => !until || session.first_seen <= until)
-        .filter((session) => !args.cwd || session.cwd === args.cwd)
-        .filter((session) => !args.repoRoot || session.repo_root === args.repoRoot)
-        .filter((session) => !args.rootsOnly || !session.parent_session_id)
-        .filter((session) => !args.parentSessionId || session.parent_session_id === args.parentSessionId);
-      const eventsBySession = args.includeSummaries ? groupEventsBySession(rawEvents) : undefined;
-      const sessions = matches.slice(offset, offset + limit).map((session) => {
-        const events = eventsBySession?.get(session.session_id) ?? [];
-        return events.length > 0
-          ? { ...session, summary: sessionListSummary(buildSessionMemorySummary(events)) }
-          : session;
-      });
-      return {
-        sessions,
-        ...(offset + sessions.length < matches.length ? { next_cursor: String(offset + sessions.length) } : {}),
-      };
-    }
-    const summaryColumns = args.includeSummaries ? `,
-        ss.updated_at AS summary_updated_at,
-        ss.title AS summary_title,
-        ss.overview AS summary_overview,
-        ss.topics_json AS summary_topics_json,
-        ss.key_prompts_json AS summary_key_prompts_json,
-        ss.outcomes_json AS summary_outcomes_json,
-        ss.source_event_ids_json AS summary_source_event_ids_json` : "";
-    const summaryJoin = args.includeSummaries ? "LEFT JOIN session_summaries ss ON ss.session_id = s.session_id" : "";
-    const rows = this.db.prepare(`
-      SELECT s.*${summaryColumns}
-      FROM sessions s
-      ${summaryJoin}
-      WHERE (?1 IS NULL OR s.last_seen >= ?1)
-        AND (?2 IS NULL OR s.first_seen <= ?2)
-        AND (?3 IS NULL OR s.cwd = ?3)
-        AND (?4 IS NULL OR s.repo_root = ?4)
-        AND (?5 = 0 OR s.parent_session_id IS NULL)
-        AND (?6 IS NULL OR s.parent_session_id = ?6)
-      ORDER BY s.last_seen DESC, s.session_id ASC
-      LIMIT ?7 OFFSET ?8
-    `).all(
-      since ?? null,
-      until ?? null,
-      args.cwd ?? null,
-      args.repoRoot ?? null,
-      args.rootsOnly ? 1 : 0,
-      args.parentSessionId ?? null,
-      limit + 1,
-      offset,
-    );
-    const sessions = rows.slice(0, limit).map(rowToSessionSummary);
-    return {
-      sessions,
-      ...(rows.length > limit ? { next_cursor: String(offset + limit) } : {}),
-    };
+    return listStoredSessions(this.db, this.config.rawLogPath, args, limit, offset, since, until);
   }
 
   usage(args: Omit<ListSessionsArgs, "limit" | "cursor"> = {}): UsageReport {
     const since = parseTimestamp(args.since, "since");
     const until = parseTimestamp(args.until, "until");
-    if (!this.db) {
-      const allSessions = summarizeSessions(readRawEvents(this.config.rawLogPath));
-      let sessions = allSessions
-        .filter((session) => !since || session.last_seen >= since)
-        .filter((session) => !until || session.first_seen <= until)
-        .filter((session) => !args.cwd || session.cwd === args.cwd)
-        .filter((session) => !args.repoRoot || session.repo_root === args.repoRoot)
-        .filter((session) => !args.parentSessionId || session.parent_session_id === args.parentSessionId);
-      if (args.rootsOnly) sessions = sessionsWithDescendants(allSessions, sessions.filter((session) => !session.parent_session_id));
-      return usageFromSessions(sessions);
-    }
-    if (args.rootsOnly) {
-      const row = this.db.prepare(`
-        WITH RECURSIVE selected_sessions(session_id) AS (
-          SELECT session_id
-          FROM sessions
-          WHERE parent_session_id IS NULL
-            AND (?1 IS NULL OR last_seen >= ?1)
-            AND (?2 IS NULL OR first_seen <= ?2)
-            AND (?3 IS NULL OR cwd = ?3)
-            AND (?4 IS NULL OR repo_root = ?4)
-            AND (?5 IS NULL OR parent_session_id = ?5)
-          UNION
-          SELECT child.session_id
-          FROM sessions child
-          JOIN selected_sessions parent ON child.parent_session_id = parent.session_id
-        )
-        SELECT
-          COUNT(*) AS sessions,
-          COALESCE(SUM(s.total_input_tokens), 0) AS input_tokens,
-          COALESCE(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
-          COALESCE(SUM(s.output_tokens), 0) AS output_tokens,
-          COALESCE(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
-          COALESCE(SUM(s.total_tokens), 0) AS total_tokens
-        FROM sessions s
-        JOIN selected_sessions selected ON selected.session_id = s.session_id
-      `).get(
-        since ?? null,
-        until ?? null,
-        args.cwd ?? null,
-        args.repoRoot ?? null,
-        args.parentSessionId ?? null,
-      ) as Record<string, unknown>;
-      return usageReportFromRow(row);
-    }
-    const row = this.db.prepare(`
-      SELECT
-        COUNT(*) AS sessions,
-        COALESCE(SUM(total_input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-        COALESCE(SUM(total_tokens), 0) AS total_tokens
-      FROM sessions
-      WHERE (?1 IS NULL OR last_seen >= ?1)
-        AND (?2 IS NULL OR first_seen <= ?2)
-        AND (?3 IS NULL OR cwd = ?3)
-        AND (?4 IS NULL OR repo_root = ?4)
-        AND (?5 IS NULL OR parent_session_id = ?5)
-    `).get(
-      since ?? null,
-      until ?? null,
-      args.cwd ?? null,
-      args.repoRoot ?? null,
-      args.parentSessionId ?? null,
-    ) as Record<string, unknown>;
-    return usageReportFromRow(row);
+    return storedUsage(this.db, this.config.rawLogPath, args, since, until);
   }
 
   searchSessions(args: SearchSessionArgs): SessionSummary[] {
-    const limit = clampLimit(args.limit, 10);
-    const excludedSessionIds = this.excludedSearchSessionIds(args);
-    if (!this.db) {
-      const query = args.query?.trim() ?? "";
-      return summarizeSessions(readRawEvents(this.config.rawLogPath)
-        .filter((event) => !args.cwd || event.cwd === args.cwd)
-        .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
-        .filter((event) => !excludedSessionIds.has(event.session_id))
-        .filter((event) => isSearchDiscoveryEvent(event, query))
-        .filter((event) => matchesQueryText(JSON.stringify(event), query)))
-        .slice(0, limit);
-    }
-    const query = args.query?.trim() ?? "";
-    if (query.length === 0) {
-      const searchLimit = excludedSessionIds.size > 0 ? Math.max(limit * 4, 20) : limit;
-      return this.db.prepare(`
-        SELECT *
-        FROM sessions
-        WHERE (?1 IS NULL OR cwd = ?1)
-          AND (?2 IS NULL OR repo_root = ?2)
-        ORDER BY last_seen DESC
-        LIMIT ?3
-      `).all(args.cwd ?? null, args.repoRoot ?? null, searchLimit)
-        .map(rowToSessionSummary)
-        .filter((session) => !excludedSessionIds.has(session.session_id))
-        .slice(0, limit);
-    }
-
-    let rows: unknown[] = [];
-    const eventStatement = this.db.prepare(`
-        SELECT s.*,
-               e.raw_json AS match_text, e.timestamp AS match_timestamp, 1 AS match_weight,
-               'event' AS match_kind, e.event_id AS match_event_id
-        FROM event_fts f
-        JOIN events e ON e.event_id = f.event_id
-        JOIN sessions s ON s.session_id = e.session_id
-        WHERE event_fts MATCH ?1
-          AND (?2 IS NULL OR s.cwd = ?2)
-          AND (?3 IS NULL OR s.repo_root = ?3)
-          AND e.hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')
-        ORDER BY bm25(event_fts) ASC, e.timestamp DESC
-        LIMIT ?4
-      `);
-    const summaryStatement = this.db.prepare(`
-        SELECT s.*,
-               ss.summary_text AS match_text, ss.updated_at AS match_timestamp, 3 AS match_weight,
-               'session_summary' AS match_kind, ss.topics_json AS match_topics_json,
-               ss.source_event_ids_json AS match_source_event_ids_json
-        FROM session_summary_fts f
-        JOIN session_summaries ss ON ss.session_id = f.session_id
-        JOIN sessions s ON s.session_id = ss.session_id
-        WHERE session_summary_fts MATCH ?1
-          AND (?2 IS NULL OR s.cwd = ?2)
-          AND (?3 IS NULL OR s.repo_root = ?3)
-        ORDER BY bm25(session_summary_fts) ASC, ss.updated_at DESC
-        LIMIT ?4
-      `);
-    const summaryNodeStatement = this.db.prepare(`
-        SELECT s.*,
-               n.summary_text AS match_text, n.latest_at AS match_timestamp, 4 AS match_weight,
-               'summary_node' AS match_kind, n.node_id AS match_node_id, n.depth AS match_depth,
-               n.topics_json AS match_topics_json,
-               n.source_event_ids_json AS match_source_event_ids_json,
-               n.source_token_count AS match_source_token_count
-        FROM summary_node_fts f
-        JOIN summary_nodes n ON n.node_id = f.node_id
-        JOIN sessions s ON s.session_id = n.session_id
-        WHERE summary_node_fts MATCH ?1
-          AND (?2 IS NULL OR s.cwd = ?2)
-          AND (?3 IS NULL OR s.repo_root = ?3)
-        ORDER BY bm25(summary_node_fts) ASC, n.depth DESC, n.latest_at DESC
-        LIMIT ?4
-      `);
-    for (const ftsQuery of toFtsQueries(query)) {
-      const candidateRows = [summaryNodeStatement, summaryStatement, eventStatement]
-        .flatMap((statement) => statement.all(ftsQuery, args.cwd ?? null, args.repoRoot ?? null, Math.max(limit * 20, 50)));
-      rows = candidateRows
-        .filter((row) => !excludedSessionIds.has(String((row as { session_id: string }).session_id)))
-        .filter((row) => isSearchDiscoveryRow(row, query));
-      if (rows.length > 0) break;
-    }
-    return rankSessionRows(rows, query).slice(0, limit);
+    return searchStoredSessions(this.db, this.config.rawLogPath, args);
   }
 
   searchOverflow(args: SearchOverflowArgs): OverflowSearchMatch[] {
-    const limit = clampLimit(args.limit, 10, 50);
-    const events = this.db
-      ? (this.db.prepare(`
-          SELECT raw_json
-          FROM events
-          WHERE json_extract(raw_json, '$.payload.overflow_ref.sha256') IS NOT NULL
-            AND (?1 IS NULL OR cwd = ?1)
-            AND (?2 IS NULL OR repo_root = ?2)
-          ORDER BY timestamp DESC, rowid DESC
-          LIMIT 256
-        `).all(args.cwd ?? null, args.repoRoot ?? null) as Array<{ raw_json: string }>)
-        .map((row) => decodePersistedEvent(row.raw_json))
-      : readRawEvents(this.config.rawLogPath)
-        .filter((event) => !args.cwd || event.cwd === args.cwd)
-        .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
-        .slice(-256)
-        .reverse();
-    const matches: OverflowSearchMatch[] = [];
-    for (const event of events) {
-      const reference = overflowReferenceFromEvent(event);
-      if (!reference) continue;
-      try {
-        const match = searchOverflowContent({
-          overflowDir: this.config.overflowDir,
-          reference,
-          query: args.query,
-        });
-        if (match) matches.push(match);
-      } catch {
-        // A missing, moved, or invalid overflow file cannot block other recall.
-      }
-      if (matches.length >= limit) break;
-    }
-    return matches;
-  }
-
-  private excludedSearchSessionIds(args: SearchSessionArgs): Set<string> {
-    const excluded = new Set(args.excludeSessionIds?.filter((sessionId) => sessionId.trim().length > 0) ?? []);
-    if (args.excludeCurrentSession) {
-      const currentSession = this.getCurrentSession({ cwd: args.cwd, repoRoot: args.repoRoot });
-      if (currentSession) excluded.add(currentSession.session_id);
-    }
-    return excluded;
+    return searchStoredOverflow(this.db, this.config.rawLogPath, this.config.overflowDir, args);
   }
 
   getCurrentSession(args: { sessionId?: string; cwd?: string; repoRoot?: string } = {}): SessionSummary | undefined {
-    if (args.sessionId) return this.getSessionSummary(args.sessionId);
-    if (!this.db) {
-      return summarizeSessions(readRawEvents(this.config.rawLogPath)
-        .filter((event) => !args.cwd || event.cwd === args.cwd)
-        .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot))[0];
-    }
-    const row = this.db.prepare(`
-      SELECT *
-      FROM sessions
-      WHERE (?1 IS NULL OR cwd = ?1)
-        AND (?2 IS NULL OR repo_root = ?2)
-      ORDER BY last_seen DESC
-      LIMIT 1
-    `).get(args.cwd ?? null, args.repoRoot ?? null);
-    return row ? rowToSessionSummary(row) : undefined;
-  }
-
-  private resolveSessionIdentifier(identifier: string): string | undefined {
-    const trimmed = identifier.trim();
-    if (trimmed.length === 0) return undefined;
-    const direct = this.getSessionSummary(trimmed);
-    if (direct) return direct.session_id;
-    if (!this.db) {
-      const events = readRawEvents(this.config.rawLogPath);
-      for (let index = events.length - 1; index >= 0; index -= 1) {
-        const event = events[index];
-        if (event.session_id === trimmed || stringField(event.payload.agent_id) === trimmed || stringField(event.payload.agentId) === trimmed) {
-          return event.session_id;
-        }
-      }
-      return undefined;
-    }
-    const row = this.db.prepare(`
-      SELECT session_id
-      FROM events
-      WHERE json_extract(raw_json, '$.payload.agent_id') = ?1
-         OR json_extract(raw_json, '$.payload.agentId') = ?1
-      ORDER BY timestamp DESC, rowid DESC
-      LIMIT 1
-    `).get(trimmed) as { session_id?: string } | undefined;
-    return row?.session_id;
+    return getCurrentStoredSession(this.db, this.config.rawLogPath, args);
   }
 
   getSession(sessionId: string, args: { limit?: number; cursor?: string } = {}): SessionDetail {
-    const session = this.getSessionSummary(sessionId);
     const offset = parseCursor(args.cursor);
     const limit = args.limit === undefined ? undefined : clampLimit(args.limit, 200);
-    if (!this.db) {
-      const allEvents = readRawEvents(this.config.rawLogPath).filter((event) => event.session_id === sessionId);
-      const events = limit === undefined ? allEvents.slice(offset) : allEvents.slice(offset, offset + limit);
-      return {
-        session,
-        events,
-        ...(limit !== undefined && offset + events.length < allEvents.length ? { next_cursor: String(offset + events.length) } : {}),
-      };
-    }
-    const rows = limit === undefined
-      ? this.db.prepare(`
-          SELECT raw_json FROM events
-          WHERE session_id = ?1
-          ORDER BY timestamp ASC, rowid ASC
-        `).all(sessionId)
-      : this.db.prepare(`
-          SELECT raw_json FROM events
-          WHERE session_id = ?1
-          ORDER BY timestamp ASC, rowid ASC
-          LIMIT ?2 OFFSET ?3
-        `).all(sessionId, limit, offset);
-    const events = rows.map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json));
-    const total = session?.event_count ?? events.length;
-    return {
-      session,
-      events,
-      ...(limit !== undefined && offset + events.length < total ? { next_cursor: String(offset + events.length) } : {}),
-    };
+    return getStoredSession(this.db, this.config.rawLogPath, sessionId, limit, offset);
   }
 
   getSessionGraph(sessionId: string, args: { limit?: number } = {}): SessionGraph {
     const limit = clampLimit(args.limit, 200, 1_000);
-    if (!this.db) return buildFallbackGraph(readRawEvents(this.config.rawLogPath).filter((event) => event.session_id === sessionId), limit);
-
-    const summaryBudget = limit >= 20
-      ? Math.min(Math.max(Math.ceil(limit * 0.25), 8), Math.floor(limit / 2))
-      : Math.max(0, Math.floor(limit / 4));
-    const graphNodeLimit = Math.max(1, limit - summaryBudget);
-    const nodes = this.db.prepare(`
-      SELECT node_id, kind, session_id, event_id, turn_id, timestamp, cwd, repo_root, git_branch, label, metadata_json
-      FROM graph_nodes
-      WHERE session_id = ?1
-      ORDER BY timestamp ASC,
-        CASE kind WHEN 'session' THEN 0 WHEN 'turn' THEN 1 WHEN 'checkpoint' THEN 2 ELSE 3 END,
-        node_id ASC
-      LIMIT ?2
-    `).all(sessionId, graphNodeLimit).map(rowToGraphNode);
-    const remainingNodeBudget = Math.max(0, limit - nodes.length);
-    const rawSummaryNodes = remainingNodeBudget > 0
-      ? this.getSummaryNodesForGraph(sessionId, remainingNodeBudget)
-      : [];
-    const summaryNodes = rawSummaryNodes.map(summaryNodeToGraphNode);
-    nodes.push(...summaryNodes);
-    if (nodes.length === 0) return { session_id: sessionId, nodes: [], edges: [] };
-
-    const nodeIds = new Set(nodes.map((node) => node.node_id));
-    const nodeIdList = [...nodeIds];
-    const placeholders = nodeIdList.map((_, index) => `?${index + 2}`).join(", ");
-    const edges = this.db.prepare(`
-      SELECT from_node_id, to_node_id, kind, session_id, position, created_at, metadata_json
-      FROM graph_edges
-      WHERE session_id = ?1
-        AND from_node_id IN (${placeholders})
-        AND to_node_id IN (${placeholders})
-      ORDER BY position ASC, created_at ASC, kind ASC
-      `).all(sessionId, ...nodeIdList)
-      .map(rowToGraphEdge)
-      .filter((edge) => nodeIds.has(edge.from_node_id) && nodeIds.has(edge.to_node_id));
-    const edgeKeys = new Set(edges.map((edge) => graphEdgeKey(edge)));
-    for (const edge of rawSummaryNodes.flatMap((node) => summaryGraphEdges(node, nodeIds))) {
-      const key = graphEdgeKey(edge);
-      if (edgeKeys.has(key)) continue;
-      edgeKeys.add(key);
-      edges.push(edge);
-    }
-    return { session_id: sessionId, nodes, edges };
-  }
-
-  private getLatestCheckpoint(sessionId: string): GraphNode | undefined {
-    if (!this.db) return undefined;
-    const row = this.db.prepare(`
-      SELECT node_id, kind, session_id, event_id, turn_id, timestamp, cwd, repo_root, git_branch, label, metadata_json
-      FROM graph_nodes
-      WHERE session_id = ?1 AND kind = 'checkpoint'
-      ORDER BY timestamp DESC, node_id DESC
-      LIMIT 1
-    `).get(sessionId);
-    return row ? rowToGraphNode(row) : undefined;
+    return getStoredSessionGraph(this.db, this.config.rawLogPath, sessionId, limit);
   }
 
   getRecentContext(args: { sessionId?: string; cwd?: string; repoRoot?: string; limit?: number } = {}): RecentContext {
-    const session = this.getCurrentSession({
-      sessionId: args.sessionId,
-      cwd: args.cwd,
-      repoRoot: args.repoRoot,
-    });
-    if (!session) return { events: [] };
-    const limit = clampLimit(args.limit, 20);
-    if (!this.db) {
-      const events = readRawEvents(this.config.rawLogPath)
-        .filter((event) => event.session_id === session.session_id)
-        .slice(-limit);
-      return { session_id: session.session_id, events };
-    }
-    const rows = this.db.prepare(`
-      SELECT raw_json FROM (
-        SELECT raw_json, timestamp, rowid
-        FROM events
-        WHERE session_id = ?1
-        ORDER BY timestamp DESC, rowid DESC
-        LIMIT ?2
-      )
-      ORDER BY timestamp ASC, rowid ASC
-    `).all(session.session_id, limit);
-    return {
-      session_id: session.session_id,
-      events: rows.map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json)),
-    };
+    return readRecentContext(this.db, this.config.rawLogPath, args);
   }
 
   getContextPlan(args: {
@@ -1469,68 +515,19 @@ export class LcmStorage {
     autoCompactTokenLimit?: number;
     recentEventLimit?: number;
   } = {}): ContextPlan {
-    const modelContextWindow = positiveInteger(args.modelContextWindow, DEFAULT_MODEL_CONTEXT_WINDOW);
-    const autoCompactTokenLimit = Math.min(
-      positiveInteger(args.autoCompactTokenLimit, DEFAULT_AUTO_COMPACT_TOKEN_LIMIT),
-      modelContextWindow,
-    );
-    const recentEventLimit = clampLimit(args.recentEventLimit, DEFAULT_CONTEXT_PLAN_RECENT_EVENT_LIMIT, 500);
     try {
-      return this.buildContextPlanForArgs(args, modelContextWindow, autoCompactTokenLimit, recentEventLimit);
+      return readContextPlan(this.db, this.config.rawLogPath, args);
     } catch (error) {
       this.indexError = error instanceof Error ? error.message : String(error);
       try {
         this.db?.close();
       } catch {
-        // Ignore close errors while degrading to raw JSONL context planning.
+        this.db = undefined;
+        return readContextPlan(this.db, this.config.rawLogPath, args);
       }
       this.db = undefined;
-      return this.buildContextPlanForArgs(args, modelContextWindow, autoCompactTokenLimit, recentEventLimit);
+      return readContextPlan(this.db, this.config.rawLogPath, args);
     }
-  }
-
-  private buildContextPlanForArgs(
-    args: {
-      sessionId?: string;
-      cwd?: string;
-      repoRoot?: string;
-    },
-    modelContextWindow: number,
-    autoCompactTokenLimit: number,
-    recentEventLimit: number,
-  ): ContextPlan {
-    const session = this.getCurrentSession({
-      sessionId: args.sessionId,
-      cwd: args.cwd,
-      repoRoot: args.repoRoot,
-    });
-    if (!session) {
-      return buildContextPlan({
-        modelContextWindow,
-        autoCompactTokenLimit,
-        recentEventLimit,
-        estimatedRecentTokens: 0,
-        estimatedSummaryTokens: 0,
-        summaryNodeCount: 0,
-        latestEventAt: null,
-      });
-    }
-
-    const events = this.getContextPlanEvents(session.session_id, recentEventLimit);
-    const summaryStats = this.getContextPlanSummaryStats(session.session_id);
-    const estimatedRecentTokens = estimateTokenCount(events.map(eventSearchText).join("\n"));
-    const latestEventAt = events[events.length - 1]?.timestamp ?? session.last_seen ?? null;
-
-    return buildContextPlan({
-      session,
-      modelContextWindow,
-      autoCompactTokenLimit,
-      recentEventLimit,
-      estimatedRecentTokens,
-      estimatedSummaryTokens: summaryStats.estimatedSummaryTokens,
-      summaryNodeCount: summaryStats.summaryNodeCount,
-      latestEventAt,
-    });
   }
 
   recordNote(args: { sessionId: string; cwd: string; text: string }): NormalizedEvent {
@@ -1544,73 +541,23 @@ export class LcmStorage {
   }
 
   getSessionMemorySummary(sessionId: string): SessionMemorySummary | undefined {
-    if (!this.db) {
-      const events = readRawEvents(this.config.rawLogPath).filter((event) => event.session_id === sessionId);
-      return events.length > 0 ? buildSessionMemorySummary(events) : undefined;
-    }
-    const row = this.db.prepare(`
-      SELECT session_id, updated_at, cwd, repo_root, git_branch, title, overview, topics_json,
-             key_prompts_json, outcomes_json, tools_json, source_event_ids_json
-      FROM session_summaries
-      WHERE session_id = ?1
-    `).get(sessionId);
-    return row ? rowToSessionMemorySummary(row) : undefined;
+    return readSessionMemorySummary(this.db, this.config.rawLogPath, sessionId);
   }
 
   getSummaryNodesForSession(sessionId: string, limit = 200): SummaryNode[] {
-    if (!this.db) return [];
-    return this.db.prepare(`
-      SELECT node_id, session_id, depth, summary_text, token_count, source_token_count, source_type,
-             source_ids_json, source_event_ids_json, earliest_at, latest_at, created_at,
-             cwd, repo_root, git_branch, topics_json
-      FROM summary_nodes
-      WHERE session_id = ?1
-      ORDER BY depth ASC, earliest_at ASC, node_id ASC
-      LIMIT ?2
-    `).all(sessionId, clampLimit(limit, 200, 2_000)).map(rowToSummaryNode);
+    return readSummaryNodesForSession(this.db, sessionId, limit);
   }
 
   getFileRefsForSession(sessionId: string, limit = 50): FileReference[] {
-    if (!this.db) return [];
-    return this.db.prepare(`
-      SELECT file_ref_id, session_id, observed_event_id, timestamp, path, mime_type,
-             byte_count, sha256, exploration_summary, metadata_json
-      FROM file_refs
-      WHERE session_id = ?1
-      ORDER BY timestamp ASC, file_ref_id ASC
-      LIMIT ?2
-    `).all(sessionId, clampLimit(limit, 50, 500)).map(rowToFileReference);
+    return readFileRefsForSession(this.db, sessionId, limit);
   }
 
   getFileRef(fileRefId: string): FileReference | undefined {
-    if (!this.db) return undefined;
-    const row = this.db.prepare(`
-      SELECT file_ref_id, session_id, observed_event_id, timestamp, path, mime_type,
-             byte_count, sha256, exploration_summary, metadata_json
-      FROM file_refs
-      WHERE file_ref_id = ?1
-    `).get(fileRefId);
-    return row ? rowToFileReference(row) : undefined;
+    return readFileRef(this.db, fileRefId);
   }
 
   getOverflowRef(fileRefId: string): OverflowReference | undefined {
-    if (!fileRefId.startsWith("overflow:")) return undefined;
-    const hash = fileRefId.slice("overflow:".length);
-    if (!/^[a-f0-9]{64}$/u.test(hash)) return undefined;
-    if (!this.db) {
-      return readRawEvents(this.config.rawLogPath)
-        .map(overflowReferenceFromEvent)
-        .find((reference) => reference?.sha256 === hash);
-    }
-    const row = this.db.prepare(`
-      SELECT raw_json
-      FROM events
-      WHERE json_extract(raw_json, '$.payload.overflow_ref.sha256') = ?1
-      ORDER BY timestamp DESC, rowid DESC
-      LIMIT 1
-    `).get(hash) as { raw_json?: string } | undefined;
-    if (!row?.raw_json) return undefined;
-    return overflowReferenceFromEvent(decodePersistedEvent(row.raw_json));
+    return readOverflowRef(this.db, this.config.rawLogPath, fileRefId);
   }
 
   describeMemory(args: {
@@ -1621,74 +568,11 @@ export class LcmStorage {
     offset?: number;
     maxBytes?: number;
   }): LcmDescription {
-    if (args.fileId) {
-      if (args.fileId.startsWith("overflow:")) {
-        const reference = this.getOverflowRef(args.fileId);
-        if (!reference) throw new Error(`Overflow reference not found: ${args.fileId}`);
-        return {
-          target: "overflow_ref",
-          overflow_ref: readOverflowContent({
-            overflowDir: this.config.overflowDir,
-            reference,
-            offset: args.offset,
-            maxBytes: args.maxBytes,
-          }),
-        };
-      }
-      const fileRef = this.getFileRef(args.fileId);
-      if (!fileRef) throw new Error(`File reference not found: ${args.fileId}`);
-      return {
-        target: "file_ref",
-        file_ref: fileRef,
-      };
-    }
-
-    if (args.nodeId) {
-      const node = this.getSummaryNode(args.nodeId);
-      if (!node) throw new Error(`Summary node not found: ${args.nodeId}`);
-      return {
-        target: "summary_node",
-        node,
-        source_nodes: this.getSourceSummaryNodes(node, args.limit),
-        source_event_count: node.source_event_ids.length,
-      };
-    }
-
-    if (!args.sessionId) throw new Error("sessionId or nodeId is required.");
-    const session = this.getSessionSummary(args.sessionId);
-    const summary = this.getSessionMemorySummary(args.sessionId);
-    const summaryNodes = this.getSummaryNodesForSession(args.sessionId, clampLimit(args.limit, 50, 500));
-    if (!session && !summary && summaryNodes.length === 0) {
-      throw new Error(`Session not found: ${args.sessionId}`);
-    }
-    return {
-      target: "session",
-      session,
-      summary,
-      summary_nodes: summaryNodes,
-      file_refs: this.getFileRefsForSession(args.sessionId, clampLimit(args.limit, 50, 500)),
-    };
+    return describeStoredMemory(this.db, this.config.rawLogPath, this.config.overflowDir, args);
   }
 
   expandMemory(args: { nodeId: string; query?: string; limit?: number }): LcmExpansion {
-    const node = this.getSummaryNode(args.nodeId);
-    if (!node) throw new Error(`Summary node not found: ${args.nodeId}`);
-    const sourceNodes = this.getSourceSummaryNodes(node, args.limit);
-    const sourceEvents = this.getSummaryNodeSourceEvents(node, args.query, args.limit);
-    const markdown = [
-      summaryNodeToMarkdown(node),
-      summaryNodeExpansionToMarkdown({
-        sourceNodes,
-        sourceEvents,
-      }),
-    ].filter(Boolean).join("\n");
-    return {
-      target: "summary_node",
-      node,
-      source_nodes: sourceNodes,
-      source_events: sourceEvents,
-      markdown,
-    };
+    return expandStoredMemory(this.db, args);
   }
 
   expandQuery(args: {
@@ -1701,1347 +585,35 @@ export class LcmStorage {
     sourceLimit?: number;
     overview?: boolean;
   }): LcmQueryExpansion {
-    const query = args.query.trim();
-    if (query.length === 0) throw new Error("query must be a non-empty string.");
-    const budgetTokens = Math.max(32, args.budgetTokens ?? 2000);
-    const budgetChars = budgetTokens * 4;
-    const candidateLimit = clampLimit(args.limit, 4, 12);
-    const searchLimit = args.overview ? Math.max(candidateLimit * 4, 24) : candidateLimit;
-    const sourceLimit = clampLimit(args.sourceLimit, 6, 24);
-    const maxNodes = Math.max(candidateLimit * 12, 24);
-
-    let candidates = this.searchSummaryNodes({
-      query,
-      cwd: args.cwd,
-      repoRoot: args.repoRoot,
-      sessionIds: args.sessionIds,
-      limit: searchLimit,
-    });
-    if (candidates.length === 0 && args.cwd && !args.sessionIds?.length) {
-      candidates = this.searchSummaryNodes({
-        query,
-        repoRoot: args.repoRoot,
-        limit: searchLimit,
-      });
-    }
-    if (candidates.length === 0 && !args.sessionIds?.length) {
-      const sessions = this.searchSessions({
-        query,
-        cwd: args.cwd,
-        repoRoot: args.repoRoot,
-        limit: candidateLimit,
-      });
-      for (const session of sessions) {
-        candidates.push(...this.getTopSummaryNodesForSession(session.session_id, 1));
-      }
-    }
-
-    const nodesById = new Map<string, SummaryNode>();
-    const eventsById = new Map<string, NormalizedEvent>();
-    if (candidates.length === 0 && args.sessionIds?.length) {
-      for (const sessionId of args.sessionIds) {
-        const summary = this.getSessionMemorySummary(sessionId);
-        if (!summary || (args.cwd && summary.cwd !== args.cwd) || (args.repoRoot && summary.repo_root !== args.repoRoot)) continue;
-        if (!matchesQueryText(summarySearchText(summary), query)) continue;
-        candidates.push(...this.getTopSummaryNodesForSession(sessionId, 1));
-        for (const event of this.getSessionSummarySourceEvents(summary, query, sourceLimit)) {
-          eventsById.set(event.event_id, event);
-        }
-      }
-    }
-    const visit = (node: SummaryNode) => {
-      if (nodesById.has(node.node_id) || nodesById.size >= maxNodes) return;
-      nodesById.set(node.node_id, node);
-      for (const event of this.getSummaryNodeSourceEvents(node, query, sourceLimit)) {
-        eventsById.set(event.event_id, event);
-      }
-      if (node.source_type !== "nodes") return;
-      const sourceNodes = rankQueryExpansionNodes(this.getSourceSummaryNodes(node, sourceLimit), query, args.overview === true);
-      for (const sourceNode of sourceNodes) {
-        visit(sourceNode);
-        if (nodesById.size >= maxNodes) break;
-      }
-    };
-    for (const candidate of rankQueryExpansionNodes(candidates, query, args.overview === true).slice(0, candidateLimit)) visit(candidate);
-
-    const nodes = rankQueryExpansionNodes([...nodesById.values()], query, args.overview === true);
-    const events = [...eventsById.values()].sort((a, b) =>
-      queryTermHitCount(eventSignalText(b), query) - queryTermHitCount(eventSignalText(a), query) ||
-      a.timestamp.localeCompare(b.timestamp) ||
-      a.event_id.localeCompare(b.event_id));
-    const sources: QueryExpansionSource[] = [
-      ...nodes.map((node) => ({
-        kind: "summary" as const,
-        session_id: node.session_id,
-        node_id: node.node_id,
-        timestamp: node.latest_at,
-        depth: node.depth,
-      })),
-      ...events.map((event) => ({
-        kind: "event" as const,
-        session_id: event.session_id,
-        event_id: event.event_id,
-        timestamp: event.timestamp,
-        hook_event: event.hook_event,
-      })),
-    ];
-
-    const lines = [
-      "# Codex LCM Recursive Evidence",
-      "",
-      `query: ${query}`,
-      "",
-    ];
-    let chars = lines.join("\n").length;
-    let truncated = false;
-    const addBlock = (text: string): boolean => {
-      if (chars + text.length > budgetChars) {
-        truncated = true;
-        return false;
-      }
-      lines.push(text);
-      chars += text.length;
-      return true;
-    };
-    const addFocusedEventFallback = (event: NormalizedEvent): void => {
-      let prefix = [
-        "### Focused Source Events",
-        `- ${event.timestamp} ${event.hook_event} ${event.event_id.slice(0, 12)}:`,
-        `  ${HISTORICAL_SOURCE_TEXT_NOTICE}`,
-        "",
-      ].join("\n");
-      const suffix = "\n";
-      let available = budgetChars - chars - prefix.length - suffix.length;
-      if (available <= 0) {
-        prefix = "### Focused Source Events\n- ";
-        available = budgetChars - chars - prefix.length - suffix.length;
-      }
-      if (available <= 0) {
-        lines.push("Budget too small to include evidence.\n");
-        chars += "Budget too small to include evidence.\n".length;
-        truncated = true;
-        return;
-      }
-      const signal = quoteHistoricalText(focusedExcerpt(eventSignalText(event), query, Math.max(0, available - 4)), "  ");
-      lines.push(`${prefix}${signal}${suffix}`);
-      chars += prefix.length + signal.length + suffix.length;
-      truncated = true;
-    };
-
-    if (events.length > 0) {
-      const eventLines = ["### Focused Source Events"];
-      for (const event of events.slice(0, sourceLimit)) {
-        const signal = eventSignalText(event);
-        if (signal.length === 0) continue;
-        eventLines.push(`- ${event.timestamp} ${event.hook_event} ${event.event_id.slice(0, 12)}:`);
-        eventLines.push(`  ${HISTORICAL_SOURCE_TEXT_NOTICE}`);
-        eventLines.push(quoteHistoricalText(signal, "  "));
-      }
-      eventLines.push("");
-      if (!addBlock(eventLines.join("\n"))) addFocusedEventFallback(events[0]);
-    }
-
-    if (nodes.length === 0 && events.length === 0) {
-      addBlock("No matching evidence found.\n");
-    }
-
-    for (const node of nodes) {
-      if (!addBlock(summaryNodeToMarkdown(node))) {
-        const compact = [
-          `## Summary Node d${node.depth}`,
-          `node: ${node.node_id}`,
-          `session: ${node.session_id}`,
-          `Focus: ${summaryNodeTitle(node)}`,
-          "",
-        ].join("\n");
-        addBlock(compact);
-      }
-    }
-
-    const markdown = lines.join("\n");
-
-    return {
-      query,
-      markdown,
-      estimated_tokens: estimateTokenCount(markdown),
-      truncated,
-      nodes,
-      events,
-      sources,
-    };
-  }
-
-  private getTopSummaryNodesForSession(sessionId: string, limit = 3): SummaryNode[] {
-    if (!this.db) return [];
-    return this.db.prepare(`
-      SELECT node_id, session_id, depth, summary_text, token_count, source_token_count, source_type,
-             source_ids_json, source_event_ids_json, earliest_at, latest_at, created_at,
-             cwd, repo_root, git_branch, topics_json
-      FROM summary_nodes
-      WHERE session_id = ?1
-        AND depth = (SELECT MAX(depth) FROM summary_nodes WHERE session_id = ?1)
-      ORDER BY latest_at DESC
-      LIMIT ?2
-    `).all(sessionId, clampLimit(limit, 3, 20)).map(rowToSummaryNode);
-  }
-
-  private getSummaryNodesForGraph(sessionId: string, limit = 50): SummaryNode[] {
-    const cappedLimit = clampLimit(limit, 50, 500);
-    const nodes = this.getSummaryNodesForSession(sessionId, 2_000);
-    const byId = new Map(nodes.map((node) => [node.node_id, node]));
-    const selected = new Map<string, SummaryNode>();
-
-    const addWithLineage = (node: SummaryNode) => {
-      if (selected.has(node.node_id) || selected.size >= cappedLimit) return;
-      selected.set(node.node_id, node);
-      if (node.source_type !== "nodes") return;
-      for (const sourceId of node.source_ids) {
-        const sourceNode = byId.get(sourceId);
-        if (!sourceNode) continue;
-        addWithLineage(sourceNode);
-        if (selected.size >= cappedLimit) break;
-      }
-    };
-
-    const roots = [...nodes].sort((a, b) =>
-      b.depth - a.depth ||
-      b.latest_at.localeCompare(a.latest_at) ||
-      a.earliest_at.localeCompare(b.earliest_at) ||
-      a.node_id.localeCompare(b.node_id));
-    for (const node of roots) {
-      addWithLineage(node);
-      if (selected.size >= cappedLimit) break;
-    }
-
-    return [...selected.values()].sort((a, b) =>
-      a.depth - b.depth ||
-      a.earliest_at.localeCompare(b.earliest_at) ||
-      a.node_id.localeCompare(b.node_id));
-  }
-
-  private searchSummaryNodes(args: SummaryNodeSearchArgs): SummaryNode[] {
-    const limit = clampLimit(args.limit, 10);
-    if (!this.db) return [];
-    const query = args.query?.trim() ?? "";
-    const sessionFilter = args.sessionIds?.length ? new Set(args.sessionIds) : undefined;
-    if (query.length === 0) {
-      const rows = this.db.prepare(`
-        SELECT node_id, session_id, depth, summary_text, token_count, source_token_count, source_type,
-               source_ids_json, source_event_ids_json, earliest_at, latest_at, created_at,
-               cwd, repo_root, git_branch, topics_json
-        FROM summary_nodes
-        WHERE (?1 IS NULL OR cwd = ?1)
-          AND (?2 IS NULL OR repo_root = ?2)
-        ORDER BY depth DESC, latest_at DESC
-        LIMIT ?3
-      `).all(args.cwd ?? null, args.repoRoot ?? null, Math.max(limit * 4, 20));
-      return rows
-        .map(rowToSummaryNode)
-        .filter((node) => !sessionFilter || sessionFilter.has(node.session_id))
-        .slice(0, limit);
-    }
-
-    let rows: unknown[] = [];
-    const statement = this.db.prepare(`
-      SELECT n.node_id, n.session_id, n.depth, n.summary_text, n.token_count, n.source_token_count,
-             n.source_type, n.source_ids_json, n.source_event_ids_json, n.earliest_at, n.latest_at,
-             n.created_at, n.cwd, n.repo_root, n.git_branch, n.topics_json
-      FROM summary_node_fts f
-      JOIN summary_nodes n ON n.node_id = f.node_id
-      WHERE summary_node_fts MATCH ?1
-        AND (?2 IS NULL OR n.cwd = ?2)
-        AND (?3 IS NULL OR n.repo_root = ?3)
-      ORDER BY bm25(summary_node_fts) ASC, n.depth DESC, n.latest_at DESC
-      LIMIT ?4
-    `);
-    for (const ftsQuery of toFtsQueries(query)) {
-      rows = statement.all(ftsQuery, args.cwd ?? null, args.repoRoot ?? null, Math.max(limit * 10, 50));
-      if (rows.length > 0) break;
-    }
-    const nodes = rows
-      .map(rowToSummaryNode)
-      .filter((node) => !sessionFilter || sessionFilter.has(node.session_id));
-    return rankSummaryNodesForContext(nodes, query).slice(0, limit);
-  }
-
-  private getSummaryNode(nodeId: string): SummaryNode | undefined {
-    if (!this.db) return undefined;
-    const row = this.db.prepare(`
-      SELECT node_id, session_id, depth, summary_text, token_count, source_token_count, source_type,
-             source_ids_json, source_event_ids_json, earliest_at, latest_at, created_at,
-             cwd, repo_root, git_branch, topics_json
-      FROM summary_nodes
-      WHERE node_id = ?1
-    `).get(nodeId);
-    return row ? rowToSummaryNode(row) : undefined;
-  }
-
-  private getSourceSummaryNodes(node: SummaryNode, limit = 4): SummaryNode[] {
-    if (node.source_type !== "nodes") return [];
-    return node.source_ids
-      .flatMap((nodeId) => this.getSummaryNode(nodeId) ?? [])
-      .slice(0, clampLimit(limit, 4, 50));
-  }
-
-  private getSummaryNodeSourceEvents(
-    node: SummaryNode,
-    query = "",
-    limit = SUMMARY_NODE_SOURCE_EVENT_LIMIT,
-  ): NormalizedEvent[] {
-    if (!this.db) return [];
-    const sourceEventIds = node.source_type === "events"
-      ? node.source_ids
-      : node.source_event_ids;
-    const maxFetch = node.source_type === "events"
-      ? sourceEventIds.length
-      : Math.max(clampLimit(limit, SUMMARY_NODE_SOURCE_EVENT_LIMIT, 20) * 8, 32);
-    const selectedIds = takeHeadTail(sourceEventIds, Math.min(sourceEventIds.length, maxFetch), Math.ceil(maxFetch / 2));
-    if (selectedIds.length === 0) return [];
-    const placeholders = selectedIds.map((_, index) => `?${index + 1}`).join(", ");
-    const rows = this.db.prepare(`
-      SELECT raw_json FROM events
-      WHERE event_id IN (${placeholders})
-      ORDER BY timestamp ASC, rowid ASC
-    `).all(...selectedIds);
-    return rows
-      .map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json))
-      .filter(isSummarySourceEvent)
-      .filter((event) => !isCodexLcmToolEvent(event))
-      .sort((a, b) =>
-        queryTermHitCount(eventSignalText(b), query) - queryTermHitCount(eventSignalText(a), query) ||
-        a.timestamp.localeCompare(b.timestamp) ||
-        a.event_id.localeCompare(b.event_id))
-      .slice(0, clampLimit(limit, SUMMARY_NODE_SOURCE_EVENT_LIMIT, 20));
-  }
-
-  private getSessionSummarySourceEvents(
-    summary: SessionMemorySummary,
-    query: string,
-    limit: number,
-  ): NormalizedEvent[] {
-    if (!this.db || summary.source_event_ids.length === 0) return [];
-    const placeholders = summary.source_event_ids.map((_, index) => `?${index + 1}`).join(", ");
-    const events = (this.db.prepare(`
-      SELECT raw_json
-      FROM events
-      WHERE event_id IN (${placeholders})
-      ORDER BY timestamp ASC, rowid ASC
-    `).all(...summary.source_event_ids) as Array<{ raw_json: string }>)
-      .map((row) => decodePersistedEvent(row.raw_json))
-      .filter(isSummarySourceEvent)
-      .filter((event) => !isCodexLcmToolEvent(event));
-    const matching = events.filter((event) => matchesQueryText(eventSignalText(event), query));
-    return (matching.length > 0 ? matching : events)
-      .sort((a, b) =>
-        queryTermHitCount(eventSignalText(b), query) - queryTermHitCount(eventSignalText(a), query) ||
-        a.timestamp.localeCompare(b.timestamp) ||
-        a.event_id.localeCompare(b.event_id))
-      .slice(0, clampLimit(limit, SUMMARY_NODE_SOURCE_EVENT_LIMIT, 20));
-  }
-
-  private getContextPlanEvents(sessionId: string, limit: number): NormalizedEvent[] {
-    if (!this.db) {
-      return readRawEvents(this.config.rawLogPath)
-        .filter((event) => event.session_id === sessionId)
-        .slice(-limit);
-    }
-    const rows = this.db.prepare(`
-      SELECT raw_json FROM (
-        SELECT raw_json, timestamp, rowid
-        FROM events
-        WHERE session_id = ?1
-        ORDER BY timestamp DESC, rowid DESC
-        LIMIT ?2
-      )
-      ORDER BY timestamp ASC, rowid ASC
-    `).all(sessionId, limit);
-    return rows.map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json));
-  }
-
-  private getContextPlanSummaryStats(sessionId: string): { summaryNodeCount: number; estimatedSummaryTokens: number } {
-    if (!this.db) return { summaryNodeCount: 0, estimatedSummaryTokens: 0 };
-    const row = this.db.prepare(`
-      SELECT COUNT(*) AS summary_node_count, COALESCE(SUM(token_count), 0) AS estimated_summary_tokens
-      FROM summary_nodes
-      WHERE session_id = ?1
-    `).get(sessionId) as { summary_node_count?: number; estimated_summary_tokens?: number } | undefined;
-    return {
-      summaryNodeCount: Number(row?.summary_node_count ?? 0),
-      estimatedSummaryTokens: Number(row?.estimated_summary_tokens ?? 0),
-    };
+    return expandStoredQuery(this.db, this.config.rawLogPath, args);
   }
 
   packContext(args: PackContextArgs = {}): PackedContext {
-    const budgetTokens = Math.max(16, args.budgetTokens ?? 1200);
-    const budgetChars = budgetTokens * 4;
-    const summaryCandidates = new Map<string, SessionMemorySummary>();
-    const checkpointCandidates = new Map<string, GraphNode>();
-    const summaryNodeCandidates = new Map<string, SummaryNode>();
-    const query = args.query?.trim() ?? "";
-    const candidateSessionIds = new Set(args.sessionIds ?? []);
-    const explicitSessionIds = args.sessionIds ?? [];
-    const currentThreadId = !explicitSessionIds.length ? args.currentThreadId?.trim() : undefined;
-    const currentSessionId = currentThreadId ? this.resolveSessionIdentifier(currentThreadId) : undefined;
-    const queryTermCount = query.length > 0 ? queryTermHitCount(query, query) : 0;
-
-    const addSummaryNode = (node: SummaryNode) => {
-      if (query.length > 0 && queryTermHitCount(summaryNodeSearchText(node), query) === 0) return;
-      summaryNodeCandidates.set(node.node_id, node);
-      candidateSessionIds.add(node.session_id);
-    };
-
-    const addRankedSessionNodes = (sessionId: string, limit: number): number => {
-      const nodes = query.length > 0
-        ? rankSummaryNodesForContext(this.getSummaryNodesForSession(sessionId, 2_000), query)
-          .filter((node) => queryTermHitCount(summaryNodeSearchText(node), query) > 0)
-          .slice(0, limit)
-        : this.getTopSummaryNodesForSession(sessionId, limit);
-      for (const node of nodes) addSummaryNode(node);
-      return nodes.length;
-    };
-
-    const addSessionIfSummaryMatches = (sessionId: string): void => {
-      if (query.length === 0) {
-        candidateSessionIds.add(sessionId);
-        return;
-      }
-      const summary = this.getSessionMemorySummary(sessionId);
-      if (summary && queryTermHitCount(summarySearchText(summary), query) > 0) {
-        candidateSessionIds.add(sessionId);
-      }
-    };
-
-    if (currentSessionId) {
-      const added = addRankedSessionNodes(currentSessionId, 3);
-      if (added === 0) addSessionIfSummaryMatches(currentSessionId);
-    }
-
-    if (query.length > 0) {
-      let nodes = this.searchSummaryNodes({
-        query,
-        cwd: args.cwd,
-        sessionIds: explicitSessionIds,
-        limit: SUMMARY_NODE_PACK_LIMIT,
-      });
-      if (nodes.length === 0 && args.cwd && !explicitSessionIds.length) {
-        nodes = this.searchSummaryNodes({ query, limit: SUMMARY_NODE_PACK_LIMIT });
-      }
-      for (const node of nodes) addSummaryNode(node);
-
-      const bestSummaryHitCount = [...summaryNodeCandidates.values()].reduce(
-        (max, node) => Math.max(max, queryTermHitCount(summaryNodeSearchText(node), query)),
-        0,
-      );
-      const hasWeakScopedMatches = args.cwd && !explicitSessionIds.length && queryTermCount >= 4 && bestSummaryHitCount <= 1;
-      if (hasWeakScopedMatches) {
-        const sessions = this.searchSessions({ query, limit: 8 });
-        for (const session of sessions) {
-          addSessionIfSummaryMatches(session.session_id);
-          addRankedSessionNodes(session.session_id, 2);
-        }
-      }
-
-      if (summaryNodeCandidates.size === 0 && !explicitSessionIds.length) {
-        let sessions = this.searchSessions({ query, cwd: args.cwd, limit: 8 });
-        if (sessions.length === 0 && args.cwd) {
-          sessions = this.searchSessions({ query, limit: 8 });
-        }
-        for (const session of sessions) {
-          candidateSessionIds.add(session.session_id);
-          addRankedSessionNodes(session.session_id, 2);
-        }
-      }
-    } else {
-      if (candidateSessionIds.size === 0) {
-        const session = this.getCurrentSession({ cwd: args.cwd });
-        if (session) candidateSessionIds.add(session.session_id);
-      }
-      for (const sessionId of candidateSessionIds) {
-        for (const node of this.getTopSummaryNodesForSession(sessionId, 3)) addSummaryNode(node);
-      }
-    }
-
-    if (candidateSessionIds.size === 0) {
-      let sessions = this.searchSessions({ query: args.query, cwd: args.cwd, limit: 8 });
-      if (sessions.length === 0 && query.length > 0 && args.cwd && !explicitSessionIds.length) {
-        sessions = this.searchSessions({ query: args.query, limit: 8 });
-      }
-      for (const session of sessions) candidateSessionIds.add(session.session_id);
-    }
-
-    for (const sessionId of candidateSessionIds) {
-      const summary = this.getSessionMemorySummary(sessionId);
-      if (summary) summaryCandidates.set(sessionId, summary);
-      const checkpoint = this.getLatestCheckpoint(sessionId);
-      if (checkpoint) checkpointCandidates.set(checkpoint.node_id, checkpoint);
-    }
-
-    const lines = ["# Codex LCM Context", ""];
-    const sources: PackedContext["sources"] = [];
-    let chars = lines.join("\n").length;
-
-    const summaryItems = [...summaryCandidates.values()]
-      .sort((a, b) =>
-        queryTermHitCount(summarySearchText(b), query) - queryTermHitCount(summarySearchText(a), query) ||
-        b.updated_at.localeCompare(a.updated_at))
-      .map((summary) => ({ summary, text: sessionSummaryToMarkdown(summary) }));
-    const checkpointItems = [...checkpointCandidates.values()]
-      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-      .map((checkpoint) => ({ checkpoint, text: checkpointToMarkdown(checkpoint) }));
-    const summaryNodeItems = rankSummaryNodesForContext([...summaryNodeCandidates.values()], query)
-      .map((node) => {
-        const sourceNodes = node.source_type === "nodes"
-          ? node.source_ids.flatMap((nodeId) => this.getSummaryNode(nodeId) ?? []).slice(0, 4)
-          : [];
-        const sourceEvents = this.getSummaryNodeSourceEvents(node, query);
-        const text = [
-          summaryNodeToMarkdown(node),
-          summaryNodeExpansionToMarkdown({
-            sourceNodes,
-            sourceEvents,
-          }),
-        ].filter(Boolean).join("\n");
-        const compactText = summaryNodeToCompactMarkdown(node, { sourceEvents, query });
-        return { node, sourceEvents, text, compactText };
-      });
-    const addCheckpointItems = () => {
-      for (const { checkpoint, text } of checkpointItems) {
-        if (chars + text.length > budgetChars) continue;
-        lines.push(text);
-        chars += text.length;
-        sources.push({
-          kind: "checkpoint",
-          session_id: checkpoint.session_id,
-          node_id: checkpoint.node_id,
-          timestamp: checkpoint.timestamp,
-        });
-      }
-    };
-
-    const addSummaryItems = () => {
-      if (query.length > 0 && budgetTokens < 250) return;
-      if (query.length > 0 && summaryNodeItems.length > 0 && budgetTokens < 350) return;
-      if (query.length > 0 && summaryItems.length > 1 && budgetTokens < 700) return;
-      for (const { summary, text } of summaryItems) {
-        if (chars + text.length > budgetChars) continue;
-        lines.push(text);
-        chars += text.length;
-        sources.push({
-          kind: "summary",
-          session_id: summary.session_id,
-          event_id: summary.source_event_ids[0],
-          timestamp: summary.updated_at,
-        });
-      }
-    };
-
-    const addSummaryNodeItems = () => {
-      for (const { node, sourceEvents, text, compactText } of summaryNodeItems) {
-        const remainingChars = budgetChars - chars;
-        if (remainingChars <= 80) continue;
-        const candidateText = text.length <= remainingChars ? text : compactText;
-        const outputText = candidateText.length > remainingChars
-          ? `${candidateText.slice(0, Math.max(0, remainingChars - 18)).trimEnd()}\n...(truncated)\n`
-          : candidateText;
-        lines.push(outputText);
-        chars += outputText.length;
-        sources.push({
-          kind: "summary",
-          session_id: node.session_id,
-          node_id: node.node_id,
-          event_id: node.source_event_ids[0],
-          timestamp: node.latest_at,
-        });
-        const note = sourceEvents.find((event) => event.hook_event === "Note");
-        if (note) {
-          sources.push({
-            kind: "note",
-            session_id: note.session_id,
-            event_id: note.event_id,
-            timestamp: note.timestamp,
-          });
-        }
-      }
-    };
-
-    addSummaryNodeItems();
-    addSummaryItems();
-    addCheckpointItems();
-
-    return {
-      markdown: lines.join("\n"),
-      estimated_tokens: Math.ceil(chars / 4),
-      sources,
-    };
+    return packStoredContext(this.db, this.config.rawLogPath, args);
   }
 
   private initialize(): void {
-    if (!this.db) return;
-    const { backfillSessionMetadata } = initializeStorageSchema(this.db);
-    if (backfillSessionMetadata) this.backfillExistingSessionMetadata();
+    if (this.db) initializeIndex(this.db);
   }
 
   private indexEventInTransaction(event: NormalizedEvent, options: { rebuildSummary: boolean }): IndexEventResult {
-    if (!this.db) return { inserted: false, summaryTouched: false };
-    const raw = JSON.stringify(event);
-    const metadata = extractEventMetadata(event);
-    const sessionMetadata = extractSessionMetadata(event);
-    const insert = this.db.prepare(`
-      INSERT OR IGNORE INTO events
-        (event_id, session_id, timestamp, hook_event, cwd, repo_root, git_branch, turn_id, tool_use_id, text, raw_json)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-    `).run(
-      event.event_id,
-      event.session_id,
-      event.timestamp,
-      event.hook_event,
-      event.cwd,
-      event.repo_root ?? null,
-      event.git_branch ?? null,
-      metadata.turn_id ?? null,
-      metadata.tool_use_id ?? null,
-      "",
-      raw,
-    );
-    if ((insert as { changes?: number }).changes === 0) {
-      return { inserted: false, summaryTouched: false };
-    }
-    this.db.prepare(`
-      INSERT INTO sessions
-        (session_id, first_seen, last_seen, cwd, repo_root, git_branch, event_count,
-         parent_session_id, agent_role, agent_nickname, model, reasoning_effort,
-         total_input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens)
-      VALUES (?1, ?2, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-      ON CONFLICT(session_id) DO UPDATE SET
-        first_seen = CASE WHEN excluded.first_seen < sessions.first_seen THEN excluded.first_seen ELSE sessions.first_seen END,
-        last_seen = CASE WHEN excluded.last_seen > sessions.last_seen THEN excluded.last_seen ELSE sessions.last_seen END,
-        cwd = excluded.cwd,
-        repo_root = COALESCE(excluded.repo_root, sessions.repo_root),
-        git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
-        parent_session_id = COALESCE(excluded.parent_session_id, sessions.parent_session_id),
-        agent_role = COALESCE(excluded.agent_role, sessions.agent_role),
-        agent_nickname = COALESCE(excluded.agent_nickname, sessions.agent_nickname),
-        model = COALESCE(excluded.model, sessions.model),
-        reasoning_effort = COALESCE(excluded.reasoning_effort, sessions.reasoning_effort),
-        total_input_tokens = ${maxNullable("sessions.total_input_tokens", "excluded.total_input_tokens")},
-        cached_input_tokens = ${maxNullable("sessions.cached_input_tokens", "excluded.cached_input_tokens")},
-        output_tokens = ${maxNullable("sessions.output_tokens", "excluded.output_tokens")},
-        reasoning_output_tokens = ${maxNullable("sessions.reasoning_output_tokens", "excluded.reasoning_output_tokens")},
-        total_tokens = ${maxNullable("sessions.total_tokens", "excluded.total_tokens")},
-        event_count = sessions.event_count + 1
-    `).run(
-      event.session_id,
-      event.timestamp,
-      event.cwd,
-      event.repo_root ?? null,
-      event.git_branch ?? null,
-      sessionMetadata.parent_session_id ?? null,
-      sessionMetadata.agent_role ?? null,
-      sessionMetadata.agent_nickname ?? null,
-      sessionMetadata.model ?? null,
-      sessionMetadata.reasoning_effort ?? null,
-      sessionMetadata.total_input_tokens ?? null,
-      sessionMetadata.cached_input_tokens ?? null,
-      sessionMetadata.output_tokens ?? null,
-      sessionMetadata.reasoning_output_tokens ?? null,
-      sessionMetadata.total_tokens ?? null,
-    );
-    if (isSearchIndexEvent(event) && !isCodexLcmToolEvent(event)) {
-      this.db.prepare(`
-        INSERT INTO event_fts (event_id, session_id, cwd, repo_root, hook_event, content)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-      `).run(
-        event.event_id,
-        event.session_id,
-        event.cwd,
-        event.repo_root ?? "",
-        event.hook_event,
-        eventSearchText(event),
-      );
-    }
-    const eventCount = Number(this.db.prepare("SELECT event_count FROM sessions WHERE session_id = ?1").get(event.session_id)?.event_count ?? 1);
-    const currentRow = this.db.prepare("SELECT rowid FROM events WHERE event_id = ?1").get(event.event_id) as { rowid?: number } | undefined;
-    this.indexGraphForEvent(event, eventCount, Number(currentRow?.rowid ?? 0));
-    this.indexFileRefsForEvent(event);
-    const summaryTouched = isSummarySourceEvent(event);
-    if (summaryTouched && options.rebuildSummary && this.shouldRebuildSessionMemorySummary(event)) {
-      this.rebuildSessionMemorySummary(event.session_id);
-    }
-    return { inserted: true, summaryTouched };
-  }
-
-  private indexGraphForEvent(event: NormalizedEvent, eventCount: number, currentRowId = 0): void {
-    if (!this.db) return;
-    const metadata = extractEventMetadata(event);
-    const sessionNode = sessionNodeId(event.session_id);
-    this.insertGraphNode({
-      node_id: sessionNode,
-      kind: "session",
-      session_id: event.session_id,
-      timestamp: event.timestamp,
-      cwd: event.cwd,
-      repo_root: event.repo_root,
-      git_branch: event.git_branch,
-      label: `Session ${event.session_id}`,
-      metadata: { event_count: eventCount },
-    });
-
-    const eventNode = eventNodeId(event.event_id);
-    this.insertGraphNode({
-      node_id: eventNode,
-      kind: "event",
-      session_id: event.session_id,
-      event_id: event.event_id,
-      turn_id: metadata.turn_id,
-      timestamp: event.timestamp,
-      cwd: event.cwd,
-      repo_root: event.repo_root,
-      git_branch: event.git_branch,
-      label: `${event.hook_event} ${event.timestamp}`,
-      metadata: {
-        hook_event: event.hook_event,
-        tool_name: event.tool_name,
-        turn_id: metadata.turn_id,
-        tool_use_id: metadata.tool_use_id,
-      },
-    });
-
-    if (metadata.turn_id) {
-      const turnNode = turnNodeId(event.session_id, metadata.turn_id);
-      this.insertGraphNode({
-        node_id: turnNode,
-        kind: "turn",
-        session_id: event.session_id,
-        turn_id: metadata.turn_id,
-        timestamp: event.timestamp,
-        cwd: event.cwd,
-        repo_root: event.repo_root,
-        git_branch: event.git_branch,
-        label: `Turn ${metadata.turn_id}`,
-        metadata: { turn_id: metadata.turn_id },
-      });
-      this.insertGraphEdge(sessionNode, turnNode, "contains", event.session_id, eventCount, event.timestamp);
-      this.insertGraphEdge(turnNode, eventNode, "contains", event.session_id, eventCount, event.timestamp);
-    } else {
-      this.insertGraphEdge(sessionNode, eventNode, "contains", event.session_id, eventCount, event.timestamp);
-    }
-
-    const previous = this.db.prepare(`
-      SELECT event_id FROM events
-      WHERE session_id = ?1
-        AND event_id <> ?2
-        AND (?3 <= 0 OR rowid < ?3)
-      ORDER BY timestamp DESC, rowid DESC
-      LIMIT 1
-    `).get(event.session_id, event.event_id, currentRowId) as { event_id?: string } | undefined;
-    if (previous?.event_id) {
-      this.insertGraphEdge(eventNodeId(previous.event_id), eventNode, "next", event.session_id, eventCount, event.timestamp);
-    }
-
-    if (event.hook_event === "PostToolUse" && metadata.tool_use_id) {
-      const preTool = this.db.prepare(`
-        SELECT event_id FROM events
-        WHERE session_id = ?1
-          AND event_id <> ?2
-          AND hook_event = 'PreToolUse'
-          AND tool_use_id = ?3
-          AND (?4 <= 0 OR rowid < ?4)
-        ORDER BY timestamp DESC, rowid DESC
-        LIMIT 1
-      `).get(event.session_id, event.event_id, metadata.tool_use_id, currentRowId) as { event_id?: string } | undefined;
-      if (preTool?.event_id) {
-        this.insertGraphEdge(eventNodeId(preTool.event_id), eventNode, "tool_result", event.session_id, eventCount, event.timestamp, {
-          tool_use_id: metadata.tool_use_id,
-          tool_name: event.tool_name,
-        });
-      }
-    }
-
-    if (event.hook_event === "PreCompact" || eventCount % CHECKPOINT_INTERVAL === 0) {
-      this.insertCheckpoint(event, eventCount);
-    }
-  }
-
-  private indexFileRefsForEvent(event: NormalizedEvent): void {
-    if (!this.db) return;
-    const refs = extractFileReferences(event);
-    for (const ref of refs) {
-      this.db.prepare(`
-        INSERT INTO file_refs
-          (file_ref_id, session_id, observed_event_id, timestamp, path, mime_type,
-           byte_count, sha256, exploration_summary, metadata_json)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-        ON CONFLICT(file_ref_id) DO UPDATE SET
-          session_id = excluded.session_id,
-          observed_event_id = excluded.observed_event_id,
-          timestamp = excluded.timestamp,
-          path = excluded.path,
-          mime_type = excluded.mime_type,
-          byte_count = excluded.byte_count,
-          sha256 = excluded.sha256,
-          exploration_summary = excluded.exploration_summary,
-          metadata_json = excluded.metadata_json
-      `).run(
-        ref.file_ref_id,
-        ref.session_id,
-        ref.observed_event_id,
-        ref.timestamp,
-        ref.path,
-        ref.mime_type,
-        ref.byte_count,
-        ref.sha256,
-        ref.exploration_summary,
-        JSON.stringify(ref.metadata),
-      );
-    }
-  }
-
-  private insertCheckpoint(event: NormalizedEvent, eventCount: number): void {
-    if (!this.db) return;
-    const nodeId = checkpointNodeId(event.session_id, eventCount);
-    const metadata = this.buildCheckpointMetadata(event.session_id, eventCount);
-    this.insertGraphNode({
-      node_id: nodeId,
-      kind: "checkpoint",
-      session_id: event.session_id,
-      timestamp: event.timestamp,
-      cwd: event.cwd,
-      repo_root: event.repo_root,
-      git_branch: event.git_branch,
-      label: `Checkpoint after ${eventCount} events`,
-      metadata,
-    });
-    this.insertGraphEdge(sessionNodeId(event.session_id), nodeId, "checkpoint", event.session_id, eventCount, event.timestamp, {
-      event_count: eventCount,
-      trigger_event_id: event.event_id,
-      trigger_hook_event: event.hook_event,
-    });
-  }
-
-  private buildCheckpointMetadata(sessionId: string, eventCount: number): Record<string, unknown> {
-    if (!this.db) return { event_count: eventCount };
-    const counts = this.db.prepare(`
-      SELECT hook_event, COUNT(*) AS count
-      FROM events
-      WHERE session_id = ?1
-      GROUP BY hook_event
-      ORDER BY hook_event ASC
-    `).all(sessionId).map((row) => ({
-      hook_event: String((row as { hook_event: string }).hook_event),
-      count: Number((row as { count: number }).count),
-    }));
-    const recent = this.db.prepare(`
-      SELECT event_id, timestamp, hook_event
-      FROM events
-      WHERE session_id = ?1
-      ORDER BY timestamp DESC, rowid DESC
-      LIMIT 5
-    `).all(sessionId).map((row) => ({
-      event_id: String((row as { event_id: string }).event_id),
-      timestamp: String((row as { timestamp: string }).timestamp),
-      hook_event: String((row as { hook_event: string }).hook_event),
-    }));
-    return {
-      event_count: eventCount,
-      hook_event_counts: counts,
-      recent_events: recent,
-    };
-  }
-
-  private insertGraphNode(node: GraphNode): void {
-    if (!this.db) return;
-    this.db.prepare(`
-      INSERT INTO graph_nodes
-        (node_id, kind, session_id, event_id, turn_id, timestamp, cwd, repo_root, git_branch, label, metadata_json)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-      ON CONFLICT(node_id) DO UPDATE SET
-        timestamp = CASE WHEN excluded.timestamp < graph_nodes.timestamp THEN excluded.timestamp ELSE graph_nodes.timestamp END,
-        cwd = excluded.cwd,
-        repo_root = COALESCE(excluded.repo_root, graph_nodes.repo_root),
-        git_branch = COALESCE(excluded.git_branch, graph_nodes.git_branch),
-        label = excluded.label,
-        metadata_json = excluded.metadata_json
-    `).run(
-      node.node_id,
-      node.kind,
-      node.session_id,
-      node.event_id ?? null,
-      node.turn_id ?? null,
-      node.timestamp,
-      node.cwd,
-      node.repo_root ?? null,
-      node.git_branch ?? null,
-      node.label,
-      JSON.stringify(node.metadata),
-    );
-  }
-
-  private insertGraphEdge(
-    fromNodeId: string,
-    toNodeId: string,
-    kind: string,
-    sessionId: string,
-    position: number,
-    createdAt: string,
-    metadata: Record<string, unknown> = {},
-  ): void {
-    if (!this.db) return;
-    if (fromNodeId === toNodeId || (!KNOWN_ACYCLIC_EDGE_KINDS.has(kind) && this.wouldCreateCycle(fromNodeId, toNodeId))) {
-      throw new Error(`Refusing to insert graph edge that would create a cycle: ${fromNodeId} -> ${toNodeId}`);
-    }
-    this.db.prepare(`
-      INSERT OR IGNORE INTO graph_edges
-        (from_node_id, to_node_id, kind, session_id, position, created_at, metadata_json)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-    `).run(fromNodeId, toNodeId, kind, sessionId, position, createdAt, JSON.stringify(metadata));
-  }
-
-  private wouldCreateCycle(fromNodeId: string, toNodeId: string): boolean {
-    if (!this.db) return false;
-    if (fromNodeId === toNodeId) return true;
-    const row = this.db.prepare(`
-      WITH RECURSIVE reachable(node_id) AS (
-        SELECT to_node_id FROM graph_edges WHERE from_node_id = ?1
-        UNION
-        SELECT graph_edges.to_node_id
-        FROM graph_edges
-        JOIN reachable ON graph_edges.from_node_id = reachable.node_id
-      )
-      SELECT 1 AS found FROM reachable WHERE node_id = ?2 LIMIT 1
-    `).get(toNodeId, fromNodeId);
-    return row !== undefined;
-  }
-
-  private backfillExistingSessionMetadata(): void {
-    if (!this.db) return;
-    const rows = this.db.prepare("SELECT raw_json FROM events WHERE hook_event = 'SessionStart'").all() as Array<{ raw_json: string }>;
-    const update = this.db.prepare(`
-      UPDATE sessions SET parent_session_id = ?2, agent_role = ?3, agent_nickname = ?4 WHERE session_id = ?1
-    `);
-    for (const row of rows) {
-      const event = decodePersistedEvent(row.raw_json);
-      const metadata = extractSessionMetadata(event);
-      update.run(event.session_id, metadata.parent_session_id ?? null, metadata.agent_role ?? null, metadata.agent_nickname ?? null);
-    }
+    return indexStoredEventInTransaction(this.db, event, options.rebuildSummary);
   }
 
   private backfillDelegationParents(): void {
-    if (!this.db) return;
-    const marker = this.db.prepare("SELECT value FROM index_metadata WHERE key = ?1").get(DELEGATION_PARENT_BACKFILL_KEY) as { value?: string } | undefined;
-    if (marker?.value === "1") return;
-    const rows = this.db.prepare(`
-      SELECT e.raw_json
-      FROM events e
-      JOIN sessions s ON s.session_id = e.session_id
-      WHERE e.hook_event = 'UserPromptSubmit'
-        AND s.parent_session_id IS NULL
-      ORDER BY e.timestamp ASC, e.rowid ASC
-    `).all() as Array<{ raw_json: string }>;
-    const update = this.db.prepare(`
-      UPDATE sessions
-      SET parent_session_id = ?2
-      WHERE session_id = ?1 AND parent_session_id IS NULL
-    `);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const row of rows) {
-        const event = decodePersistedEvent(row.raw_json);
-        const parentId = extractSessionMetadata(event).parent_session_id;
-        if (parentId && parentId !== event.session_id) update.run(event.session_id, parentId);
-      }
-      this.db.prepare(`
-        INSERT INTO index_metadata (key, value)
-        VALUES (?1, '1')
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-      `).run(DELEGATION_PARENT_BACKFILL_KEY);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        // Preserve the original backfill failure.
-      }
-      this.indexError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  private backfillGraph(): void {
-    if (!this.db) return;
-    const rows = this.db.prepare(`
-      SELECT e.rowid AS rowid, e.raw_json
-      FROM events e
-      LEFT JOIN graph_nodes n ON n.event_id = e.event_id
-      WHERE n.node_id IS NULL
-      ORDER BY e.timestamp ASC, e.rowid ASC
-      LIMIT 10000
-    `).all();
-    if (rows.length === 0) return;
-
-    const counts = new Map<string, number>();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const row of rows) {
-        const event = decodePersistedEvent((row as { raw_json: string }).raw_json);
-        const metadata = extractEventMetadata(event);
-        const count = (counts.get(event.session_id) ?? Number(this.db.prepare(`
-          SELECT COUNT(*) AS count FROM graph_nodes WHERE session_id = ?1 AND kind = 'event'
-        `).get(event.session_id)?.count ?? 0)) + 1;
-        counts.set(event.session_id, count);
-        this.db.prepare(`
-          UPDATE events SET turn_id = ?1, tool_use_id = ?2 WHERE event_id = ?3
-        `).run(metadata.turn_id ?? null, metadata.tool_use_id ?? null, event.event_id);
-        this.indexGraphForEvent(event, count, Number((row as { rowid: number }).rowid));
-      }
-      for (const sessionId of counts.keys()) this.rebuildSessionMemorySummary(sessionId);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        // Ignore rollback failures; the original backfill error is more useful.
-      }
-      this.indexError = error instanceof Error ? error.message : String(error);
-    }
+    this.indexError = runDelegationParentBackfill(this.db) ?? this.indexError;
   }
 
   private backfillFileRefs(): void {
-    if (!this.db) return;
-    const marker = this.db.prepare("SELECT value FROM index_metadata WHERE key = ?1").get(FILE_REF_BACKFILL_KEY) as { value?: string } | undefined;
-    if (marker?.value === "1") return;
-    const rows = this.db.prepare(`
-      SELECT raw_json
-      FROM events
-      WHERE hook_event = 'PostToolUse'
-        AND (
-          raw_json LIKE '%file_path%'
-          OR raw_json LIKE '%filepath%'
-          OR raw_json LIKE '%absolute_path%'
-          OR raw_json LIKE '%filename%'
-          OR raw_json LIKE '%"path"%'
-          OR raw_json LIKE '%"file"%'
-        )
-      ORDER BY timestamp ASC, rowid ASC
-    `).all();
-
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const row of rows) {
-        const event = decodePersistedEvent((row as { raw_json: string }).raw_json);
-        this.indexFileRefsForEvent(event);
-      }
-      this.db.prepare(`
-        INSERT INTO index_metadata (key, value)
-        VALUES (?1, '1')
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-      `).run(FILE_REF_BACKFILL_KEY);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        // Ignore rollback failures; the original backfill error is more useful.
-      }
-      this.indexError = error instanceof Error ? error.message : String(error);
-    }
+    this.indexError = runFileRefBackfill(this.db) ?? this.indexError;
   }
 
   private backfillSessionMemorySummaries(): void {
-    if (!this.db) return;
-    const rows = this.db.prepare(`
-      SELECT s.session_id
-      FROM sessions s
-      LEFT JOIN session_summaries ss ON ss.session_id = s.session_id
-      LEFT JOIN (
-        SELECT session_id, MAX(summary_version) AS summary_node_version
-        FROM summary_nodes
-        GROUP BY session_id
-      ) sn ON sn.session_id = s.session_id
-      WHERE ss.session_id IS NULL
-         OR ss.summary_version IS NULL
-         OR ss.summary_version < ${SUMMARY_ALGORITHM_VERSION}
-         OR sn.summary_node_version IS NULL
-         OR sn.summary_node_version < ${SUMMARY_NODE_VERSION}
-      ORDER BY s.last_seen DESC
-      LIMIT 5
-    `).all();
-    if (rows.length === 0) return;
-
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const row of rows) {
-        this.rebuildSessionMemorySummary(String((row as { session_id: string }).session_id));
-      }
-      this.db.exec("COMMIT");
-    } catch (error) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        // Ignore rollback failures; the original backfill error is more useful.
-      }
-      this.indexError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  private getSessionSummary(sessionId: string): SessionSummary | undefined {
-    if (!this.db) {
-      return summarizeSessions(readRawEvents(this.config.rawLogPath).filter((event) => event.session_id === sessionId))[0];
-    }
-    const row = this.db.prepare(`
-      SELECT *
-      FROM sessions
-      WHERE session_id = ?1
-    `).get(sessionId);
-    return row ? rowToSessionSummary(row) : undefined;
-  }
-
-  private scalar(sql: string): number {
-    if (!this.db) return 0;
-    const row = this.db.prepare(sql).get() as { count: number };
-    return row.count;
-  }
-
-  private optionalNumberScalar(sql: string): number | null {
-    if (!this.db) return null;
-    const row = this.db.prepare(sql).get() as { value?: unknown };
-    return typeof row.value === "number" ? row.value : null;
-  }
-
-  private optionalStringScalar(sql: string): string | null {
-    if (!this.db) return null;
-    const row = this.db.prepare(sql).get() as { value?: unknown };
-    return typeof row.value === "string" && row.value.length > 0 ? row.value : null;
-  }
-
-  private countMap(sql: string): Record<string, number> {
-    if (!this.db) return {};
-    const rows = this.db.prepare(sql).all() as Array<{ key: unknown; count: unknown }>;
-    return Object.fromEntries(rows.map((row) => [String(row.key), Number(row.count)]));
-  }
-
-  private shouldRebuildSessionMemorySummary(event: NormalizedEvent): boolean {
-    if (!this.db || !isSummarySourceEvent(event)) return false;
-    if (event.hook_event !== "UserPromptSubmit") return true;
-    const existingSummary = this.db.prepare("SELECT 1 FROM session_summaries WHERE session_id = ?1 LIMIT 1").get(event.session_id);
-    if (!existingSummary) return true;
-    const highSignalCount = Number(this.db.prepare(`
-      SELECT COUNT(*) AS count FROM events
-      WHERE session_id = ?1
-        AND hook_event IN ${SUMMARY_SOURCE_HOOKS}
-    `).get(event.session_id)?.count ?? 0);
-    const chunkOffset = highSignalCount % SUMMARY_NODE_CHUNK_SIZE;
-    return chunkOffset === 0 || chunkOffset === 1;
+    this.indexError = runSummaryBackfill(this.db) ?? this.indexError;
   }
 
   private rebuildSessionMemorySummary(sessionId: string): void {
-    if (!this.db) return;
-    const events = this.getSummaryEventsForSession(sessionId);
-    if (events.length === 0) {
-      this.db.prepare("DELETE FROM session_summary_fts WHERE session_id = ?1").run(sessionId);
-      this.db.prepare("DELETE FROM session_summaries WHERE session_id = ?1").run(sessionId);
-      this.rebuildSummaryNodes(sessionId);
-      return;
-    }
-    const summary = buildSessionMemorySummary(events);
-    const summaryText = summarySearchText(summary);
-    this.db.prepare("DELETE FROM session_summary_fts WHERE session_id = ?1").run(sessionId);
-    this.db.prepare(`
-      INSERT INTO session_summaries
-        (session_id, summary_version, updated_at, cwd, repo_root, git_branch, title, overview, topics_json,
-         key_prompts_json, outcomes_json, tools_json, source_event_ids_json, summary_text)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-      ON CONFLICT(session_id) DO UPDATE SET
-        summary_version = excluded.summary_version,
-        updated_at = excluded.updated_at,
-        cwd = excluded.cwd,
-        repo_root = excluded.repo_root,
-        git_branch = excluded.git_branch,
-        title = excluded.title,
-        overview = excluded.overview,
-        topics_json = excluded.topics_json,
-        key_prompts_json = excluded.key_prompts_json,
-        outcomes_json = excluded.outcomes_json,
-        tools_json = excluded.tools_json,
-        source_event_ids_json = excluded.source_event_ids_json,
-        summary_text = excluded.summary_text
-    `).run(
-      summary.session_id,
-      SUMMARY_ALGORITHM_VERSION,
-      summary.updated_at,
-      summary.cwd,
-      summary.repo_root ?? null,
-      summary.git_branch ?? null,
-      summary.title,
-      summary.overview,
-      JSON.stringify(summary.topics),
-      JSON.stringify(summary.key_prompts),
-      JSON.stringify(summary.outcomes),
-      JSON.stringify(summary.tools),
-      JSON.stringify(summary.source_event_ids),
-      summaryText,
-    );
-    this.db.prepare(`
-      INSERT INTO session_summary_fts (session_id, cwd, repo_root, content)
-      VALUES (?1, ?2, ?3, ?4)
-    `).run(summary.session_id, summary.cwd, summary.repo_root ?? "", summaryText);
-    this.rebuildSummaryNodes(sessionId);
-  }
-
-  private rebuildSummaryNodes(sessionId: string): void {
-    if (!this.db) return;
-    const sourceEvents = this.getAllSummarySourceEventsForSession(sessionId);
-    let previousDepth = chunkArray(sourceEvents, SUMMARY_NODE_CHUNK_SIZE)
-      .map((events) => buildLeafSummaryNode(events));
-    const nodes: SummaryNode[] = [];
-    nodes.push(...previousDepth);
-
-    for (let depth = 1; depth <= SUMMARY_NODE_MAX_DEPTH && previousDepth.length > 1; depth += 1) {
-      const condensed = chunkArray(previousDepth, SUMMARY_NODE_FANOUT)
-        .map((nodes) => buildCondensedSummaryNode(nodes, depth));
-      nodes.push(...condensed);
-      previousDepth = condensed;
-    }
-
-    const existing = new Map((this.db.prepare(`
-      SELECT node_id, summary_version FROM summary_nodes WHERE session_id = ?1
-    `).all(sessionId) as Array<{ node_id: string; summary_version: number }>)
-      .map((row) => [row.node_id, row.summary_version]));
-    const nextIds = new Set(nodes.map((node) => node.node_id));
-    const deleteFts = this.db.prepare("DELETE FROM summary_node_fts WHERE node_id = ?1");
-    const deleteNode = this.db.prepare("DELETE FROM summary_nodes WHERE node_id = ?1");
-    const deleteEdges = this.db.prepare("DELETE FROM graph_edges WHERE session_id = ?1 AND kind = 'summary_source' AND (from_node_id = ?2 OR to_node_id = ?2)");
-    for (const nodeId of existing.keys()) {
-      if (nextIds.has(nodeId)) continue;
-      deleteFts.run(nodeId);
-      deleteNode.run(nodeId);
-      deleteEdges.run(sessionId, nodeId);
-    }
-    for (const node of nodes) {
-      const existingVersion = existing.get(node.node_id);
-      if (existingVersion === SUMMARY_NODE_VERSION) continue;
-      if (existingVersion !== undefined) {
-        deleteFts.run(node.node_id);
-        deleteEdges.run(sessionId, node.node_id);
-      }
-      this.insertSummaryNode(node);
-      this.insertSummarySourceEdges(node);
-    }
-  }
-
-  private insertSummaryNode(node: SummaryNode): void {
-    if (!this.db) return;
-    this.db.prepare(`
-      INSERT INTO summary_nodes
-        (node_id, session_id, summary_version, depth, summary_text, token_count, source_token_count,
-         source_type, source_ids_json, source_event_ids_json, earliest_at, latest_at, created_at,
-         cwd, repo_root, git_branch, topics_json)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-      ON CONFLICT(node_id) DO UPDATE SET
-        summary_version = excluded.summary_version,
-        depth = excluded.depth,
-        summary_text = excluded.summary_text,
-        token_count = excluded.token_count,
-        source_token_count = excluded.source_token_count,
-        source_type = excluded.source_type,
-        source_ids_json = excluded.source_ids_json,
-        source_event_ids_json = excluded.source_event_ids_json,
-        earliest_at = excluded.earliest_at,
-        latest_at = excluded.latest_at,
-        created_at = excluded.created_at,
-        cwd = excluded.cwd,
-        repo_root = excluded.repo_root,
-        git_branch = excluded.git_branch,
-        topics_json = excluded.topics_json
-    `).run(
-      node.node_id,
-      node.session_id,
-      SUMMARY_NODE_VERSION,
-      node.depth,
-      node.summary_text,
-      node.token_count,
-      node.source_token_count,
-      node.source_type,
-      JSON.stringify(node.source_ids),
-      JSON.stringify(node.source_event_ids),
-      node.earliest_at,
-      node.latest_at,
-      node.created_at,
-      node.cwd,
-      node.repo_root ?? null,
-      node.git_branch ?? null,
-      JSON.stringify(node.topics),
-    );
-    this.db.prepare(`
-      INSERT INTO summary_node_fts (node_id, session_id, cwd, repo_root, depth, content)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-    `).run(
-      node.node_id,
-      node.session_id,
-      node.cwd,
-      node.repo_root ?? "",
-      String(node.depth),
-      summaryNodeSearchText(node),
-    );
-  }
-
-  private insertSummarySourceEdges(node: SummaryNode): void {
-    for (const [index, sourceId] of node.source_ids.entries()) {
-      this.insertGraphEdge(
-        node.node_id,
-        node.source_type === "events" ? eventNodeId(sourceId) : sourceId,
-        "summary_source",
-        node.session_id,
-        index,
-        node.created_at,
-        {
-          depth: node.depth,
-          source_type: node.source_type,
-        },
-      );
-    }
-  }
-
-  private getAllSummarySourceEventsForSession(sessionId: string): NormalizedEvent[] {
-    if (!this.db) return [];
-    const rows = this.db.prepare(`
-      SELECT raw_json FROM events
-      WHERE session_id = ?1
-        AND hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')
-      ORDER BY timestamp ASC, rowid ASC
-    `).all(sessionId);
-    return rows
-      .map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json))
-      .filter((event) => !isCodexLcmToolEvent(event))
-      .filter(isSummarySourceEvent);
-  }
-
-  private getSummaryEventsForSession(sessionId: string): NormalizedEvent[] {
-    if (!this.db) return [];
-    const earlySignals = this.db.prepare(`
-      SELECT raw_json FROM events
-      WHERE session_id = ?1
-        AND hook_event IN ${SUMMARY_SOURCE_HOOKS}
-      ORDER BY timestamp ASC, rowid ASC
-      LIMIT ?2
-    `).all(sessionId, SUMMARY_EARLY_SIGNAL_LIMIT);
-    const latestSignals = this.db.prepare(`
-      SELECT raw_json FROM events
-      WHERE session_id = ?1
-        AND hook_event IN ${SUMMARY_SOURCE_HOOKS}
-      ORDER BY timestamp DESC, rowid DESC
-      LIMIT ?2
-    `).all(sessionId, SUMMARY_LATEST_SIGNAL_LIMIT);
-    const recentEvents = this.db.prepare(`
-      SELECT raw_json FROM events
-      WHERE session_id = ?1
-      ORDER BY timestamp DESC, rowid DESC
-      LIMIT ?2
-    `).all(sessionId, SUMMARY_RECENT_EVENT_LIMIT);
-    const events = uniqueEvents([...earlySignals, ...latestSignals, ...recentEvents]
-      .map((row) => decodePersistedEvent((row as { raw_json: string }).raw_json))
-      .filter((event) => !isCodexLcmToolEvent(event))
-      .filter((event) => !isSummaryHook(event.hook_event) || isSummarySourceEvent(event)))
-      .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.event_id.localeCompare(b.event_id));
-    return events.some(isSummarySourceEvent) ? events : [];
+    materializeSessionMemorySummary(this.db, sessionId);
   }
 }
 
@@ -3049,787 +621,10 @@ export function createStorage(options: StorageOptions = {}): LcmStorage {
   return new LcmStorage(options);
 }
 
-function summaryNodeToGraphNode(node: SummaryNode): GraphNode {
-  return {
-    node_id: node.node_id,
-    kind: "summary",
-    session_id: node.session_id,
-    timestamp: node.latest_at,
-    cwd: node.cwd,
-    repo_root: node.repo_root,
-    git_branch: node.git_branch,
-    label: `D${node.depth} ${summaryNodeTitle(node)}`,
-    metadata: {
-      depth: node.depth,
-      source_type: node.source_type,
-      source_ids: node.source_ids,
-      source_event_ids: node.source_event_ids,
-      token_count: node.token_count,
-      source_token_count: node.source_token_count,
-      topics: node.topics,
-      earliest_at: node.earliest_at,
-      latest_at: node.latest_at,
-    },
-  };
-}
-
-function summaryGraphEdges(node: SummaryNode, nodeIds: Set<string>): GraphEdge[] {
-  return node.source_ids.flatMap((sourceId, index) => {
-    const targetId = node.source_type === "events" ? eventNodeId(sourceId) : sourceId;
-    if (!nodeIds.has(node.node_id) || !nodeIds.has(targetId)) return [];
-    return [{
-      from_node_id: node.node_id,
-      to_node_id: targetId,
-      kind: "summary_source",
-      session_id: node.session_id,
-      position: index,
-      created_at: node.created_at,
-      metadata: {
-        depth: node.depth,
-        source_type: node.source_type,
-      },
-    }];
-  });
-}
-
-function graphEdgeKey(edge: Pick<GraphEdge, "from_node_id" | "to_node_id" | "kind">): string {
-  return `${edge.from_node_id}\0${edge.to_node_id}\0${edge.kind}`;
-}
-
-function rankSessionRows(rows: unknown[], query: string): SessionSummary[] {
-  const evidenceRows = strongestSessionEvidenceRows(rows, query);
-  const sessions = new Map<string, {
-    summary: SessionSummary;
-    score: number;
-    matchCount: number;
-    lastMatchAt: string;
-    firstOrder: number;
-    bestMatch?: SessionSearchMatch;
-  }>();
-  evidenceRows.forEach((row, order) => {
-    const record = row as Record<string, unknown>;
-    const sessionId = String(record.session_id);
-    const matchAt = String(record.match_timestamp ?? record.last_seen ?? "");
-    const matchText = typeof record.match_text === "string" ? record.match_text : "";
-    const weight = typeof record.match_weight === "number" ? record.match_weight : 1;
-    const rowScore = queryTermHitCount(matchText, query) * weight;
-    const bestMatch = rowToSessionSearchMatch(record, query, rowScore);
-    const existing = sessions.get(sessionId);
-    if (!existing) {
-      sessions.set(sessionId, {
-        summary: rowToSessionSummary(row),
-        score: rowScore,
-        matchCount: 1,
-        lastMatchAt: matchAt,
-        firstOrder: order,
-        bestMatch,
-      });
-      return;
-    }
-    existing.score += rowScore;
-    existing.matchCount += 1;
-    if (matchAt > existing.lastMatchAt) existing.lastMatchAt = matchAt;
-    if (bestMatch && (!existing.bestMatch || compareSearchMatches(bestMatch, existing.bestMatch) < 0)) {
-      existing.bestMatch = bestMatch;
-    }
-  });
-  return [...sessions.values()]
-    .map((entry) => ({
-      ...entry,
-      discovery: sessionDiscovery(entry, query),
-    }))
-    .sort((a, b) =>
-      b.discovery.score - a.discovery.score ||
-      b.score - a.score ||
-      (b.bestMatch?.score ?? 0) - (a.bestMatch?.score ?? 0) ||
-      b.matchCount - a.matchCount ||
-      b.lastMatchAt.localeCompare(a.lastMatchAt) ||
-      a.firstOrder - b.firstOrder)
-    .map((entry) => ({
-      ...entry.summary,
-      match_count: entry.matchCount,
-      ...(entry.bestMatch ? { best_match: entry.bestMatch } : {}),
-      discovery: entry.discovery,
-    }));
-}
-
-function strongestSessionEvidenceRows(rows: unknown[], query: string): unknown[] {
-  const scores = new Map<string, Map<SessionSearchMatch["kind"], { score: number; matchCount: number }>>();
-  for (const row of rows) {
-    const record = row as Record<string, unknown>;
-    const kind = searchMatchKind(record.match_kind);
-    if (!kind) continue;
-    const sessionId = String(record.session_id);
-    const sessionScores = scores.get(sessionId) ?? new Map();
-    const evidence = sessionScores.get(kind) ?? { score: 0, matchCount: 0 };
-    const matchText = typeof record.match_text === "string" ? record.match_text : "";
-    const weight = typeof record.match_weight === "number" ? record.match_weight : 1;
-    evidence.score += queryTermHitCount(matchText, query) * weight;
-    evidence.matchCount += 1;
-    sessionScores.set(kind, evidence);
-    scores.set(sessionId, sessionScores);
-  }
-
-  const selectedKinds = new Map<string, SessionSearchMatch["kind"]>();
-  for (const [sessionId, sessionScores] of scores) {
-    const selected = [...sessionScores.entries()].sort((left, right) =>
-      right[1].score - left[1].score ||
-      right[1].matchCount - left[1].matchCount ||
-      searchMatchKindWeight(right[0]) - searchMatchKindWeight(left[0]))[0];
-    if (selected) selectedKinds.set(sessionId, selected[0]);
-  }
-
-  return rows.filter((row) => {
-    const record = row as Record<string, unknown>;
-    return selectedKinds.get(String(record.session_id)) === searchMatchKind(record.match_kind);
-  });
-}
-
-function sessionDiscovery(entry: {
-  summary: SessionSummary;
-  score: number;
-  matchCount: number;
-  bestMatch?: SessionSearchMatch;
-}, query: string): SessionDiscovery {
-  let score = entry.score;
-  const reasons: string[] = [];
-  const match = entry.bestMatch;
-
-  if (match?.kind === "summary_node") {
-    score += 10;
-    reasons.push("summary-node match");
-  } else if (match?.kind === "session_summary") {
-    score += 6;
-    reasons.push("session-summary match");
-  } else if (match?.kind === "event") {
-    reasons.push("raw-event match");
-  }
-
-  const sourceEventCount = match?.source_event_count ?? 0;
-  if (sourceEventCount >= 4) {
-    score += 12;
-    reasons.push("source-rich summary");
-  } else if (sourceEventCount >= 2) {
-    score += 6;
-    reasons.push("multiple source events");
-  }
-
-  const sourceTokenCount = match?.source_token_count ?? 0;
-  if (sourceTokenCount >= 600) {
-    score += 8;
-    reasons.push("substantive source text");
-  } else if (sourceTokenCount >= 160) {
-    score += 4;
-    reasons.push("nontrivial source text");
-  }
-
-  if (entry.summary.event_count >= 8) {
-    score += 8;
-    reasons.push("longer session");
-  } else if (entry.summary.event_count >= 3) {
-    score += 4;
-    reasons.push("multi-event session");
-  } else if (entry.summary.event_count >= 2) {
-    score += 2;
-    reasons.push("prompt-outcome session");
-  }
-
-  if (entry.matchCount >= 2) {
-    score += Math.min(entry.matchCount, 4) * 2;
-    reasons.push("multiple matches");
-  }
-
-  if (isBroadDiscoveryQuery(query) && entry.summary.event_count <= 1) {
-    score -= 24;
-    reasons.push("tiny session penalty");
-  }
-
-  const confidence = score >= 34 ? "high" : score >= 18 ? "medium" : "low";
-  return {
-    confidence,
-    score,
-    reasons,
-  };
-}
-
-function isSearchDiscoveryRow(row: unknown, query: string): boolean {
-  const record = row as Record<string, unknown>;
-  if (searchMatchKind(record.match_kind) !== "event") return true;
-  if (typeof record.match_text !== "string") return true;
-  try {
-    return isSearchDiscoveryEvent(decodePersistedEvent(record.match_text), query);
-  } catch {
-    return true;
-  }
-}
-
-function isSearchDiscoveryEvent(event: NormalizedEvent, query: string): boolean {
-  if (isGeneratedSuggestionEvent(event)) return isExplicitSuggestionQuery(query);
-  return isSummarySourceEvent(event);
-}
-
-function isExplicitSuggestionQuery(query: string): boolean {
-  return /\b(hyperpersonalized|suggestion|suggestions)\b/iu.test(query);
-}
-
-function isBroadDiscoveryQuery(query: string): boolean {
-  return discoveryQueryTermCount(query) >= 4;
-}
-
-function discoveryQueryTermCount(query: string): number {
-  const terms = new Set<string>();
-  for (const term of query.toLowerCase().split(/[^\p{L}\p{N}_-]+/u)) {
-    const normalized = term.replace(/^-+|-+$/gu, "");
-    if (normalized.length >= 3 || /[-_]/u.test(normalized) || /\d/u.test(normalized)) {
-      terms.add(normalized);
-    }
-  }
-  return terms.size;
-}
-
-function rowToSessionSearchMatch(record: Record<string, unknown>, query: string, score: number): SessionSearchMatch | undefined {
-  const kind = searchMatchKind(record.match_kind);
-  if (!kind) return undefined;
-  const text = searchMatchText(kind, record.match_text);
-  const snippet = bestMatchSnippet(text, query);
-  if (snippet.length === 0) return undefined;
-  const topics = parseStringArray(record.match_topics_json);
-  const sourceEventCount = parseStringArray(record.match_source_event_ids_json).length;
-  const sourceTokenCount = Number(record.match_source_token_count ?? 0);
-  return {
-    kind,
-    snippet,
-    timestamp: String(record.match_timestamp ?? ""),
-    score,
-    ...(typeof record.match_node_id === "string" && record.match_node_id.length > 0 ? { node_id: record.match_node_id } : {}),
-    ...(typeof record.match_event_id === "string" && record.match_event_id.length > 0 ? { event_id: record.match_event_id } : {}),
-    ...(record.match_depth !== undefined ? { depth: Number(record.match_depth) } : {}),
-    ...(topics.length > 0 ? { topics: topics.slice(0, 12) } : {}),
-    ...(sourceEventCount > 0 ? { source_event_count: sourceEventCount } : {}),
-    ...(sourceTokenCount > 0 ? { source_token_count: sourceTokenCount } : {}),
-  };
-}
-
-function searchMatchKind(value: unknown): SessionSearchMatch["kind"] | undefined {
-  if (value === "summary_node" || value === "session_summary" || value === "event") return value;
-  return undefined;
-}
-
-function searchMatchText(kind: SessionSearchMatch["kind"], value: unknown): string {
-  if (typeof value !== "string") return "";
-  if (kind !== "event") return value;
-  try {
-    const event = decodePersistedEvent(value);
-    return eventSignalText(event) || `${event.hook_event}: ${JSON.stringify(event.payload)}`;
-  } catch {
-    return value;
-  }
-}
-
-function compareSearchMatches(a: SessionSearchMatch, b: SessionSearchMatch): number {
-  return b.score - a.score ||
-    searchMatchKindWeight(b.kind) - searchMatchKindWeight(a.kind) ||
-    b.timestamp.localeCompare(a.timestamp);
-}
-
-function searchMatchKindWeight(kind: SessionSearchMatch["kind"]): number {
-  if (kind === "summary_node") return 3;
-  if (kind === "session_summary") return 2;
-  return 1;
-}
-
-function bestMatchSnippet(text: string, query: string, maxChars = 220): string {
-  const compactText = compactWhitespace(text);
-  if (compactText.length === 0) return "";
-  const scoredLines = text.split(/\r?\n/u)
-    .map(compactWhitespace)
-    .filter((line) => line.length > 0)
-    .map((line, index) => ({ line, index, hits: queryTermHitCount(line, query) }));
-  const candidates = scoredLines.some((line) => line.hits > 0 && !line.line.startsWith("Topics:"))
-    ? scoredLines.filter((line) => line.hits > 0 && !line.line.startsWith("Topics:"))
-    : scoredLines;
-  const bestLine = candidates
-    .sort((a, b) => b.hits - a.hits || a.index - b.index)[0]?.line ?? compactText;
-  return truncateSnippet(bestLine, maxChars);
-}
-
-function truncateSnippet(text: string, maxChars: number): string {
-  const compact = compactWhitespace(text);
-  if (compact.length <= maxChars) return compact;
-  return `${compact.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
-}
-
-function compactWhitespace(text: string): string {
-  return text.replace(/\s+/gu, " ").trim();
-}
-
-function clampLimit(limit: number | undefined, fallback: number, max = 200): number {
-  return Math.min(Math.max(Number(limit ?? fallback), 1), max);
-}
-
-function positiveInteger(value: number | undefined, fallback: number): number {
-  const parsed = Number(value ?? fallback);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-}
-
-function buildContextPlan(args: {
-  session?: SessionSummary;
-  modelContextWindow: number;
-  autoCompactTokenLimit: number;
-  recentEventLimit: number;
-  estimatedRecentTokens: number;
-  estimatedSummaryTokens: number;
-  summaryNodeCount: number;
-  latestEventAt: string | null;
-}): ContextPlan {
-  const estimatedTotalTokens = args.estimatedRecentTokens + args.estimatedSummaryTokens;
-  const state = contextPlanState(estimatedTotalTokens, args.autoCompactTokenLimit, args.modelContextWindow);
-  const suggestedTools = state === "under_limit" || state === "empty"
-    ? ["lcm_context_plan"]
-    : ["lcm_context_plan", "lcm_pack_context", "lcm_expand_query"];
-  return {
-    ...(args.session ? {
-      session_id: args.session.session_id,
-      cwd: args.session.cwd,
-      ...(args.session.repo_root ? { repo_root: args.session.repo_root } : {}),
-    } : {}),
-    model_context_window: args.modelContextWindow,
-    auto_compact_token_limit: args.autoCompactTokenLimit,
-    recent_event_limit: args.recentEventLimit,
-    estimated_recent_tokens: args.estimatedRecentTokens,
-    estimated_summary_tokens: args.estimatedSummaryTokens,
-    estimated_total_tokens: estimatedTotalTokens,
-    summary_node_count: args.summaryNodeCount,
-    latest_event_at: args.latestEventAt,
-    state,
-    recommendation: contextPlanRecommendation(state, args.summaryNodeCount),
-    suggested_tools: suggestedTools,
-    can_control_compaction: false,
-  };
-}
-
-function contextPlanState(estimatedRecentTokens: number, autoCompactTokenLimit: number, modelContextWindow: number): ContextPlanState {
-  if (estimatedRecentTokens <= 0) return "empty";
-  if (estimatedRecentTokens >= modelContextWindow) return "over_context";
-  if (estimatedRecentTokens >= autoCompactTokenLimit) return "over_limit";
-  if (estimatedRecentTokens >= Math.floor(autoCompactTokenLimit * 0.8)) return "near_limit";
-  return "under_limit";
-}
-
-function contextPlanRecommendation(state: ContextPlanState, summaryNodeCount: number): string {
-  if (state === "empty") return "No matching session found.";
-  if (state === "under_limit") return "No context packing needed yet.";
-  if (summaryNodeCount === 0) return "Context pressure is high, but no summary nodes are available yet.";
-  if (state === "near_limit") return "Near the soft context limit; use lcm_pack_context for broad recall before continuing.";
-  if (state === "over_context") return "Estimated recent context is past the model window; use lcm_pack_context or lcm_expand_query for focused recovery.";
-  return "Past the soft context limit; use lcm_pack_context or lcm_expand_query before relying on raw recent context.";
-}
-
-function rankQueryExpansionNodes(nodes: SummaryNode[], query: string, overview: boolean): SummaryNode[] {
-  const ranked = rankSummaryNodesForContext(nodes, query);
-  if (!overview) return ranked;
-  return ranked.sort((left, right) =>
-    right.depth - left.depth ||
-    Number(right.source_type === "nodes") - Number(left.source_type === "nodes") ||
-    right.source_ids.length - left.source_ids.length ||
-    queryTermHitCount(summaryNodeSearchText(right), query) - queryTermHitCount(summaryNodeSearchText(left), query) ||
-    right.latest_at.localeCompare(left.latest_at) ||
-    right.node_id.localeCompare(left.node_id));
-}
-
-function focusedExcerpt(value: string, query: string, maxChars: number): string {
-  if (maxChars <= 0) return "";
-  if (value.length <= maxChars) return value;
-  const terms = query.toLowerCase().split(/[^a-z0-9_-]+/u).filter((term) => term.length > 0);
-  const lowerValue = value.toLowerCase();
-  const hit = terms
-    .map((term) => lowerValue.indexOf(term))
-    .filter((index) => index >= 0)
-    .sort((left, right) => left - right)[0] ?? 0;
-  const prefix = hit > 0 ? "..." : "";
-  const suffix = hit + maxChars < value.length ? "..." : "";
-  const bodyBudget = Math.max(0, maxChars - prefix.length - suffix.length);
-  const start = Math.max(0, Math.min(hit, value.length - bodyBudget));
-  return `${prefix}${value.slice(start, start + bodyBudget)}${suffix}`;
-}
-
-function parseCursor(cursor: string | undefined): number {
-  if (!cursor) return 0;
-  const value = Number.parseInt(cursor, 10);
-  return Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-function parseTimestamp(value: string | undefined, name: string): string | undefined {
-  if (!value) return undefined;
-  const timestamp = new Date(value);
-  if (Number.isNaN(timestamp.getTime())) throw new Error(`${name} must be a valid ISO-8601 timestamp.`);
-  return timestamp.toISOString();
-}
-
-function eventSearchText(event: NormalizedEvent): string {
-  const metadata = extractEventMetadata(event);
-  return [
-    event.hook_event,
-    event.session_id,
-    event.cwd,
-    event.repo_root,
-    event.git_branch,
-    event.tool_name,
-    metadata.turn_id,
-    metadata.tool_use_id,
-    JSON.stringify(event.payload),
-  ].filter(Boolean).join("\n");
-}
-
-function fileSize(filePath: string): number {
-  return fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
-}
-
-function checkpointToMarkdown(node: GraphNode): string {
-  return [
-    `## ${node.timestamp} Checkpoint`,
-    `session: ${node.session_id}`,
-    `cwd: ${node.cwd}`,
-    JSON.stringify(node.metadata),
-    "",
-  ].join("\n");
-}
-
-function countEventsByHook(events: NormalizedEvent[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const event of events) {
-    counts[event.hook_event] = (counts[event.hook_event] ?? 0) + 1;
-  }
-  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
-}
-
-function uniqueEvents(events: NormalizedEvent[]): NormalizedEvent[] {
-  const seen = new Set<string>();
-  const result: NormalizedEvent[] = [];
-  for (const event of events) {
-    if (seen.has(event.event_id)) continue;
-    seen.add(event.event_id);
-    result.push(event);
-  }
-  return result;
-}
-
-function chunkArray<T>(values: T[], size: number): T[][] {
+function chunkArray<T>(values: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let index = 0; index < values.length; index += size) {
     chunks.push(values.slice(index, index + size));
   }
   return chunks;
-}
-
-function sortedSessionIds(sessionIds: Iterable<string>): string[] {
-  return Array.from(new Set(sessionIds)).sort((left, right) => left.localeCompare(right));
-}
-
-function groupEventsBySession(events: NormalizedEvent[]): Map<string, NormalizedEvent[]> {
-  const groups = new Map<string, NormalizedEvent[]>();
-  for (const event of events) {
-    const group = groups.get(event.session_id) ?? [];
-    group.push(event);
-    groups.set(event.session_id, group);
-  }
-  return groups;
-}
-
-function sessionListSummary(summary: SessionMemorySummary): SessionListSummary {
-  return {
-    updated_at: summary.updated_at,
-    title: summary.title,
-    overview: summary.overview,
-    topics: summary.topics,
-    key_prompts: summary.key_prompts,
-    outcomes: summary.outcomes,
-    source_event_count: summary.source_event_ids.length,
-  };
-}
-
-function sessionsWithDescendants(allSessions: SessionSummary[], roots: SessionSummary[]): SessionSummary[] {
-  const byParent = new Map<string, SessionSummary[]>();
-  for (const session of allSessions) {
-    if (!session.parent_session_id) continue;
-    const children = byParent.get(session.parent_session_id) ?? [];
-    children.push(session);
-    byParent.set(session.parent_session_id, children);
-  }
-  const selected = new Map<string, SessionSummary>();
-  const queue = [...roots];
-  while (queue.length > 0) {
-    const session = queue.shift();
-    if (!session || selected.has(session.session_id)) continue;
-    selected.set(session.session_id, session);
-    queue.push(...(byParent.get(session.session_id) ?? []));
-  }
-  return [...selected.values()];
-}
-
-function summarizeSessions(events: NormalizedEvent[]): SessionSummary[] {
-  const sessions = new Map<string, SessionSummary>();
-  for (const event of events) {
-    const metadata = extractSessionMetadata(event);
-    const existing = sessions.get(event.session_id);
-    if (!existing) {
-      sessions.set(event.session_id, {
-        session_id: event.session_id,
-        first_seen: event.timestamp,
-        last_seen: event.timestamp,
-        cwd: event.cwd,
-        ...(event.repo_root ? { repo_root: event.repo_root } : {}),
-        ...(event.git_branch ? { git_branch: event.git_branch } : {}),
-        event_count: 1,
-        match_count: 1,
-        ...metadata,
-      });
-      continue;
-    }
-    existing.first_seen = event.timestamp < existing.first_seen ? event.timestamp : existing.first_seen;
-    existing.last_seen = event.timestamp > existing.last_seen ? event.timestamp : existing.last_seen;
-    existing.cwd = event.cwd;
-    existing.repo_root = event.repo_root ?? existing.repo_root;
-    existing.git_branch = event.git_branch ?? existing.git_branch;
-    existing.event_count += 1;
-    existing.match_count = (existing.match_count ?? 0) + 1;
-    existing.parent_session_id = metadata.parent_session_id ?? existing.parent_session_id;
-    existing.agent_role = metadata.agent_role ?? existing.agent_role;
-    existing.agent_nickname = metadata.agent_nickname ?? existing.agent_nickname;
-    existing.model = metadata.model ?? existing.model;
-    existing.reasoning_effort = metadata.reasoning_effort ?? existing.reasoning_effort;
-    existing.total_input_tokens = maxOptional(existing.total_input_tokens, metadata.total_input_tokens);
-    existing.cached_input_tokens = maxOptional(existing.cached_input_tokens, metadata.cached_input_tokens);
-    existing.output_tokens = maxOptional(existing.output_tokens, metadata.output_tokens);
-    existing.reasoning_output_tokens = maxOptional(existing.reasoning_output_tokens, metadata.reasoning_output_tokens);
-    existing.total_tokens = maxOptional(existing.total_tokens, metadata.total_tokens);
-  }
-  return [...sessions.values()].sort((a, b) => b.last_seen.localeCompare(a.last_seen));
-}
-
-function extractEventMetadata(event: NormalizedEvent): { turn_id?: string; tool_use_id?: string } {
-  return {
-    turn_id: stringField(event.payload.turn_id) || stringField(event.payload.turnId),
-    tool_use_id: stringField(event.payload.tool_use_id) || stringField(event.payload.toolUseId),
-  };
-}
-
-function extractSessionMetadata(event: NormalizedEvent): Partial<SessionSummary> {
-  const usage = recordField(event.payload.usage);
-  const importedMetadata = recordField(event.payload.metadata);
-  const inferredParentId = stringField(event.payload.parent_session_id) ||
-    parentSessionId(importedMetadata) ||
-    delegatedParentSessionId(event);
-  return {
-    ...(inferredParentId ? { parent_session_id: inferredParentId } : {}),
-    ...(stringField(event.payload.agent_role) || stringField(importedMetadata?.agent_role)
-      ? { agent_role: stringField(event.payload.agent_role) || stringField(importedMetadata?.agent_role) }
-      : {}),
-    ...(stringField(event.payload.agent_nickname) || stringField(importedMetadata?.agent_nickname)
-      ? { agent_nickname: stringField(event.payload.agent_nickname) || stringField(importedMetadata?.agent_nickname) }
-      : {}),
-    ...(stringField(event.payload.model) ? { model: stringField(event.payload.model) } : {}),
-    ...(stringField(event.payload.reasoning_effort) ? { reasoning_effort: stringField(event.payload.reasoning_effort) } : {}),
-    ...(numberField(usage?.input_token_count) !== undefined ? { total_input_tokens: numberField(usage?.input_token_count) } : {}),
-    ...(numberField(usage?.cached_input_token_count) !== undefined
-      ? { cached_input_tokens: numberField(usage?.cached_input_token_count) }
-      : {}),
-    ...(numberField(usage?.output_token_count) !== undefined ? { output_tokens: numberField(usage?.output_token_count) } : {}),
-    ...(numberField(usage?.reasoning_output_token_count) !== undefined
-      ? { reasoning_output_tokens: numberField(usage?.reasoning_output_token_count) }
-      : {}),
-    ...(numberField(usage?.total_token_count) !== undefined ? { total_tokens: numberField(usage?.total_token_count) } : {}),
-  };
-}
-
-function delegatedParentSessionId(event: NormalizedEvent): string | undefined {
-  if (event.hook_event !== "UserPromptSubmit") return undefined;
-  const prompt = eventSignalText(event).trimStart();
-  if (!prompt.startsWith("<codex_delegation>")) return undefined;
-  const match = /<source_thread_id>\s*([^<\s]+)\s*<\/source_thread_id>/iu.exec(prompt);
-  return stringField(match?.[1]);
-}
-
-function parentSessionId(metadata: Record<string, unknown> | undefined): string | undefined {
-  const direct = stringField(metadata?.parent_thread_id);
-  if (direct) return direct;
-  const source = recordField(metadata?.source);
-  const subagent = recordField(source?.subagent);
-  return stringField(recordField(subagent?.thread_spawn)?.parent_thread_id);
-}
-
-function recordField(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function numberField(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function maxOptional(current: number | undefined, incoming: number | undefined): number | undefined {
-  if (incoming === undefined) return current;
-  if (current === undefined) return incoming;
-  return Math.max(current, incoming);
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function maxNullable(current: string, incoming: string): string {
-  return `CASE WHEN ${incoming} IS NULL THEN ${current} WHEN ${current} IS NULL OR ${incoming} > ${current} THEN ${incoming} ELSE ${current} END`;
-}
-
-function usageFromSessions(sessions: SessionSummary[]): UsageReport {
-  return {
-    totals: sessions.reduce((totals, session) => ({
-      sessions: totals.sessions + 1,
-      input_tokens: totals.input_tokens + (session.total_input_tokens ?? 0),
-      cached_input_tokens: totals.cached_input_tokens + (session.cached_input_tokens ?? 0),
-      output_tokens: totals.output_tokens + (session.output_tokens ?? 0),
-      reasoning_output_tokens: totals.reasoning_output_tokens + (session.reasoning_output_tokens ?? 0),
-      total_tokens: totals.total_tokens + (session.total_tokens ?? 0),
-    }), {
-      sessions: 0,
-      input_tokens: 0,
-      cached_input_tokens: 0,
-      output_tokens: 0,
-      reasoning_output_tokens: 0,
-      total_tokens: 0,
-    }),
-  };
-}
-
-function usageReportFromRow(row: Record<string, unknown>): UsageReport {
-  return {
-    totals: {
-      sessions: Number(row.sessions),
-      input_tokens: Number(row.input_tokens),
-      cached_input_tokens: Number(row.cached_input_tokens),
-      output_tokens: Number(row.output_tokens),
-      reasoning_output_tokens: Number(row.reasoning_output_tokens),
-      total_tokens: Number(row.total_tokens),
-    },
-  };
-}
-
-function isCodexLcmToolEvent(event: NormalizedEvent): boolean {
-  const toolName = event.tool_name || stringField(event.payload.tool_name) || stringField(event.payload.toolName);
-  return toolName?.startsWith("mcp__codex_lcm__") ?? false;
-}
-
-function isSearchIndexEvent(event: NormalizedEvent): boolean {
-  return isSummarySourceEvent(event) || isGeneratedSuggestionEvent(event);
-}
-
-function isSummaryHook(hookEvent: string): boolean {
-  return hookEvent === "UserPromptSubmit" ||
-    hookEvent === "Note" ||
-    hookEvent === "Stop" ||
-    hookEvent === "PreCompact" ||
-    hookEvent === "PostCompact";
-}
-
-function sessionNodeId(sessionId: string): string {
-  return `session:${sessionId}`;
-}
-
-function turnNodeId(sessionId: string, turnId: string): string {
-  return `turn:${sessionId}:${turnId}`;
-}
-
-function eventNodeId(eventId: string): string {
-  return `event:${eventId}`;
-}
-
-function checkpointNodeId(sessionId: string, eventCount: number): string {
-  return `checkpoint:${sessionId}:${eventCount}`;
-}
-
-function buildFallbackGraph(events: NormalizedEvent[], limit: number): SessionGraph {
-  const sessionId = events[0]?.session_id ?? "";
-  const nodes: GraphNode[] = [];
-  const edges: GraphEdge[] = [];
-  const seen = new Set<string>();
-  const addNode = (node: GraphNode) => {
-    if (seen.has(node.node_id) || nodes.length >= limit) return;
-    seen.add(node.node_id);
-    nodes.push(node);
-  };
-
-  for (const [index, event] of events.entries()) {
-    const metadata = extractEventMetadata(event);
-    const sessionNode = sessionNodeId(event.session_id);
-    addNode({
-      node_id: sessionNode,
-      kind: "session",
-      session_id: event.session_id,
-      timestamp: event.timestamp,
-      cwd: event.cwd,
-      repo_root: event.repo_root,
-      git_branch: event.git_branch,
-      label: `Session ${event.session_id}`,
-      metadata: { fallback: true },
-    });
-    const parentNode = metadata.turn_id ? turnNodeId(event.session_id, metadata.turn_id) : sessionNode;
-    if (metadata.turn_id) {
-      addNode({
-        node_id: parentNode,
-        kind: "turn",
-        session_id: event.session_id,
-        turn_id: metadata.turn_id,
-        timestamp: event.timestamp,
-        cwd: event.cwd,
-        repo_root: event.repo_root,
-        git_branch: event.git_branch,
-        label: `Turn ${metadata.turn_id}`,
-        metadata: { fallback: true, turn_id: metadata.turn_id },
-      });
-      edges.push(fallbackEdge(sessionNode, parentNode, "contains", event.session_id, index, event.timestamp));
-    }
-    const eventNode = eventNodeId(event.event_id);
-    addNode({
-      node_id: eventNode,
-      kind: "event",
-      session_id: event.session_id,
-      event_id: event.event_id,
-      turn_id: metadata.turn_id,
-      timestamp: event.timestamp,
-      cwd: event.cwd,
-      repo_root: event.repo_root,
-      git_branch: event.git_branch,
-      label: `${event.hook_event} ${event.timestamp}`,
-      metadata: { fallback: true, hook_event: event.hook_event },
-    });
-    edges.push(fallbackEdge(parentNode, eventNode, "contains", event.session_id, index, event.timestamp));
-    if (index > 0) {
-      edges.push(fallbackEdge(eventNodeId(events[index - 1].event_id), eventNode, "next", event.session_id, index, event.timestamp));
-    }
-  }
-
-  const nodeIds = new Set(nodes.map((node) => node.node_id));
-  return {
-    session_id: sessionId,
-    nodes,
-    edges: edges.filter((edge) => nodeIds.has(edge.from_node_id) && nodeIds.has(edge.to_node_id)),
-  };
-}
-
-function fallbackEdge(
-  fromNodeId: string,
-  toNodeId: string,
-  kind: string,
-  sessionId: string,
-  position: number,
-  createdAt: string,
-): GraphEdge {
-  return {
-    from_node_id: fromNodeId,
-    to_node_id: toNodeId,
-    kind,
-    session_id: sessionId,
-    position,
-    created_at: createdAt,
-    metadata: { fallback: true },
-  };
 }

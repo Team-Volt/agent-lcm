@@ -15,7 +15,7 @@ type FramedMcpResponse = {
 const SUPPORTED_PROTOCOL_VERSION = "2025-11-25";
 const STANDARD_TOOL_NAMES = ["lcm_grep", "lcm_describe", "lcm_expand"] as const;
 
-test("MCP server initializes and lists LCM tools", () => {
+test("MCP server initializes and exposes a stable tool catalog", () => {
   const home = tempHome();
   const responses = runMcp([
     {
@@ -33,11 +33,6 @@ test("MCP server initializes and lists LCM tools", () => {
 
   assert.equal(responses[0].result.protocolVersion, SUPPORTED_PROTOCOL_VERSION);
   assert.equal(responses[0].result.serverInfo.name, "codex-lcm");
-  assert.match(
-    responses[0].result.instructions,
-    /Preferred standard workflow: lcm_grep -> lcm_describe -> lcm_expand\./u,
-  );
-  assert.match(responses[0].result.instructions, /mcp__codex_lcm__lcm_grep/u);
   const toolNames = responses[1].result.tools.map((tool: { name: string }) => tool.name);
   assert.deepEqual(
     toolNames,
@@ -65,14 +60,15 @@ test("MCP server initializes and lists LCM tools", () => {
     assert.equal(toolNames.includes(name), true, `${name} missing from tools/list`);
   }
   const grepTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_grep");
-  assert.match(grepTool.description, /Preferred standard workflow step 1/u);
-  assert.match(grepTool.description, /mcp__codex_lcm__lcm_grep/u);
   const describeTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_describe");
-  assert.match(describeTool.description, /Preferred standard workflow step 2/u);
-  assert.match(describeTool.description, /mcp__codex_lcm__lcm_describe/u);
   const expandTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_expand");
-  assert.match(expandTool.description, /Preferred standard workflow step 3/u);
-  assert.match(expandTool.description, /mcp__codex_lcm__lcm_expand/u);
+  assert.deepEqual(grepTool.inputSchema.properties.contentScope, {
+    type: "string",
+    enum: ["memory", "overflow", "both"],
+    default: "memory",
+  });
+  assert.equal(describeTool.inputSchema.properties.includeLineage.type, "boolean");
+  assert.deepEqual(expandTool.inputSchema.required, ["nodeId"]);
   const expandQueryTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_expand_query");
   assert.equal(expandQueryTool.inputSchema.properties.budgetTokens.default, 2000);
   assert.equal(expandQueryTool.inputSchema.properties.overview.type, "boolean");
@@ -80,7 +76,14 @@ test("MCP server initializes and lists LCM tools", () => {
   assert.equal(contextPlanTool.inputSchema.properties.canControlCompaction.const, false);
   const listTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_list_sessions");
   assert.equal(listTool.inputSchema.properties.includeSummaries.type, "boolean");
-  assert.equal(describeTool.inputSchema.properties.includeLineage.type, "boolean");
+  for (const tool of responses[1].result.tools) {
+    assert.deepEqual(tool.annotations, {
+      readOnlyHint: tool.name !== "lcm_record_note",
+      destructiveHint: false,
+      idempotentHint: tool.name !== "lcm_record_note",
+      openWorldHint: false,
+    });
+  }
 });
 
 test("MCP server falls back to its supported protocol version", () => {

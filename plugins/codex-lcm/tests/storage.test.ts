@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -6,8 +7,9 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 
 import { normalizeHookEvent, type NormalizedEvent } from "../src/events.ts";
+import { appendRawEvents, readRawLog, withRawLogLock } from "../src/raw-log.ts";
 import { sha256 } from "../src/redact.ts";
-import { createStorage } from "../src/storage.ts";
+import { createStorage, LcmStorage } from "../src/storage.ts";
 import { clearDerivedSummaries, readJsonl, tempHome } from "./helpers.ts";
 
 const now = () => new Date("2026-06-09T12:00:00.000Z");
@@ -75,6 +77,7 @@ test("stats reports aggregate summary and graph shape without raw content", () =
   assert.equal(stats.latest_summary_node_at, "2026-06-09T12:00:08.000Z");
   assert.equal(stats.graph_nodes_by_kind.event, 9);
   assert.equal(stats.graph_nodes_by_kind.session, 1);
+  assert.equal(stats.graph_nodes_by_kind.summary, 3);
   assert.equal(stats.graph_edges_by_kind.contains, 9);
   assert.equal(stats.graph_edges_by_kind.summary_source, 11);
   assert.equal("raw_json" in stats, false);
@@ -119,6 +122,31 @@ test("read-only single ingest rejects an event that is already raw-durable", () 
   const readOnlyStorage = createStorage({ home, readOnly: true });
 
   assert.throws(() => readOnlyStorage.ingest(event), /read-only storage/u);
+
+  readOnlyStorage.close();
+});
+
+test("read-only bulk ingest rejects with the storage contract message", () => {
+  const home = tempHome();
+  const event = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({
+      session_id: "read-only-bulk-ingest-session",
+      cwd: "/tmp/read-only-bulk-ingest",
+      prompt: "bulk writes stay read only",
+    }),
+    env: {},
+    now,
+  });
+  const storage = createStorage({ home });
+  storage.ingest(event);
+  storage.close();
+  const readOnlyStorage = createStorage({ home, readOnly: true });
+
+  assert.throws(
+    () => readOnlyStorage.ingestMany([event]),
+    { message: "Cannot ingest events with read-only storage." },
+  );
 
   readOnlyStorage.close();
 });
@@ -258,6 +286,22 @@ test("writable storage preserves indexed rows and replays valid events when raw 
   assert.deepEqual(reopened.searchSessions({ query: "complete raw evidence", limit: 5 }).map((match) => match.session_id), [
     "partial-raw-session",
   ]);
+
+  const afterPartial = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({
+      session_id: "partial-followup-session",
+      cwd: "/tmp/partial-followup",
+      prompt: "preserve this event after a partial JSONL tail",
+    }),
+    env: {},
+    now: () => new Date("2026-06-09T12:00:02.000Z"),
+  });
+  reopened.ingest(afterPartial);
+
+  const rawLog = readRawLog(path.join(home, "events.jsonl"));
+  assert.deepEqual(rawLog.events.map((event) => event.event_id), [rawOnly.event_id, afterPartial.event_id]);
+  assert.equal(rawLog.malformedLineCount, 1);
 
   reopened.close();
 });
@@ -829,10 +873,368 @@ test("single ingest keeps a raw-durable event when SQLite indexing fails", () =>
   assert.equal(readJsonl(path.join(home, "events.jsonl")).length, 1);
   assert.match(storage.health().index_error ?? "", /forced single index failure/u);
 
+  storage.ingest(normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({
+      session_id: "single-index-recovery-session",
+      cwd: "/tmp/single-index-failure",
+      prompt: "trigger same-process index recovery",
+    }),
+    env: {},
+    now,
+  }));
+
+  assert.equal(storage.health().event_count, 2);
+  assert.deepEqual(storage.searchSessions({ query: "durable hook survives", limit: 5 }).map((match) => match.session_id), [
+    "single-index-failure-session",
+  ]);
+
   storage.close();
 });
 
-test("bulk ingest surfaces SQLite lock timeouts instead of reporting a successful no-op", () => {
+test("retry after a raw-log fsync failure appends and syncs the event again", () => {
+  const home = tempHome();
+  const storage = createStorage({ home });
+  const event = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({
+      session_id: "single-fsync-failure-session",
+      cwd: "/tmp/single-fsync-failure",
+      prompt: "do not acknowledge an event before its raw bytes are durable",
+    }),
+    env: {},
+    now,
+  });
+  const originalFsyncSync = fs.fsyncSync;
+  let fsyncCalls = 0;
+  fs.fsyncSync = (descriptor) => {
+    fsyncCalls += 1;
+    if (fsyncCalls === 1) throw new Error("forced raw fsync failure");
+    return originalFsyncSync(descriptor);
+  };
+
+  try {
+    assert.throws(() => storage.ingest(event), /forced raw fsync failure/u);
+    assert.deepEqual(readRawLog(path.join(home, "events.jsonl")).events, []);
+    storage.ingest(event);
+    assert.deepEqual(readRawLog(path.join(home, "events.jsonl")).events.map(({ event_id }) => event_id), [event.event_id]);
+    assert.equal(fsyncCalls >= 3, true);
+  } finally {
+    fs.fsyncSync = originalFsyncSync;
+    storage.close();
+  }
+});
+
+test("raw-log coordinator setup failures do not enter the callback", () => {
+  const home = tempHome();
+  const rawLogPath = path.join(home, "events.jsonl");
+  fs.mkdirSync(`${rawLogPath}.lock.sqlite`);
+  let entered = false;
+
+  assert.throws(() => withRawLogLock(rawLogPath, () => { entered = true; }));
+  assert.equal(entered, false);
+});
+
+test("constructor replay leaves an interleaved raw append visible to the next opener", () => {
+  // Given: one raw event and an append injected after replay takes its snapshot.
+  const home = tempHome();
+  const rawLogPath = path.join(home, "events.jsonl");
+  const seed = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "replay-seed", cwd: "/tmp/replay-race", prompt: "seed" }),
+    env: {},
+    now,
+  });
+  const interleaved = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "replay-interleaved", cwd: "/tmp/replay-race", prompt: "interleaved" }),
+    env: {},
+    now: () => new Date("2026-06-09T12:00:01.000Z"),
+  });
+  withRawLogLock(rawLogPath, () => appendRawEvents(rawLogPath, [seed]));
+  const prototype = LcmStorage.prototype as unknown as {
+    indexEventInTransaction: (event: NormalizedEvent, options: { rebuildSummary: boolean }) => unknown;
+  };
+  const originalIndexEventInTransaction = prototype.indexEventInTransaction;
+  let appended = false;
+  prototype.indexEventInTransaction = function (event, options) {
+    if (!appended) {
+      appended = true;
+      withRawLogLock(rawLogPath, () => appendRawEvents(rawLogPath, [interleaved]));
+    }
+    return originalIndexEventInTransaction.call(this, event, options);
+  };
+
+  // When: the first opener completes replay, then a second opener checks the persisted state.
+  try {
+    const first = createStorage({ home });
+    first.close();
+  } finally {
+    prototype.indexEventInTransaction = originalIndexEventInTransaction;
+  }
+  const reopened = createStorage({ home });
+
+  // Then: the append that raced replay is present in both authority and index.
+  assert.equal(readRawLog(rawLogPath).events.length, 2);
+  assert.equal(reopened.health().event_count, 2);
+  assert.equal(reopened.hasEvent(interleaved.event_id), true);
+  reopened.close();
+});
+
+test("raw-log workers with the same PID do not clear each other's active lock", async () => {
+  // Given: worker A owns the raw lock long enough for worker B to poll it.
+  const home = tempHome();
+  const rawLogPath = path.join(home, "events.jsonl");
+  const activePath = path.join(home, "worker-holder-active");
+  const rawLogModuleUrl = new URL("../src/raw-log.ts", import.meta.url).href;
+  const holder = new Worker(String.raw`
+    const fs = require("node:fs");
+    const { parentPort, workerData } = require("node:worker_threads");
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    (async () => {
+      const { withRawLogLock } = await import(workerData.rawLogModuleUrl);
+      withRawLogLock(workerData.rawLogPath, () => {
+        fs.writeFileSync(workerData.activePath, "active");
+        parentPort.postMessage("locked");
+        Atomics.wait(wait, 0, 0, 250);
+        fs.unlinkSync(workerData.activePath);
+      });
+    })();
+  `, { eval: true, workerData: { activePath, rawLogModuleUrl, rawLogPath } });
+  const holderDone = new Promise<void>((resolve, reject) => {
+    holder.once("error", reject);
+    holder.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`holder worker exited ${code}`)));
+  });
+  await new Promise<void>((resolve, reject) => {
+    holder.once("error", reject);
+    holder.once("message", () => resolve());
+  });
+  const waiter = new Worker(String.raw`
+    const fs = require("node:fs");
+    const { workerData } = require("node:worker_threads");
+    (async () => {
+      const { withRawLogLock } = await import(workerData.rawLogModuleUrl);
+      withRawLogLock(workerData.rawLogPath, () => {
+        if (fs.existsSync(workerData.activePath)) throw new Error("waiter worker entered concurrently");
+      });
+    })();
+  `, { eval: true, workerData: { activePath, rawLogModuleUrl, rawLogPath } });
+
+  // When: worker B attempts to acquire the same raw-log lock.
+  const waiterDone = new Promise<void>((resolve, reject) => {
+    waiter.once("error", reject);
+    waiter.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`waiter worker exited ${code}`)));
+  });
+
+  // Then: worker B enters only after worker A releases.
+  try {
+    await Promise.all([holderDone, waiterDone]);
+  } finally {
+    await Promise.all([holder.terminate(), waiter.terminate()]);
+  }
+});
+
+test("raw-log waiter times out without evicting an active owner after ten seconds", async () => {
+  // Given: a separate process that holds the writer lock beyond the former stale timeout.
+  const home = tempHome();
+  const rawLogPath = path.join(home, "events.jsonl");
+  const activePath = path.join(home, "holder-active");
+  const moduleUrl = new URL("../src/raw-log.ts", import.meta.url).href;
+  const holderEvent = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "slow-holder", cwd: "/tmp/slow-holder", prompt: "holder" }),
+    env: {},
+    now,
+  });
+  const waiterEvent = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "slow-waiter", cwd: "/tmp/slow-waiter", prompt: "waiter" }),
+    env: {},
+    now: () => new Date("2026-06-09T12:00:01.000Z"),
+  });
+  const holder = spawn(process.execPath, [
+    "--no-warnings",
+    "--input-type=module",
+    "--eval",
+    `const fs = await import("node:fs"); const { appendRawEvents, withRawLogLock } = await import(process.env.RAW_LOG_MODULE_URL); const wait = new Int32Array(new SharedArrayBuffer(4)); withRawLogLock(process.env.RAW_LOG_PATH, () => { fs.writeFileSync(process.env.ACTIVE_PATH, "active"); process.stdout.write("locked\\n"); Atomics.wait(wait, 0, 0, 10500); fs.unlinkSync(process.env.ACTIVE_PATH); appendRawEvents(process.env.RAW_LOG_PATH, [JSON.parse(process.env.RAW_EVENT)]); });`,
+  ], {
+    env: {
+      ...process.env,
+      ACTIVE_PATH: activePath,
+      RAW_EVENT: JSON.stringify(holderEvent),
+      RAW_LOG_MODULE_URL: moduleUrl,
+      RAW_LOG_PATH: rawLogPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const holderDone = new Promise<void>((resolve, reject) => {
+    holder.once("error", reject);
+    holder.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`holder exited ${code}`)));
+  });
+  const holderReady = await new Promise<string>((resolve, reject) => {
+    holder.once("error", reject);
+    holder.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString("utf8")));
+    holder.once("exit", (code) => reject(new Error(`holder exited before acquiring lock: ${code}`)));
+  });
+  assert.match(holderReady, /locked/u);
+
+  // When: another process waits to append while the owner stays active beyond ten seconds.
+  const waiter = spawnSync(process.execPath, [
+    "--no-warnings",
+    "--input-type=module",
+    "--eval",
+    `const fs = await import("node:fs"); const { appendRawEvents, withRawLogLock } = await import(process.env.RAW_LOG_MODULE_URL); withRawLogLock(process.env.RAW_LOG_PATH, () => { if (fs.existsSync(process.env.ACTIVE_PATH)) throw new Error("waiter entered concurrently"); appendRawEvents(process.env.RAW_LOG_PATH, [JSON.parse(process.env.RAW_EVENT)]); });`,
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ACTIVE_PATH: activePath,
+      RAW_EVENT: JSON.stringify(waiterEvent),
+      RAW_LOG_MODULE_URL: moduleUrl,
+      RAW_LOG_PATH: rawLogPath,
+    },
+    timeout: 15_000,
+  });
+
+  await holderDone;
+
+  // Then: the waiter fails without entering or evicting the live owner.
+  assert.equal(waiter.status, 1, waiter.stderr || `waiter terminated with ${waiter.signal}`);
+  assert.match(waiter.stderr, /RawLogLockTimeoutError: codex-lcm: raw log lock timeout:/u);
+  assert.deepEqual(readRawLog(rawLogPath).events.map(({ event_id }) => event_id), [holderEvent.event_id]);
+});
+
+test("raw-log coordinator contention uses the typed ten-second timeout", async () => {
+  // Given: another process holds the current-version stale-cleanup coordinator.
+  const home = tempHome();
+  const rawLogPath = path.join(home, "events.jsonl");
+  const coordinatorPath = `${rawLogPath}.lock.sqlite`;
+  const moduleUrl = new URL("../src/raw-log.ts", import.meta.url).href;
+  const holder = spawn(process.execPath, [
+    "--no-warnings",
+    "--input-type=module",
+    "--eval",
+    `const { DatabaseSync } = await import("node:sqlite"); const wait = new Int32Array(new SharedArrayBuffer(4)); const db = new DatabaseSync(process.env.COORDINATOR_PATH); db.exec("BEGIN IMMEDIATE"); process.stdout.write("locked\\n"); Atomics.wait(wait, 0, 0, 10500); db.exec("ROLLBACK"); db.close();`,
+  ], {
+    env: { ...process.env, COORDINATOR_PATH: coordinatorPath },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const holderDone = new Promise<void>((resolve, reject) => {
+    holder.once("error", reject);
+    holder.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`coordinator holder exited ${code}`)));
+  });
+  await new Promise<void>((resolve, reject) => {
+    holder.once("error", reject);
+    holder.stdout.once("data", () => resolve());
+  });
+
+  // When: a raw writer waits for the coordinator deadline.
+  const waiter = spawnSync(process.execPath, [
+    "--no-warnings",
+    "--input-type=module",
+    "--eval",
+    `const { withRawLogLock } = await import(process.env.RAW_LOG_MODULE_URL); withRawLogLock(process.env.RAW_LOG_PATH, () => { throw new Error("coordinator waiter entered"); });`,
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, RAW_LOG_MODULE_URL: moduleUrl, RAW_LOG_PATH: rawLogPath },
+    timeout: 15_000,
+  });
+  await holderDone;
+
+  // Then: the callback never runs and the typed timeout reaches the process boundary.
+  assert.equal(waiter.status, 1, waiter.stderr || `waiter terminated with ${waiter.signal}`);
+  assert.match(waiter.stderr, /RawLogLockTimeoutError: codex-lcm: raw log lock timeout:/u);
+  assert.doesNotMatch(waiter.stderr, /coordinator waiter entered/u);
+});
+
+test("derived index work does not hold the raw-log writer lock", () => {
+  // Given: a parent ingest whose derived index step launches an independent raw writer.
+  const home = tempHome();
+  const rawLogPath = path.join(home, "events.jsonl");
+  const storage = createStorage({ home });
+  const parent = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "slow-index-parent", cwd: "/tmp/slow-index", prompt: "parent" }),
+    env: {},
+    now,
+  });
+  const child = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "slow-index-child", cwd: "/tmp/slow-index", prompt: "child" }),
+    env: {},
+    now: () => new Date("2026-06-09T12:00:01.000Z"),
+  });
+  const internals = storage as unknown as {
+    indexEventInTransaction: (event: NormalizedEvent, options: { rebuildSummary: boolean }) => unknown;
+  };
+  const originalIndexEventInTransaction = internals.indexEventInTransaction;
+  let childResult: ReturnType<typeof spawnSync> | undefined;
+  internals.indexEventInTransaction = function (event, options) {
+    childResult = spawnSync(process.execPath, [
+      "--no-warnings",
+      "--input-type=module",
+      "--eval",
+      `const { appendRawEvents, withRawLogLock } = await import(process.env.RAW_LOG_MODULE_URL); withRawLogLock(process.env.RAW_LOG_PATH, () => appendRawEvents(process.env.RAW_LOG_PATH, [JSON.parse(process.env.RAW_EVENT)]));`,
+    ], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        RAW_EVENT: JSON.stringify(child),
+        RAW_LOG_MODULE_URL: new URL("../src/raw-log.ts", import.meta.url).href,
+        RAW_LOG_PATH: rawLogPath,
+      },
+      timeout: 1_500,
+    });
+    return originalIndexEventInTransaction.call(this, event, options);
+  };
+
+  // When: the parent reaches derived indexing.
+  try {
+    storage.ingest(parent);
+  } finally {
+    internals.indexEventInTransaction = originalIndexEventInTransaction;
+  }
+
+  // Then: the child acquires the raw lock before parent derived work finishes.
+  const childError = typeof childResult?.stderr === "string" && childResult.stderr.length > 0
+    ? childResult.stderr
+    : `child terminated with ${childResult?.signal}`;
+  assert.equal(childResult?.status, 0, childError);
+  assert.equal(readRawLog(rawLogPath).events.length, 2);
+  storage.close();
+});
+
+test("raw event ID cache invalidates after a same-size edit with restored mtime", () => {
+  // Given: a cached ID set and an external same-size raw rewrite that restores mtime.
+  const home = tempHome();
+  const rawLogPath = path.join(home, "events.jsonl");
+  const storage = createStorage({ home });
+  const event = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "cache-rewrite", cwd: "/tmp/cache-rewrite", prompt: "restore me" }),
+    env: {},
+    now,
+  });
+  storage.ingest(event);
+  const pinnedMtime = new Date("2026-06-09T11:59:00.000Z");
+  fs.utimesSync(rawLogPath, pinnedMtime, pinnedMtime);
+  assert.equal(storage.ingestMany([event]).skippedDuplicate, 1);
+  const before = fs.statSync(rawLogPath);
+  const replacementId = "f".repeat(event.event_id.length);
+  fs.writeFileSync(rawLogPath, fs.readFileSync(rawLogPath, "utf8").replace(event.event_id, replacementId));
+  fs.utimesSync(rawLogPath, before.atime, before.mtime);
+
+  // When: the original event is ingested again.
+  const result = storage.ingestMany([event]);
+
+  // Then: the changed ctime forces a rescan and restores the missing raw event.
+  assert.equal(result.imported, 1);
+  assert.equal(result.skippedDuplicate, 0);
+  assert.deepEqual(new Set(readRawLog(rawLogPath).events.map(({ event_id }) => event_id)), new Set([replacementId, event.event_id]));
+  storage.close();
+});
+
+test("bulk ingest persists raw JSONL before surfacing a SQLite lock timeout", () => {
   const home = tempHome();
   const storage = createStorage({ home });
   const blocker = new DatabaseSync(path.join(home, "index.sqlite"));
@@ -850,7 +1252,7 @@ test("bulk ingest surfaces SQLite lock timeouts instead of reporting a successfu
   blocker.exec("BEGIN IMMEDIATE");
   try {
     assert.throws(() => storage.ingestMany([event]), /database is locked/iu);
-    assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
+    assert.equal(readJsonl(path.join(home, "events.jsonl")).length, 1);
   } finally {
     blocker.exec("ROLLBACK");
     blocker.close();
@@ -858,7 +1260,7 @@ test("bulk ingest surfaces SQLite lock timeouts instead of reporting a successfu
   }
 });
 
-test("single ingest surfaces SQLite lock timeouts before raw persistence", () => {
+test("single ingest keeps a raw-durable event when SQLite is locked", () => {
   const home = tempHome();
   const storage = createStorage({ home });
   const blocker = new DatabaseSync(path.join(home, "index.sqlite"));
@@ -875,8 +1277,9 @@ test("single ingest surfaces SQLite lock timeouts before raw persistence", () =>
 
   blocker.exec("BEGIN IMMEDIATE");
   try {
-    assert.throws(() => storage.ingest(event), /database is locked/iu);
-    assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
+    assert.doesNotThrow(() => storage.ingest(event));
+    assert.equal(readJsonl(path.join(home, "events.jsonl")).length, 1);
+    assert.match(storage.health().index_error ?? "", /database is locked/iu);
   } finally {
     blocker.exec("ROLLBACK");
     blocker.close();
@@ -975,6 +1378,111 @@ test("indexes large path-backed tool outputs as file references", () => {
   const described = storage.getFileRef(refs[0].file_ref_id);
   assert.deepEqual(described, refs[0]);
 
+  storage.close();
+});
+
+test("overflow search scans references older than the former fixed ceiling", () => {
+  const home = tempHome();
+  const storage = createStorage({ home });
+  const overflowDir = path.join(home, "overflow");
+  fs.mkdirSync(overflowDir, { recursive: true });
+  const events = Array.from({ length: 257 }, (_, index) => {
+    const content = index === 0 ? "overflow-beyond-ceiling-needle" : `overflow filler ${index}`;
+    const hash = sha256(content);
+    const overflowPath = path.join(overflowDir, `${hash}.json`);
+    fs.writeFileSync(overflowPath, content);
+    return normalizeHookEvent({
+      hookEvent: "PostToolUse",
+      rawInput: JSON.stringify({
+        session_id: `overflow-ceiling-${index}`,
+        cwd: "/tmp/overflow-ceiling",
+        overflow_ref: {
+          sha256: hash,
+          byte_count: Buffer.byteLength(content),
+          sanitized_byte_count: Buffer.byteLength(content),
+          path: overflowPath,
+        },
+      }),
+      env: {},
+      now: () => new Date(Date.UTC(2026, 5, 9, 12, 0, index)),
+    });
+  });
+  storage.ingestMany(events);
+
+  const matches = storage.searchOverflow({ query: "overflow-beyond-ceiling-needle", limit: 1 });
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].session_id, "overflow-ceiling-0");
+  storage.close();
+});
+
+test("overflow search bounds verified bytes without charging invalid references", () => {
+  const home = tempHome();
+  const storage = createStorage({ home });
+  const overflowDir = path.join(home, "overflow");
+  fs.mkdirSync(overflowDir, { recursive: true });
+  const needle = "overflow-budget-old-needle";
+  const needleHash = sha256(needle);
+  const needlePath = path.join(overflowDir, `${needleHash}.json`);
+  fs.writeFileSync(needlePath, needle);
+  const events = [normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: "overflow-budget-old",
+      cwd: "/tmp/overflow-budget",
+      overflow_ref: {
+        sha256: needleHash,
+        byte_count: Buffer.byteLength(needle),
+        sanitized_byte_count: Buffer.byteLength(needle),
+        path: needlePath,
+      },
+    }),
+    env: {},
+    now,
+  })];
+  for (let index = 1; index <= 5; index += 1) {
+    const hash = sha256(`missing overflow ${index}`);
+    events.push(normalizeHookEvent({
+      hookEvent: "PostToolUse",
+      rawInput: JSON.stringify({
+        session_id: `overflow-budget-${index}`,
+        cwd: "/tmp/overflow-budget",
+        overflow_ref: {
+          sha256: hash,
+          byte_count: 16 * 1024 * 1024,
+          sanitized_byte_count: 16 * 1024 * 1024,
+          path: path.join(overflowDir, `${hash}.json`),
+        },
+      }),
+      env: {},
+      now: () => new Date(Date.UTC(2026, 5, 9, 12, 0, index)),
+    }));
+  }
+  storage.ingestMany(events);
+
+  assert.equal(storage.searchOverflow({ query: needle, limit: 1 })[0]?.session_id, "overflow-budget-old");
+
+  const filler = Buffer.alloc(16 * 1024 * 1024, "x");
+  const fillerHash = sha256(filler);
+  const fillerPath = path.join(overflowDir, `${fillerHash}.json`);
+  fs.writeFileSync(fillerPath, filler);
+  storage.ingestMany(Array.from({ length: 5 }, (_, index) => normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: `overflow-budget-valid-${index}`,
+      cwd: "/tmp/overflow-budget",
+      overflow_ref: {
+        sha256: fillerHash,
+        byte_count: filler.length,
+        sanitized_byte_count: filler.length,
+        path: fillerPath,
+      },
+    }),
+    env: {},
+    now: () => new Date(Date.UTC(2026, 5, 9, 12, 0, 10 + index)),
+  })));
+
+  assert.deepEqual(storage.searchOverflow({ query: needle, limit: 1 }), []);
   storage.close();
 });
 
@@ -1252,9 +1760,14 @@ test("cleanup acquires the write lock before snapshotting searchable events", ()
 
   const beginIndex = calls.findIndex((sql) => sql === "BEGIN IMMEDIATE");
   const snapshotIndex = calls.findIndex((sql) => sql.includes("SELECT raw_json") && sql.includes("FROM events"));
+  const optimizeIndex = calls.findIndex((sql) => sql === "INSERT INTO event_fts(event_fts) VALUES('optimize')");
+  const vacuumIndex = calls.findIndex((sql) => sql === "VACUUM");
   assert.equal(beginIndex >= 0, true);
   assert.equal(snapshotIndex >= 0, true);
+  assert.equal(optimizeIndex >= 0, true);
+  assert.equal(vacuumIndex >= 0, true);
   assert.equal(beginIndex < snapshotIndex, true);
+  assert.equal(optimizeIndex < vacuumIndex, true);
 });
 
 test("raw fallback usage includes more than one page of sessions", () => {
@@ -2184,15 +2697,7 @@ async function runConcurrentIngestWriters(
     };
     const originalAppendFileSync = fs.appendFileSync;
     fs.appendFileSync = (...args) => {
-      if (args[0] === workerData.rawLogPath) {
-        signal(2);
-        while (Atomics.load(state, 2) < 2 && Atomics.load(state, 3) < 2) {
-          const version = Atomics.load(state, 4);
-          if (Atomics.load(state, 2) < 2 && Atomics.load(state, 3) < 2) {
-            Atomics.wait(state, 4, version);
-          }
-        }
-      }
+      if (args[0] === workerData.rawLogPath) signal(2);
       return originalAppendFileSync(...args);
     };
 
