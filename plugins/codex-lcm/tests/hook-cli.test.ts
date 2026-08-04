@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { Worker } from "node:worker_threads";
 
 import { assertCliOk, clearDerivedSummaries, readJsonl, runCli, tempHome } from "./helpers.ts";
 
@@ -32,6 +33,85 @@ test("hook command ingests a synthetic projectless prompt event", () => {
   const health = runCli(["health", "--json"], {
     env: { CODEX_LCM_HOME: home },
   });
+  assertCliOk(health);
+  assert.equal(JSON.parse(health.stdout).event_count, 1);
+});
+
+test("hook command reports raw fsync failure and persists on retry", () => {
+  // Given: the real hook CLI loads a fault injector that fails raw fsync.
+  const home = tempHome();
+  const preloadPath = path.join(tempHome("codex-lcm-fsync-preload-"), "fail-fsync.mjs");
+  fs.writeFileSync(
+    preloadPath,
+    'import fs from "node:fs"; const original = fs.fsyncSync; let calls = 0; fs.fsyncSync = (...args) => { calls += 1; if (calls === 1) throw new Error("forced raw fsync failure"); return original(...args); };\n',
+  );
+  const input = JSON.stringify({
+    session_id: "hook-fsync-retry",
+    cwd: "/tmp/hook-fsync-retry",
+    prompt: "persist once after fsync recovers",
+  });
+
+  // When: raw durability fails before the hook can acknowledge the event.
+  const blocked = spawnSync(process.execPath, [
+    "--no-warnings",
+    "--import",
+    preloadPath,
+    "bin/codex-lcm",
+    "hook",
+    "UserPromptSubmit",
+  ], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+    input,
+    env: { ...process.env, CODEX_LCM_HOME: home },
+  });
+
+  // Then: failure is visible and rollback leaves no acknowledged raw event.
+  assert.equal(blocked.status, 1, blocked.stderr);
+  assert.match(blocked.stderr, /forced raw fsync failure/u);
+  assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
+
+  // When: the same hook is retried without the injected failure.
+  const retried = runCli(["hook", "UserPromptSubmit"], { input, env: { CODEX_LCM_HOME: home } });
+
+  // Then: exactly one raw and indexed event persists.
+  assertCliOk(retried);
+  assert.equal(readJsonl(path.join(home, "events.jsonl")).length, 1);
+  const health = runCli(["health", "--json"], { env: { CODEX_LCM_HOME: home } });
+  assertCliOk(health);
+  assert.equal(JSON.parse(health.stdout).event_count, 1);
+});
+
+test("hook recovers after its lock-owning worker terminates", async () => {
+  // Given: a worker owns the raw-log coordinator, enters its callback, then terminates.
+  const home = tempHome();
+  const rawLogPath = path.join(home, "events.jsonl");
+  const rawLogModuleUrl = new URL("../src/raw-log.ts", import.meta.url).href;
+  const writer = new Worker(String.raw`
+    const { parentPort, workerData } = require("node:worker_threads");
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    (async () => {
+      const { withRawLogLock } = await import(workerData.rawLogModuleUrl);
+      withRawLogLock(workerData.rawLogPath, () => {
+        parentPort.postMessage("locked");
+        Atomics.wait(wait, 0, 0);
+      });
+    })();
+  `, { eval: true, workerData: { rawLogModuleUrl, rawLogPath } });
+  await new Promise<void>((resolve, reject) => {
+    writer.once("message", () => resolve());
+    writer.once("error", reject);
+  });
+  await writer.terminate();
+  const input = JSON.stringify({ session_id: "worker-owner-retry", cwd: "/tmp/worker-owner", prompt: "persist after worker owner crash" });
+
+  // When: another real hook writes after SQLite releases the terminated worker's transaction.
+  const retried = runCli(["hook", "UserPromptSubmit"], { input, env: { CODEX_LCM_HOME: home }, timeout: 15_000 });
+
+  // Then: the retry persists exactly one event without manual lock cleanup.
+  assertCliOk(retried);
+  assert.equal(readJsonl(rawLogPath).length, 1);
+  const health = runCli(["health", "--json"], { env: { CODEX_LCM_HOME: home } });
   assertCliOk(health);
   assert.equal(JSON.parse(health.stdout).event_count, 1);
 });
@@ -76,6 +156,21 @@ test("cleanup --json treats a fresh home as an empty no-op", () => {
     summaries_rebuilt: 0,
     vacuumed: false,
   });
+});
+
+test("CLI rejects missing and invalid option values", () => {
+  const cases = [
+    { args: ["import-codex-sessions", "--from"], flag: "--from" },
+    { args: ["import-codex-sessions", "--batch-size", "nope"], flag: "--batch-size" },
+    { args: ["sessions", "--limit", "0"], flag: "--limit" },
+    { args: ["status", "--codex-home", "--json"], flag: "--codex-home" },
+  ];
+
+  for (const { args, flag } of cases) {
+    const result = runCli(args, { env: { CODEX_LCM_HOME: tempHome() } });
+    assert.equal(result.status, 1, `${args.join(" ")} unexpectedly succeeded`);
+    assert.match(result.stderr, new RegExp(flag, "u"));
+  }
 });
 
 test("hook command stores a sanitized overflow reference for oversized valid input", () => {
@@ -158,6 +253,86 @@ test("hook command captures git metadata as optional session metadata", () => {
   }>;
   assert.equal(fs.realpathSync(event.repo_root ?? ""), fs.realpathSync(repo));
   assert.equal(event.git_branch, "feature/test");
+});
+
+test("tool hooks skip Git metadata probes", () => {
+  if (process.platform === "win32") return;
+  const home = tempHome();
+  const repoRootResult = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(repoRootResult.status, 0, repoRootResult.stderr);
+  const repoRoot = repoRootResult.stdout.trim();
+  const binDir = tempHome("codex-lcm-fake-git-");
+  const gitLog = path.join(binDir, "git.log");
+  const fakeGit = path.join(binDir, "git");
+  fs.writeFileSync(fakeGit, '#!/bin/sh\nprintf "called\\n" >> "$GIT_LOG"\nexit 1\n', { mode: 0o755 });
+  const env = {
+    CODEX_LCM_HOME: home,
+    GIT_LOG: gitLog,
+    PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+  };
+  const start = runCli(["hook", "SessionStart"], {
+    input: JSON.stringify({ session_id: "tool-git-session", cwd: process.cwd() }),
+    env: { CODEX_LCM_HOME: home },
+  });
+  assertCliOk(start);
+
+  for (const hookEvent of ["PreToolUse", "PostToolUse"]) {
+    const result = runCli(["hook", hookEvent], {
+      input: JSON.stringify({ session_id: "tool-git-session", cwd: process.cwd(), tool_name: "Read" }),
+      env,
+    });
+    assertCliOk(result);
+  }
+
+  assert.equal(fs.existsSync(gitLog), false);
+  const toolEvents = (readJsonl(path.join(home, "events.jsonl")) as Array<{
+    hook_event: string;
+    repo_root?: string;
+  }>).filter((event) => event.hook_event === "PreToolUse" || event.hook_event === "PostToolUse");
+  assert.equal(toolEvents.length, 2);
+  assert.equal(toolEvents.every((event) => typeof event.repo_root === "string" && event.repo_root.length > 0), true);
+  assert.equal(toolEvents.every((event) => fs.realpathSync(event.repo_root ?? "") === fs.realpathSync(repoRoot)), true);
+});
+
+test("tool hook closes storage when session metadata lookup fails", () => {
+  // Given: the real hook CLI loads an injector that fails tool-session lookup and records storage cleanup.
+  const home = tempHome();
+  const fixtureDir = tempHome("codex-lcm-hook-close-");
+  const closeMarker = path.join(fixtureDir, "closed");
+  const preloadPath = path.join(fixtureDir, "fail-session-lookup.mjs");
+  const storageModuleUrl = new URL("../src/storage.ts", import.meta.url).href;
+  fs.writeFileSync(preloadPath, `
+    import fs from "node:fs";
+    const { LcmStorage } = await import(process.env.STORAGE_MODULE_URL);
+    const originalClose = LcmStorage.prototype.close;
+    LcmStorage.prototype.close = function() {
+      fs.writeFileSync(process.env.CLOSE_MARKER, "closed");
+      return originalClose.call(this);
+    };
+    LcmStorage.prototype.getCurrentSession = function() {
+      throw new Error("forced tool-session lookup failure");
+    };
+  `);
+
+  // When: a tool hook fails after storage opens but before ingest begins.
+  const result = spawnSync(process.execPath, [
+    "--no-warnings",
+    "--import",
+    preloadPath,
+    "bin/codex-lcm",
+    "hook",
+    "PreToolUse",
+  ], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+    input: JSON.stringify({ session_id: "tool-close-session", cwd: "/tmp/tool-close", tool_name: "Read" }),
+    env: { ...process.env, CLOSE_MARKER: closeMarker, CODEX_LCM_HOME: home, STORAGE_MODULE_URL: storageModuleUrl },
+  });
+
+  // Then: the failure remains visible and the opened storage is closed.
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /forced tool-session lookup failure/u);
+  assert.equal(fs.existsSync(closeMarker), true);
 });
 
 test("SubagentStop imports only the child portion of a forked rollout", () => {

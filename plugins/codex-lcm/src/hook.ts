@@ -17,7 +17,8 @@ export async function runHook(args: string[]): Promise<void> {
   const transcriptPath = hookEvent === "SubagentStop"
     ? extractStringField(rawInput, "agent_transcript_path")
     : undefined;
-  const repo = resolveGitMetadata(payloadCwd);
+  const toolHook = hookEvent === "PreToolUse" || hookEvent === "PostToolUse";
+  const repo = toolHook ? {} : resolveGitMetadata(payloadCwd);
   const event = normalizeHookEvent({
     hookEvent,
     rawInput,
@@ -48,10 +49,13 @@ export async function runHook(args: string[]): Promise<void> {
     };
   }
   const storage = createStorage({ config });
-  let stored = false;
   try {
+    if (toolHook) {
+      const session = storage.getCurrentSession({ sessionId: event.session_id });
+      event.repo_root = session?.repo_root;
+      event.git_branch = session?.git_branch;
+    }
     storage.ingest(event);
-    stored = true;
     if (transcriptPath) {
       try {
         const report = await importCodexSessions(storage, { from: transcriptPath });
@@ -64,12 +68,9 @@ export async function runHook(args: string[]): Promise<void> {
         );
       }
     }
-  } catch (error) {
-    process.stderr.write(`codex-lcm: failed to store hook event: ${error instanceof Error ? error.message : String(error)}\n`);
   } finally {
     storage.close();
   }
-  if (!stored) return;
   const output = postCompactRecoveryOutput({
     home: config.home,
     hookEvent: event.hook_event,
