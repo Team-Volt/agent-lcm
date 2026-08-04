@@ -236,7 +236,7 @@ export const TOOLS = [
   {
     name: "lcm_pack_context",
     title: "LCM Pack Context",
-    description: "Recover and resume prior Codex work after compaction, interruption, or handoff. Returns model-ready, token-budgeted Markdown from relevant session summaries and source evidence.",
+    description: "Recover and resume prior Codex work after compaction, interruption, or handoff. Call once, then consume the model-ready Markdown from that result's structuredContent.markdown; do not call again to retrieve it.",
     inputSchema: {
       type: "object",
       properties: {

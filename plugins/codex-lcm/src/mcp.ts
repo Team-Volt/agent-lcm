@@ -119,7 +119,7 @@ function handleMessage(message: JsonRpcRequest): void {
         "Use Codex LCM for sanitized local evidence from prior Codex sessions.",
         "Preferred standard workflow: lcm_grep -> lcm_describe -> lcm_expand.",
         "Codex may expose lcm_grep as mcp__codex_lcm__lcm_grep; use the equivalent host-qualified names for the other steps.",
-        "Use lcm_expand_query for focused recursive evidence and lcm_pack_context for bounded model-ready recovery after compaction, interruption, or handoff.",
+        "Use lcm_expand_query for focused recursive evidence. For recovery after compaction, interruption, or handoff, call lcm_pack_context once and consume structuredContent.markdown from that result.",
         "For multi-session reviews, call lcm_list_sessions once with includeSummaries; for exact long-session detail, use lcm_describe before bounded graph or paged event reads.",
       ].join(" "),
     });
