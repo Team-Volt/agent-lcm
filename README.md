@@ -106,7 +106,7 @@ operation.
 Install the latest tagged release from GitHub with Codex's native plugin flow:
 
 ```sh
-codex plugin marketplace add Team-Volt/codex-lcm --ref v0.2.8
+codex plugin marketplace add Team-Volt/codex-lcm --ref v0.2.9
 codex plugin add codex-lcm@codex-lcm
 ```
 
@@ -123,20 +123,20 @@ The native plugin manifest wires the MCP server, lifecycle hooks, and
 The first TUI session after install asks you to review and trust the lifecycle
 hooks. That is expected. Hooks capture the session data that LCM indexes.
 
-Upgrade an existing GitHub marketplace install to `v0.2.8`:
+Upgrade an existing GitHub marketplace install to `v0.2.9`:
 
 ```sh
 codex plugin marketplace remove codex-lcm
-codex plugin marketplace add Team-Volt/codex-lcm --ref v0.2.8
+codex plugin marketplace add Team-Volt/codex-lcm --ref v0.2.9
 codex plugin add codex-lcm@codex-lcm
 ```
 
-Upgrade a local checkout install to `v0.2.8` by checking out the release tag,
+Upgrade a local checkout install to `v0.2.9` by checking out the release tag,
 then asking Codex to refresh the installed plugin cache:
 
 ```sh
 git -C /path/to/codex-lcm fetch --tags origin
-git -C /path/to/codex-lcm checkout v0.2.8
+git -C /path/to/codex-lcm checkout v0.2.9
 codex plugin add codex-lcm@codex-lcm
 ```
 
@@ -165,7 +165,7 @@ codex plugin remove codex-lcm@codex-lcm
 
 ## Release Status
 
-Current release: `v0.2.8`.
+Current release: `v0.2.9`.
 
 Codex LCM is a local-first Codex memory plugin with native plugin installation,
 hook ingestion, sanitized raw event storage, SQLite FTS, DAG-backed retrieval,
@@ -175,19 +175,20 @@ tools. The `lcm-recall` skill gives Codex a repeatable retrieval workflow for
 resumes, compaction recovery, long-running work, and questions about prior
 sessions.
 
-### v0.2.8 notes
+### v0.2.9 notes
 
-This release makes truncated payloads recoverable through search and description
-tools, adds a repeatable retrieval-quality benchmark, and fixes two data-shape
-issues in stored and packed results.
+This release hardens raw event durability, fixes post-compaction recovery so it
+packs context once without exposing internal recovery work, expands secret
+redaction, and improves paraphrase recall guidance and measurement.
 
-- Preserves sanitized overflow payloads, lets `lcm_grep` search them, and pages
-  verified content through `lcm_describe`.
-- Adds `codex-lcm benchmark retrieval-quality` with Recall@1, Recall@5, mean
-  reciprocal rank, category scores, and per-query ranks.
-- Keeps boolean `private` package metadata instead of redacting it as a secret.
-- Returns packed recovery Markdown in MCP structured content so Codex Desktop
-  can restore context from structured tool results.
+- Keeps raw events durable and recoverable across concurrent writers, lock
+  failures, SQLite failures, and interrupted indexing.
+- Requires one successful `lcm_pack_context` result after compaction, then
+  resumes the task without announcing the recovery step.
+- Redacts credential URI passwords and secret assignments nested inside JSON or
+  shell strings while preserving benign token metrics.
+- Expands the retrieval benchmark to 39 sessions and 38 queries, with separate
+  development and holdout results for paraphrase recall.
 
 Use the [Installation](#installation) section for install and upgrade commands.
 
