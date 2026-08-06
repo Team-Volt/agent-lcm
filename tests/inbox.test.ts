@@ -5,6 +5,7 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 
 import { loadConfig } from "../src/config.ts";
+import { decodePersistedEvent } from "../src/event-codec.ts";
 import { normalizeHookEvent } from "../src/events.ts";
 import { drainInbox, publishInboxEvent } from "../src/inbox.ts";
 import { tempHome } from "./helpers.ts";
@@ -47,15 +48,19 @@ test("concurrent conflicting publishers quarantine both events without clobberin
 test("three conflicting publishers quarantine every payload when the original disappears mid-resolution", async () => {
   const config = loadConfig({ home: tempHome() });
   const event = sampleEvent();
-  await publishWithVanishingOriginal(config.home, [
+  const events = [
     event,
     { ...event, raw_input_sha256: "f".repeat(64) },
     { ...event, raw_input_sha256: "e".repeat(64) },
-  ]);
+  ];
+  await publishWithVanishingOriginal(config.home, events);
 
   assert.equal(fs.readdirSync(config.inboxDir).filter((name) => name.endsWith(".json")).length, 0);
   assert.equal(fs.readdirSync(config.inboxDir).some((name) => name.endsWith(".tmp")), false);
-  assert.equal(fs.readdirSync(config.quarantineDir).length, 3);
+  const hashes = fs.readdirSync(config.quarantineDir)
+    .sort()
+    .map((name) => decodePersistedEvent(fs.readFileSync(path.join(config.quarantineDir, name), "utf8")).raw_input_sha256);
+  assert.deepEqual(hashes.sort(), events.map((item) => item.raw_input_sha256).sort());
 });
 
 test("quarantines malformed inbox data without blocking a valid sibling", () => {
