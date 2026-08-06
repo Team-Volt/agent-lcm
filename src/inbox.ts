@@ -81,10 +81,18 @@ function resolveExistingPublication(
       return;
     }
   } catch {
-    // A malformed existing item is quarantined with the conflicting publication.
+    // A missing or malformed original is handled below without exposing its contents.
   }
-  quarantine(config, targetPath, path.basename(targetPath));
   quarantine(config, temporaryPath, `${path.basename(targetPath, ".json")}.conflict.json`);
+  quarantineIfPresent(config, targetPath, path.basename(targetPath));
+}
+
+function quarantineIfPresent(config: LcmConfig, sourcePath: string, targetName: string): void {
+  try {
+    quarantine(config, sourcePath, targetName);
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
 }
 
 function quarantine(config: LcmConfig, sourcePath: string, targetName: string): void {
@@ -124,4 +132,8 @@ function fsyncDirectory(directory: string): void {
 
 function isAlreadyExists(error: unknown): boolean {
   return error instanceof Error && Reflect.get(error, "code") === "EEXIST";
+}
+
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && Reflect.get(error, "code") === "ENOENT";
 }

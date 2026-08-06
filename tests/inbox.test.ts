@@ -44,6 +44,20 @@ test("concurrent conflicting publishers quarantine both events without clobberin
   assert.equal(fs.readdirSync(config.quarantineDir).length, 2);
 });
 
+test("three conflicting publishers quarantine every payload when the original disappears mid-resolution", async () => {
+  const config = loadConfig({ home: tempHome() });
+  const event = sampleEvent();
+  await publishWithVanishingOriginal(config.home, [
+    event,
+    { ...event, raw_input_sha256: "f".repeat(64) },
+    { ...event, raw_input_sha256: "e".repeat(64) },
+  ]);
+
+  assert.equal(fs.readdirSync(config.inboxDir).filter((name) => name.endsWith(".json")).length, 0);
+  assert.equal(fs.readdirSync(config.inboxDir).some((name) => name.endsWith(".tmp")), false);
+  assert.equal(fs.readdirSync(config.quarantineDir).length, 3);
+});
+
 test("quarantines malformed inbox data without blocking a valid sibling", () => {
   const config = loadConfig({ home: tempHome() });
   fs.mkdirSync(config.inboxDir, { recursive: true, mode: 0o700 });
@@ -123,4 +137,62 @@ async function publishConcurrently(home: string, events: ReturnType<typeof sampl
   Atomics.store(control, 1, 1);
   Atomics.notify(control, 1);
   await Promise.all(completions);
+}
+
+async function publishWithVanishingOriginal(home: string, events: ReturnType<typeof sampleEvent>[]): Promise<void> {
+  const control = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
+  const configUrl = new URL("../src/config.ts", import.meta.url).href;
+  const inboxUrl = new URL("../src/inbox.ts", import.meta.url).href;
+  const targetPath = path.join(home, "inbox", `${events[0]!.event_id}.json`);
+  const roles = ["winner", "first", "second"];
+  await Promise.all(events.map((event, index) => new Promise<void>((resolve, reject) => {
+    const worker = new Worker(String.raw`
+      const { parentPort, workerData } = require("node:worker_threads");
+      const fs = require("node:fs");
+      const control = new Int32Array(workerData.control);
+      const originalLink = fs.linkSync;
+      const originalRead = fs.readFileSync;
+      const originalUnlink = fs.unlinkSync;
+      fs.linkSync = (...args) => {
+        if (args[1] === workerData.targetPath) {
+          if (workerData.role === "winner") {
+            const result = originalLink(...args);
+            Atomics.store(control, 0, 1);
+            Atomics.notify(control, 0);
+            return result;
+          }
+          while (Atomics.load(control, 0) === 0) Atomics.wait(control, 0, 0);
+        }
+        return originalLink(...args);
+      };
+      fs.readFileSync = (...args) => {
+        if (workerData.role === "second" && args[0] === workerData.targetPath) {
+          while (Atomics.load(control, 1) === 0) Atomics.wait(control, 1, 0);
+        }
+        return originalRead(...args);
+      };
+      fs.unlinkSync = (...args) => {
+        const result = originalUnlink(...args);
+        if (workerData.role === "first" && args[0] === workerData.targetPath) {
+          Atomics.store(control, 1, 1);
+          Atomics.notify(control, 1);
+        }
+        return result;
+      };
+      (async () => {
+        const { loadConfig } = await import(workerData.configUrl);
+        const { publishInboxEvent } = await import(workerData.inboxUrl);
+        publishInboxEvent(loadConfig({ home: workerData.home }), workerData.event);
+        parentPort.postMessage("done");
+      })().catch((error) => parentPort.postMessage({ error: error.message }));
+    `, {
+      eval: true,
+      workerData: { control: control.buffer, configUrl, inboxUrl, home, event, targetPath, role: roles[index] },
+    });
+    worker.on("message", (message: "done" | { error: string }) => {
+      if (message === "done") resolve();
+      else reject(new Error(message.error));
+    });
+    worker.once("error", reject);
+  })));
 }
