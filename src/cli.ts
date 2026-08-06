@@ -2,6 +2,8 @@ import { loadConfig, pluginRoot } from "./config.ts";
 import { runLongContextBenchmark, runRetrievalQualityBenchmark } from "./benchmark.ts";
 import { importCodexSessions } from "./codex-import.ts";
 import { buildDoctorReport } from "./doctor.ts";
+import { daemonStatus, ensureDaemon, stopDaemon } from "./daemon-client.ts";
+import { startDaemon } from "./daemon.ts";
 import { runHook } from "./hook.ts";
 import { readStatus } from "./installer.ts";
 import { startMcpServer } from "./mcp.ts";
@@ -24,6 +26,28 @@ export async function main(argv: string[]): Promise<void> {
   if (command === "hook") {
     await runHook(rest);
     return;
+  }
+  if (command === "daemon") {
+    const config = loadConfig();
+    if (rest[0] === "run") {
+      await startDaemon(config);
+      return;
+    }
+    if (rest[0] === "start") {
+      await ensureDaemon(config);
+      printObjectOrText(await daemonStatus(config));
+      return;
+    }
+    if (rest[0] === "status") {
+      printObjectOrText(await daemonStatus(config));
+      return;
+    }
+    if (rest[0] === "stop") {
+      await stopDaemon(config);
+      printObjectOrText(await daemonStatus(config));
+      return;
+    }
+    throw new Error("Usage: agent-lcm daemon run|start|status|stop");
   }
   if (command === "status") {
     printObjectOrText(readStatus({ codexHome: optionValue(rest, "--codex-home"), root: pluginRoot() }));
@@ -163,6 +187,7 @@ function printHelp(): void {
   process.stdout.write(`agent-lcm
 
 Commands:
+  agent-lcm daemon run|start|status|stop
   agent-lcm mcp
   agent-lcm hook <event>
   agent-lcm status [--codex-home PATH] [--json]

@@ -45,7 +45,7 @@ export function loadConfig(options: { home?: string; env?: Record<string, string
     inboxDir: path.join(home, "inbox"),
     quarantineDir: path.join(home, "quarantine"),
     runtimeDir: path.join(home, "runtime"),
-    socketPath: path.join(home, "runtime", "agent-lcm.sock"),
+    socketPath: path.join(home, "runtime", "daemon.sock"),
     tokenPath: path.join(home, "runtime", "agent-lcm.token"),
     limits: DEFAULT_LIMITS,
   };

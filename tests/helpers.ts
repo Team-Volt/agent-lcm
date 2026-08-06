@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
@@ -66,4 +67,27 @@ export function clearDerivedSummaries(home: string): void {
   } finally {
     db.close();
   }
+}
+
+export function rawRequest<T>(socketPath: string, request: unknown): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const socket = net.createConnection(socketPath);
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.once("error", reject);
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      socket.end();
+      try {
+        const response = JSON.parse(buffer.slice(0, newline)) as { ok: boolean; result?: T; error?: string };
+        if (!response.ok) reject(new Error(response.error ?? "daemon request failed"));
+        else resolve(response.result as T);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    socket.once("connect", () => socket.write(`${JSON.stringify(request)}\n`));
+  });
 }
