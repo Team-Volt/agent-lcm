@@ -7,6 +7,7 @@ export type HarnessName = (typeof HARNESS_NAMES)[number];
 export function harnessSessionId(harness: HarnessName, nativeId: string): string {
   const id = nativeId.trim();
   if (!id) throw new Error("native session id must not be empty");
+  if (id.startsWith(`${harness}:`)) return id;
   return `${harness}:${id}`;
 }
 
@@ -61,7 +62,7 @@ export function normalizeHookEvent(args: NormalizeHookEventArgs): NormalizedEven
       parse_error: true,
       raw_preview: sanitizedPreview.value,
     };
-    const sessionId = fallbackSessionId(args.hookEvent, cwd, rawHash);
+    const sessionId = codexSessionId(fallbackSessionId(args.hookEvent, cwd, rawHash));
     return finalizeEvent({
       hookEvent: args.hookEvent,
       timestamp,
@@ -80,13 +81,14 @@ export function normalizeHookEvent(args: NormalizeHookEventArgs): NormalizedEven
 
   const payloadObject = isRecord(parsed.value) ? parsed.value : { value: parsed.value };
   const cwd = stringValue(payloadObject.cwd) || env.PWD || process.cwd();
-  const sessionId =
+  const sessionId = codexSessionId(
     stringValue(payloadObject.session_id) ||
     stringValue(payloadObject.sessionId) ||
     stringValue(payloadObject.conversation_id) ||
     stringValue(payloadObject.conversationId) ||
     env.CODEX_SESSION_ID ||
-    fallbackSessionId(args.hookEvent, cwd, rawHash);
+    fallbackSessionId(args.hookEvent, cwd, rawHash),
+  );
   const sanitized = sanitizeForStorage(payloadObject, limits);
 
   return finalizeEvent({
@@ -239,4 +241,10 @@ function stringValue(value: unknown): string | undefined {
 
 function fallbackSessionId(hookEvent: string, cwd: string, rawHash: string): string {
   return `unknown-${sha256(`${hookEvent}\0${cwd}\0${rawHash}`).slice(0, 12)}`;
+}
+
+function codexSessionId(sessionId: string): string {
+  return HARNESS_NAMES.some((harness) => sessionId.startsWith(`${harness}:`))
+    ? sessionId
+    : harnessSessionId("codex", sessionId);
 }

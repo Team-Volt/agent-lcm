@@ -22,7 +22,7 @@ test("normalizes Codex-style hook payloads without project as primary boundary",
   assert.equal(event.hook_event, "UserPromptSubmit");
   assert.equal(event.harness, "codex");
   assert.equal(event.native_event, "UserPromptSubmit");
-  assert.equal(event.session_id, "session-123");
+  assert.equal(event.session_id, "codex:session-123");
   assert.equal(event.cwd, "/tmp/projectless");
   assert.equal(event.project, undefined);
   assert.equal(event.payload.prompt, "remember this");
@@ -34,6 +34,17 @@ test("namespaces native session identifiers by harness", () => {
   assert.deepEqual(HARNESS_NAMES, ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"]);
   assert.equal(harnessSessionId("cursor", "  abc  "), "cursor:abc");
   assert.throws(() => harnessSessionId("codex", "  "), /native session id must not be empty/u);
+});
+
+test("keeps already-namespaced Codex session identifiers stable", () => {
+  const event = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "codex:internal-session", cwd: "/tmp/cwd", prompt: "idempotent" }),
+    env: {},
+    now: fixedNow,
+  });
+
+  assert.equal(event.session_id, "codex:internal-session");
 });
 
 test("accepts camelCase session and tool keys", () => {
@@ -50,7 +61,7 @@ test("accepts camelCase session and tool keys", () => {
     now: fixedNow,
   });
 
-  assert.equal(event.session_id, "camel-session");
+  assert.equal(event.session_id, "codex:camel-session");
   assert.equal(event.tool_name, "Read");
   assert.deepEqual(event.payload.toolArgs, { file_path: "README.md" });
   assert.deepEqual(event.payload.toolResult, { textResultForLlm: "hello" });
@@ -67,7 +78,7 @@ test("uses only Codex session environment fallback keys", () => {
     now: fixedNow,
   });
 
-  assert.equal(codexEvent.session_id, "codex-env-session");
+  assert.equal(codexEvent.session_id, "codex:codex-env-session");
 
   const nonCodexEvent = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
@@ -80,7 +91,7 @@ test("uses only Codex session environment fallback keys", () => {
   });
 
   assert.notEqual(nonCodexEvent.session_id, "claude-env-session");
-  assert.equal(nonCodexEvent.session_id.startsWith("unknown-"), true);
+  assert.equal(nonCodexEvent.session_id.startsWith("codex:unknown-"), true);
 });
 
 test("malformed stdin becomes a sanitized parse-error event instead of throwing", () => {
@@ -91,7 +102,7 @@ test("malformed stdin becomes a sanitized parse-error event instead of throwing"
     now: fixedNow,
   });
 
-  assert.equal(event.session_id.startsWith("unknown-"), true);
+  assert.equal(event.session_id.startsWith("codex:unknown-"), true);
   assert.equal(event.cwd, "/tmp/fallback");
   assert.equal(event.payload.parse_error, true);
   assert.equal(event.payload.raw_preview, "{not json sk-proj_[REDACTED:token] authToken=[REDACTED:secret]");

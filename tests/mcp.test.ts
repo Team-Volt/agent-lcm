@@ -311,7 +311,7 @@ test("MCP stats reports aggregate summary depth and graph counts", () => {
   for (let index = 0; index < 9; index += 1) {
     const hook = runCli(["hook", "UserPromptSubmit"], {
       input: JSON.stringify({
-        session_id: "mcp-stats-session",
+        session_id: "codex:mcp-stats-session",
         cwd,
         prompt: `mcp stats high signal prompt ${index}`,
       }),
@@ -352,7 +352,7 @@ test("MCP stats does not rebuild derived summaries", () => {
   for (let index = 0; index < 9; index += 1) {
     const hook = runCli(["hook", "UserPromptSubmit"], {
       input: JSON.stringify({
-        session_id: "mcp-readonly-stats-session",
+        session_id: "codex:mcp-readonly-stats-session",
         cwd,
         prompt: `mcp readonly stats high signal prompt ${index}`,
       }),
@@ -384,7 +384,7 @@ test("MCP context plan reports token pressure for a session", () => {
   for (let index = 0; index < 12; index += 1) {
     const hook = runCli(["hook", "UserPromptSubmit"], {
       input: JSON.stringify({
-        session_id: "mcp-context-plan-session",
+        session_id: "codex:mcp-context-plan-session",
         cwd: "/tmp/mcp-context-plan",
         prompt: `mcp context budget pressure ${index} ${"signal ".repeat(40)}`,
       }),
@@ -402,7 +402,7 @@ test("MCP context plan reports token pressure for a session", () => {
       params: {
         name: "lcm_context_plan",
         arguments: {
-          sessionId: "mcp-context-plan-session",
+          sessionId: "codex:mcp-context-plan-session",
           modelContextWindow: 2_000,
           autoCompactTokenLimit: 200,
         },
@@ -411,7 +411,7 @@ test("MCP context plan reports token pressure for a session", () => {
   ], { AGENT_LCM_HOME: home });
 
   const plan = responses[1].result.structuredContent.plan;
-  assert.equal(plan.session_id, "mcp-context-plan-session");
+  assert.equal(plan.session_id, "codex:mcp-context-plan-session");
   assert.equal(plan.state, "over_limit");
   assert.equal(plan.can_control_compaction, false);
   assert.equal(responses[1].result.content[0].text.includes("over_limit"), true);
@@ -421,7 +421,7 @@ test("MCP tools search and retrieve synthetic hook data", () => {
   const home = tempHome();
   const hook = runCli(["hook", "UserPromptSubmit"], {
     input: JSON.stringify({
-      session_id: "mcp-session",
+      session_id: "codex:mcp-session",
       cwd: "/tmp/mcp",
       prompt: "searchable MCP payload",
     }),
@@ -446,7 +446,7 @@ test("MCP tools search and retrieve synthetic hook data", () => {
       method: "tools/call",
       params: {
         name: "lcm_get_session",
-        arguments: { sessionId: "mcp-session", limit: 20 },
+        arguments: { sessionId: "codex:mcp-session", limit: 20 },
       },
     },
     {
@@ -455,7 +455,7 @@ test("MCP tools search and retrieve synthetic hook data", () => {
       method: "tools/call",
       params: {
         name: "lcm_get_session_summary",
-        arguments: { sessionId: "mcp-session" },
+        arguments: { sessionId: "codex:mcp-session" },
       },
     },
     {
@@ -464,14 +464,14 @@ test("MCP tools search and retrieve synthetic hook data", () => {
       method: "tools/call",
       params: {
         name: "lcm_get_session_graph",
-        arguments: { sessionId: "mcp-session", limit: 20 },
+        arguments: { sessionId: "codex:mcp-session", limit: 20 },
       },
     },
   ], { AGENT_LCM_HOME: home });
 
-  assert.equal(responses[1].result.structuredContent.matches[0].session_id, "mcp-session");
-  assert.equal(responses[2].result.structuredContent.session.session_id, "mcp-session");
-  assert.equal(responses[3].result.structuredContent.summary.session_id, "mcp-session");
+  assert.equal(responses[1].result.structuredContent.matches[0].session_id, "codex:mcp-session");
+  assert.equal(responses[2].result.structuredContent.session.session_id, "codex:mcp-session");
+  assert.equal(responses[3].result.structuredContent.summary.session_id, "codex:mcp-session");
   assert.match(responses[3].result.structuredContent.summary.title, /searchable MCP payload/u);
   assert.equal(responses[4].result.structuredContent.nodes.some((node: { kind: string }) => node.kind === "session"), true);
 });
@@ -481,7 +481,7 @@ test("MCP search sessions exposes best-match metadata and current-session exclus
   const cwd = "/tmp/mcp-discovery";
   assert.equal(runCli(["hook", "UserPromptSubmit"], {
     input: JSON.stringify({
-      session_id: "mcp-prior",
+      session_id: "codex:mcp-prior",
       cwd,
       prompt: "Prior summary DAG ranking source lineage implementation history.",
     }),
@@ -489,7 +489,7 @@ test("MCP search sessions exposes best-match metadata and current-session exclus
   }).status, 0);
   assert.equal(runCli(["hook", "UserPromptSubmit"], {
     input: JSON.stringify({
-      session_id: "mcp-current",
+      session_id: "codex:mcp-current",
       cwd,
       prompt: "Current chat repeats summary DAG ranking source lineage search terms.",
     }),
@@ -515,7 +515,7 @@ test("MCP search sessions exposes best-match metadata and current-session exclus
   ], { AGENT_LCM_HOME: home });
 
   const matches = responses[1].result.structuredContent.matches;
-  assert.deepEqual(matches.map((match: { session_id: string }) => match.session_id), ["mcp-prior"]);
+  assert.deepEqual(matches.map((match: { session_id: string }) => match.session_id), ["codex:mcp-prior"]);
   assert.equal(matches[0].best_match.kind, "summary_node");
   assert.match(matches[0].best_match.snippet, /summary DAG ranking source lineage/u);
   assert.equal(["high", "medium", "low"].includes(matches[0].discovery.confidence), true);
@@ -528,7 +528,7 @@ test("MCP standard LCM verbs grep, describe, and expand summary-node evidence", 
   for (let index = 0; index < 9; index += 1) {
     const hook = runCli(["hook", "UserPromptSubmit"], {
       input: JSON.stringify({
-        session_id: "mcp-standard-verbs-session",
+        session_id: "codex:mcp-standard-verbs-session",
         cwd,
         prompt: `canonical alias evidence prompt ${index}`,
       }),
@@ -554,7 +554,7 @@ test("MCP standard LCM verbs grep, describe, and expand summary-node evidence", 
       method: "tools/call",
       params: {
         name: "lcm_describe",
-        arguments: { sessionId: "mcp-standard-verbs-session", limit: 20 },
+        arguments: { sessionId: "codex:mcp-standard-verbs-session", limit: 20 },
       },
     },
     {
@@ -563,19 +563,19 @@ test("MCP standard LCM verbs grep, describe, and expand summary-node evidence", 
       method: "tools/call",
       params: {
         name: "lcm_describe",
-        arguments: { sessionId: "mcp-standard-verbs-session", limit: 20, includeLineage: true },
+        arguments: { sessionId: "codex:mcp-standard-verbs-session", limit: 20, includeLineage: true },
       },
     },
   ], { AGENT_LCM_HOME: home });
 
   const matches = discoveryResponses[1].result.structuredContent.matches;
-  assert.equal(matches[0].session_id, "mcp-standard-verbs-session");
+  assert.equal(matches[0].session_id, "codex:mcp-standard-verbs-session");
   assert.equal(matches[0].best_match.kind, "summary_node");
 
   const description = discoveryResponses[2].result.structuredContent.description;
   assert.equal(description.target, "session");
-  assert.equal(description.session.session_id, "mcp-standard-verbs-session");
-  assert.equal(description.summary.session_id, "mcp-standard-verbs-session");
+  assert.equal(description.session.session_id, "codex:mcp-standard-verbs-session");
+  assert.equal(description.summary.session_id, "codex:mcp-standard-verbs-session");
   assert.equal(description.summary_nodes.length > 0, true);
   assert.equal("source_event_ids" in description.summary, false);
   assert.equal(description.summary.source_event_count > 0, true);
@@ -614,7 +614,7 @@ test("MCP describe inspects large file references without loading content", () =
   });
   assert.equal(runCli(["hook", "PostToolUse"], {
     input: JSON.stringify({
-      session_id: "mcp-file-ref-session",
+      session_id: "codex:mcp-file-ref-session",
       cwd,
       tool_name: "Read",
       tool_response: {
@@ -633,7 +633,7 @@ test("MCP describe inspects large file references without loading content", () =
       method: "tools/call",
       params: {
         name: "lcm_describe",
-        arguments: { sessionId: "mcp-file-ref-session", limit: 10 },
+        arguments: { sessionId: "codex:mcp-file-ref-session", limit: 10 },
       },
     },
   ], { AGENT_LCM_HOME: home });
@@ -669,7 +669,7 @@ test("MCP describe recovers bounded chunks from sanitized overflow payloads", ()
   const marker = "RECOVERED-OVERFLOW-CHUNK";
   const hook = runCli(["hook", "PostToolUse"], {
     input: JSON.stringify({
-      session_id: "mcp-overflow-session",
+      session_id: "codex:mcp-overflow-session",
       cwd: "/tmp/mcp-overflow",
       tool_name: "build",
       tool_response: `${"x".repeat(70 * 1024)}${marker}`,
@@ -686,7 +686,7 @@ test("MCP describe recovers bounded chunks from sanitized overflow payloads", ()
       method: "tools/call",
       params: {
         name: "lcm_get_session",
-        arguments: { sessionId: "mcp-overflow-session" },
+        arguments: { sessionId: "codex:mcp-overflow-session" },
       },
     },
   ], { AGENT_LCM_HOME: home });
@@ -722,7 +722,7 @@ test("MCP grep searches the full bounded sanitized overflow content", () => {
   const marker = "OVERFLOW-SEARCH-ONLY-MARKER";
   const hook = runCli(["hook", "PostToolUse"], {
     input: JSON.stringify({
-      session_id: "mcp-overflow-search-session",
+      session_id: "codex:mcp-overflow-search-session",
       cwd: "/tmp/mcp-overflow-search",
       tool_name: "test",
       tool_response: `${"x".repeat(600 * 1024)}\n${marker}\n`,
@@ -752,7 +752,8 @@ test("MCP grep searches the full bounded sanitized overflow content", () => {
   assert.deepEqual(result.matches, []);
   assert.equal(result.overflow_matches.length, 1);
   assert.match(result.overflow_matches[0].file_ref_id, /^overflow:[a-f0-9]{64}$/u);
-  assert.equal(result.overflow_matches[0].session_id, "mcp-overflow-search-session");
+  assert.equal(result.overflow_matches[0].session_id, "codex:mcp-overflow-search-session");
+  assert.equal(result.overflow_matches[0].harness, "codex");
   assert.equal(result.overflow_matches[0].line_number, 1);
   assert.equal(result.overflow_matches[0].byte_offset > 512 * 1024, true);
   assert.match(result.overflow_matches[0].snippet, new RegExp(marker, "u"));
@@ -765,7 +766,7 @@ test("MCP expand_query returns recursive evidence for a focused query", () => {
   for (let index = 0; index < 40; index += 1) {
     const hook = runCli(["hook", "UserPromptSubmit"], {
       input: JSON.stringify({
-        session_id: "mcp-expand-query-session",
+        session_id: "codex:mcp-expand-query-session",
         cwd,
         prompt: index === 3
           ? "mcp-expand-query-needle source lineage decision"
@@ -807,7 +808,7 @@ test("MCP expand_query returns recursive evidence for a focused query", () => {
 
 test("MCP pack context biases toward the active thread across cwd mismatches", () => {
   const home = tempHome();
-  const targetSessionId = "mcp-warp-active-thread";
+  const targetSessionId = "codex:mcp-warp-active-thread";
   const targetThreadId = "mcp-warp-active-agent";
   const targetCwd = "/tmp/home";
   const requestedCwd = "/tmp/projects/warp";
@@ -825,7 +826,7 @@ test("MCP pack context biases toward the active thread across cwd mismatches", (
   }).status, 0);
   assert.equal(runCli(["hook", "UserPromptSubmit"], {
     input: JSON.stringify({
-      session_id: "mcp-warp-adjacent-hello",
+      session_id: "codex:mcp-warp-adjacent-hello",
       cwd: requestedCwd,
       prompt: "active-thread-needle hello",
     }),
@@ -889,13 +890,13 @@ test("MCP describe reports missing sessions instead of fabricating descriptions"
       method: "tools/call",
       params: {
         name: "lcm_describe",
-        arguments: { sessionId: "missing-session" },
+        arguments: { sessionId: "codex:missing-session" },
       },
     },
   ], { AGENT_LCM_HOME: home });
 
   assert.equal(responses[1].error.code, -32602);
-  assert.match(responses[1].error.message, /Session not found: missing-session/u);
+  assert.match(responses[1].error.message, /Session not found: codex:missing-session/u);
 });
 
 function framedInput(messages: unknown[]): string {

@@ -193,6 +193,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
   };
 
   const addSessionIfSummaryMatches = (sessionId: string): void => {
+    if (!acceptsSession(sessionId)) return;
     if (query.length === 0) {
       candidateSessionIds.add(sessionId);
       return;

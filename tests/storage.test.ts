@@ -46,13 +46,13 @@ test("appends JSONL and indexes searchable cross-session events", () => {
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "s1", cwd: "/tmp/a", prompt: "alpha pool chemistry" }),
+    rawInput: JSON.stringify({ session_id: "codex:s1", cwd: "/tmp/a", prompt: "alpha pool chemistry" }),
     env: {},
     now,
   }));
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "s2", cwd: "/tmp/b", prompt: "beta app store copy" }),
+    rawInput: JSON.stringify({ session_id: "codex:s2", cwd: "/tmp/b", prompt: "beta app store copy" }),
     env: {},
     now,
   }));
@@ -63,7 +63,7 @@ test("appends JSONL and indexes searchable cross-session events", () => {
   assert.equal(health.raw_log_exists, true);
 
   const matches = storage.searchSessions({ query: "pool chemistry", limit: 5 });
-  assert.deepEqual(matches.map((match) => match.session_id), ["s1"]);
+  assert.deepEqual(matches.map((match) => match.session_id), ["codex:s1"]);
   assert.equal(matches[0].cwd, "/tmp/a");
 
   storage.close();
@@ -87,6 +87,17 @@ test("storage scopes cross-harness retrieval only when requested", () => {
   assert.deepEqual([...new Set(storage.expandQuery({ query: "shared needle", harnesses: ["cursor"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["cursor"]);
   assert.deepEqual([...new Set(storage.packContext({ query: "shared needle", budgetTokens: 2_000 }).sources.map((source) => source.harness))].sort(), ["codex", "cursor"]);
   assert.deepEqual([...new Set(storage.packContext({ query: "shared needle", harnesses: ["cursor"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["cursor"]);
+
+  const db = new DatabaseSync(path.join(home, "index.sqlite"));
+  try {
+    db.exec("DELETE FROM summary_node_fts; DELETE FROM summary_nodes WHERE session_id = 'codex:one';");
+  } finally {
+    db.close();
+  }
+  assert.deepEqual(
+    [...new Set(storage.packContext({ query: "shared needle", currentThreadId: "codex:one", harnesses: ["cursor"], budgetTokens: 2_000 }).sources.map((source) => source.harness))],
+    ["cursor"],
+  );
 
   storage.close();
 });
@@ -145,7 +156,7 @@ test("read-only single ingest rejects an event that is already raw-durable", () 
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "read-only-ingest-session",
+      session_id: "codex:read-only-ingest-session",
       cwd: "/tmp/read-only-ingest",
       prompt: "existing raw event stays read only",
     }),
@@ -167,7 +178,7 @@ test("read-only bulk ingest rejects with the storage contract message", () => {
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "read-only-bulk-ingest-session",
+      session_id: "codex:read-only-bulk-ingest-session",
       cwd: "/tmp/read-only-bulk-ingest",
       prompt: "bulk writes stay read only",
     }),
@@ -196,7 +207,7 @@ test("context plan reports budget pressure without claiming compaction control",
     storage.ingest(normalizeHookEvent({
       hookEvent: "UserPromptSubmit",
       rawInput: JSON.stringify({
-        session_id: "context-plan-session",
+        session_id: "codex:context-plan-session",
         cwd: "/tmp/context-plan",
         prompt: `${prompt}${index}`,
       }),
@@ -206,12 +217,12 @@ test("context plan reports budget pressure without claiming compaction control",
   }
 
   const plan = storage.getContextPlan({
-    sessionId: "context-plan-session",
+    sessionId: "codex:context-plan-session",
     modelContextWindow: 20_000,
     autoCompactTokenLimit: 200,
   });
 
-  assert.equal(plan.session_id, "context-plan-session");
+  assert.equal(plan.session_id, "codex:context-plan-session");
   assert.equal(plan.can_control_compaction, false);
   assert.equal(plan.state, "over_limit");
   assert.equal(plan.summary_node_count, 3);
@@ -231,7 +242,7 @@ test("context plan includes summary-node tokens in pressure state", () => {
     storage.ingest(normalizeHookEvent({
       hookEvent: "UserPromptSubmit",
       rawInput: JSON.stringify({
-        session_id: "context-plan-summary-pressure-session",
+        session_id: "codex:context-plan-summary-pressure-session",
         cwd: "/tmp/context-plan-summary-pressure",
         prompt: `summary pressure topic ${index}`,
       }),
@@ -241,7 +252,7 @@ test("context plan includes summary-node tokens in pressure state", () => {
   }
 
   const plan = storage.getContextPlan({
-    sessionId: "context-plan-summary-pressure-session",
+    sessionId: "codex:context-plan-summary-pressure-session",
     modelContextWindow: 20_000,
     autoCompactTokenLimit: 120,
     recentEventLimit: 1,
@@ -259,7 +270,7 @@ test("writable storage replays raw JSONL events that are missing from SQLite ind
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "raw-replay-session",
+      session_id: "codex:raw-replay-session",
       cwd: "/tmp/raw-replay",
       prompt: "raw replay prompt should be searchable",
     }),
@@ -272,9 +283,9 @@ test("writable storage replays raw JSONL events that are missing from SQLite ind
 
   assert.equal(storage.health().event_count, 1);
   assert.deepEqual(storage.searchSessions({ query: "raw replay searchable", limit: 5 }).map((match) => match.session_id), [
-    "raw-replay-session",
+    "codex:raw-replay-session",
   ]);
-  assert.equal(storage.getSessionMemorySummary("raw-replay-session")?.updated_at, "2026-06-09T12:00:00.000Z");
+  assert.equal(storage.getSessionMemorySummary("codex:raw-replay-session")?.updated_at, "2026-06-09T12:00:00.000Z");
 
   storage.close();
 });
@@ -285,7 +296,7 @@ test("writable storage preserves indexed rows and replays valid events when raw 
   const indexedOnly = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "partial-indexed-session",
+      session_id: "codex:partial-indexed-session",
       cwd: "/tmp/partial-indexed",
       prompt: "keep this usable indexed evidence",
     }),
@@ -295,7 +306,7 @@ test("writable storage preserves indexed rows and replays valid events when raw 
   const rawOnly = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "partial-raw-session",
+      session_id: "codex:partial-raw-session",
       cwd: "/tmp/partial-raw",
       prompt: "replay this complete raw evidence",
     }),
@@ -317,16 +328,16 @@ test("writable storage preserves indexed rows and replays valid events when raw 
   assert.equal(health.event_count, 2);
   assert.match(health.index_error ?? "", /malformed|partial/iu);
   assert.deepEqual(reopened.searchSessions({ query: "usable indexed evidence", limit: 5 }).map((match) => match.session_id), [
-    "partial-indexed-session",
+    "codex:partial-indexed-session",
   ]);
   assert.deepEqual(reopened.searchSessions({ query: "complete raw evidence", limit: 5 }).map((match) => match.session_id), [
-    "partial-raw-session",
+    "codex:partial-raw-session",
   ]);
 
   const afterPartial = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "partial-followup-session",
+      session_id: "codex:partial-followup-session",
       cwd: "/tmp/partial-followup",
       prompt: "preserve this event after a partial JSONL tail",
     }),
@@ -347,13 +358,13 @@ test("writable storage removes stale SQLite rows when raw JSONL is truncated", (
   const storage = createStorage({ home });
   const retained = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "raw-retained", cwd: "/tmp/raw-retained", prompt: "retained raw prompt" }),
+    rawInput: JSON.stringify({ session_id: "codex:raw-retained", cwd: "/tmp/raw-retained", prompt: "retained raw prompt" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:00.000Z"),
   });
   const stale = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "raw-stale", cwd: "/tmp/raw-stale", prompt: "stale sqlite prompt" }),
+    rawInput: JSON.stringify({ session_id: "codex:raw-stale", cwd: "/tmp/raw-stale", prompt: "stale sqlite prompt" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   });
@@ -366,9 +377,9 @@ test("writable storage removes stale SQLite rows when raw JSONL is truncated", (
   const reopened = createStorage({ home });
 
   assert.equal(reopened.health().event_count, 1);
-  assert.deepEqual(reopened.searchSessions({ query: "retained", limit: 5 }).map((match) => match.session_id), ["raw-retained"]);
+  assert.deepEqual(reopened.searchSessions({ query: "retained", limit: 5 }).map((match) => match.session_id), ["codex:raw-retained"]);
   assert.deepEqual(reopened.searchSessions({ query: "stale", limit: 5 }).map((match) => match.session_id), []);
-  assert.equal(reopened.getSession("raw-stale").events.length, 0);
+  assert.equal(reopened.getSession("codex:raw-stale").events.length, 0);
 
   reopened.close();
 });
@@ -378,7 +389,7 @@ test("writable storage clears SQLite when raw JSONL is emptied", () => {
   const storage = createStorage({ home });
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "raw-empty", cwd: "/tmp/raw-empty", prompt: "remove all indexed rows" }),
+    rawInput: JSON.stringify({ session_id: "codex:raw-empty", cwd: "/tmp/raw-empty", prompt: "remove all indexed rows" }),
     env: {},
     now,
   }));
@@ -399,13 +410,13 @@ test("writable storage repairs same-count raw and SQLite event ID mismatches", (
   const storage = createStorage({ home });
   const indexedOnly = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "indexed-only", cwd: "/tmp/indexed-only", prompt: "indexed only stale prompt" }),
+    rawInput: JSON.stringify({ session_id: "codex:indexed-only", cwd: "/tmp/indexed-only", prompt: "indexed only stale prompt" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:00.000Z"),
   });
   const rawOnly = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "raw-only", cwd: "/tmp/raw-only", prompt: "raw only replacement prompt" }),
+    rawInput: JSON.stringify({ session_id: "codex:raw-only", cwd: "/tmp/raw-only", prompt: "raw only replacement prompt" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   });
@@ -417,7 +428,7 @@ test("writable storage repairs same-count raw and SQLite event ID mismatches", (
   const reopened = createStorage({ home });
 
   assert.equal(reopened.health().event_count, 1);
-  assert.deepEqual(reopened.searchSessions({ query: "replacement", limit: 5 }).map((match) => match.session_id), ["raw-only"]);
+  assert.deepEqual(reopened.searchSessions({ query: "replacement", limit: 5 }).map((match) => match.session_id), ["codex:raw-only"]);
   assert.deepEqual(reopened.searchSessions({ query: "stale", limit: 5 }).map((match) => match.session_id), []);
 
   reopened.close();
@@ -430,7 +441,7 @@ test("tool chatter does not rebuild session summaries until a landmark event", (
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "summary-refresh-session",
+      session_id: "codex:summary-refresh-session",
       cwd: "/tmp/summary-refresh",
       prompt: "initial summary source",
     }),
@@ -438,13 +449,13 @@ test("tool chatter does not rebuild session summaries until a landmark event", (
     now: () => new Date("2026-06-09T12:00:00.000Z"),
   }));
 
-  const initialSummary = storage.getSessionMemorySummary("summary-refresh-session");
+  const initialSummary = storage.getSessionMemorySummary("codex:summary-refresh-session");
   assert.equal(initialSummary?.updated_at, "2026-06-09T12:00:00.000Z");
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "PreToolUse",
     rawInput: JSON.stringify({
-      session_id: "summary-refresh-session",
+      session_id: "codex:summary-refresh-session",
       cwd: "/tmp/summary-refresh",
       tool_name: "Bash",
       tool_use_id: "tool-1",
@@ -456,7 +467,7 @@ test("tool chatter does not rebuild session summaries until a landmark event", (
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostToolUse",
     rawInput: JSON.stringify({
-      session_id: "summary-refresh-session",
+      session_id: "codex:summary-refresh-session",
       cwd: "/tmp/summary-refresh",
       tool_name: "Bash",
       tool_use_id: "tool-1",
@@ -466,13 +477,13 @@ test("tool chatter does not rebuild session summaries until a landmark event", (
     now: () => new Date("2026-06-09T12:00:02.000Z"),
   }));
 
-  const unchangedSummary = storage.getSessionMemorySummary("summary-refresh-session");
+  const unchangedSummary = storage.getSessionMemorySummary("codex:summary-refresh-session");
   assert.equal(unchangedSummary?.updated_at, "2026-06-09T12:00:00.000Z");
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "summary-refresh-session",
+      session_id: "codex:summary-refresh-session",
       cwd: "/tmp/summary-refresh",
       last_assistant_message: "finished performance work",
     }),
@@ -480,7 +491,7 @@ test("tool chatter does not rebuild session summaries until a landmark event", (
     now: () => new Date("2026-06-09T12:00:03.000Z"),
   }));
 
-  const refreshedSummary = storage.getSessionMemorySummary("summary-refresh-session");
+  const refreshedSummary = storage.getSessionMemorySummary("codex:summary-refresh-session");
   assert.equal(refreshedSummary?.updated_at, "2026-06-09T12:00:03.000Z");
   assert.deepEqual(refreshedSummary?.tools, ["Bash"]);
 
@@ -494,7 +505,7 @@ test("reopening indexed storage reconciles same-ID raw-log payload edits", () =>
   const events = Array.from({ length: 30 }, (_, index) => normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "raw-prefix-edit",
+      session_id: "codex:raw-prefix-edit",
       cwd: "/tmp/raw-prefix-edit",
       prompt: `original-${String(index).padStart(3, "0")}-${"x".repeat(150)}`,
     }),
@@ -517,7 +528,7 @@ test("reopening indexed storage reconciles same-ID raw-log payload edits", () =>
 
   // Then
   assert.equal(reopened.searchSessions({ query: "original-000" }).length, 0);
-  assert.deepEqual(reopened.searchSessions({ query: "modified-000" }).map((session) => session.session_id), ["raw-prefix-edit"]);
+  assert.deepEqual(reopened.searchSessions({ query: "modified-000" }).map((session) => session.session_id), ["codex:raw-prefix-edit"]);
   reopened.close();
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -528,7 +539,7 @@ test("ingest restores a raw event removed while storage remains open", () => {
   const storage = createStorage({ home });
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "live-raw-truncate", cwd: "/tmp/live-raw-truncate", prompt: "restore raw source" }),
+    rawInput: JSON.stringify({ session_id: "codex:live-raw-truncate", cwd: "/tmp/live-raw-truncate", prompt: "restore raw source" }),
     env: {},
     now,
   });
@@ -548,7 +559,7 @@ test("ingest restores a raw event removed while storage remains open", () => {
 test("summary rebuild preserves unchanged node rows", () => {
   // Given
   const home = tempHome("agent-lcm-incremental-summary-");
-  const sessionId = "incremental-summary";
+  const sessionId = "codex:incremental-summary";
   const storage = createStorage({ home });
   const events = Array.from({ length: 16 }, (_, index) => normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
@@ -592,31 +603,31 @@ test("coalesces prompt-only summary rebuilds but keeps stop freshness", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "prompt-coalesce-session",
+      session_id: "codex:prompt-coalesce-session",
       cwd: "/tmp/prompt-coalesce",
       prompt: "initial prompt summary source",
     }),
     env: {},
     now: () => new Date("2026-06-09T12:00:00.000Z"),
   }));
-  assert.equal(storage.getSessionMemorySummary("prompt-coalesce-session")?.updated_at, "2026-06-09T12:00:00.000Z");
+  assert.equal(storage.getSessionMemorySummary("codex:prompt-coalesce-session")?.updated_at, "2026-06-09T12:00:00.000Z");
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "prompt-coalesce-session",
+      session_id: "codex:prompt-coalesce-session",
       cwd: "/tmp/prompt-coalesce",
       prompt: "second prompt should wait for a landmark",
     }),
     env: {},
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   }));
-  assert.equal(storage.getSessionMemorySummary("prompt-coalesce-session")?.updated_at, "2026-06-09T12:00:00.000Z");
+  assert.equal(storage.getSessionMemorySummary("codex:prompt-coalesce-session")?.updated_at, "2026-06-09T12:00:00.000Z");
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "prompt-coalesce-session",
+      session_id: "codex:prompt-coalesce-session",
       cwd: "/tmp/prompt-coalesce",
       last_assistant_message: "landmark outcome refreshed the coalesced prompt summary",
     }),
@@ -624,7 +635,7 @@ test("coalesces prompt-only summary rebuilds but keeps stop freshness", () => {
     now: () => new Date("2026-06-09T12:00:02.000Z"),
   }));
 
-  const refreshed = storage.getSessionMemorySummary("prompt-coalesce-session");
+  const refreshed = storage.getSessionMemorySummary("codex:prompt-coalesce-session");
   assert.equal(refreshed?.updated_at, "2026-06-09T12:00:02.000Z");
   assert.equal(refreshed?.key_prompts.some((prompt) => prompt.includes("second prompt")), true);
   assert.equal(refreshed?.outcomes.some((outcome) => outcome.includes("landmark outcome")), true);
@@ -639,7 +650,7 @@ test("post-compaction payloads refresh session summaries as high-signal outcomes
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "postcompact-session",
+      session_id: "codex:postcompact-session",
       cwd: "/tmp/postcompact",
       prompt: "track the compaction recovery path",
     }),
@@ -649,7 +660,7 @@ test("post-compaction payloads refresh session summaries as high-signal outcomes
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostCompact",
     rawInput: JSON.stringify({
-      session_id: "postcompact-session",
+      session_id: "codex:postcompact-session",
       cwd: "/tmp/postcompact",
       trigger: "auto",
       summary: "context compacted and ready for bounded LCM recall",
@@ -658,7 +669,7 @@ test("post-compaction payloads refresh session summaries as high-signal outcomes
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   }));
 
-  const summary = storage.getSessionMemorySummary("postcompact-session");
+  const summary = storage.getSessionMemorySummary("codex:postcompact-session");
   assert.equal(summary?.updated_at, "2026-06-09T12:00:01.000Z");
   assert.match(summary?.overview ?? "", /bounded LCM recall/u);
   assert.equal(summary?.source_event_ids.length, 2);
@@ -670,7 +681,7 @@ test("post-compaction payloads refresh session summaries as high-signal outcomes
 test("bulk ingest appends raw events once and rebuilds summaries once per touched session", () => {
   const home = tempHome();
   const storage = createStorage({ home });
-  const sessionId = "bulk-ingest-session";
+  const sessionId = "codex:bulk-ingest-session";
   const cwd = "/tmp/bulk-ingest";
   const events: NormalizedEvent[] = [
     "first bulk import prompt",
@@ -721,7 +732,7 @@ test("bulk ingest appends raw events once and rebuilds summaries once per touche
 test("bulk ingest reuses the raw event ID cache warmed by single ingest", () => {
   const home = tempHome();
   const storage = createStorage({ home });
-  const sessionId = "bulk-cache-session";
+  const sessionId = "codex:bulk-cache-session";
   const cwd = "/tmp/bulk-cache";
   const rawLogPath = path.join(home, "events.jsonl");
 
@@ -779,7 +790,7 @@ test("reopening synchronized storage does not rescan the raw log", () => {
   const seed = createStorage({ home });
   seed.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "reopen-fast-path", cwd: "/tmp/reopen-fast-path", prompt: "seed" }),
+    rawInput: JSON.stringify({ session_id: "codex:reopen-fast-path", cwd: "/tmp/reopen-fast-path", prompt: "seed" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:00.000Z"),
   }));
@@ -797,7 +808,7 @@ test("reopening synchronized storage does not rescan the raw log", () => {
     const reopened = createStorage({ home });
     reopened.ingest(normalizeHookEvent({
       hookEvent: "PostToolUse",
-      rawInput: JSON.stringify({ session_id: "reopen-fast-path", cwd: "/tmp/reopen-fast-path", tool_name: "Bash" }),
+      rawInput: JSON.stringify({ session_id: "codex:reopen-fast-path", cwd: "/tmp/reopen-fast-path", tool_name: "Bash" }),
       env: {},
       now: () => new Date("2026-06-09T12:00:01.000Z"),
     }));
@@ -811,7 +822,7 @@ test("reopening synchronized storage does not rescan the raw log", () => {
 test("bulk ingest can defer summary rebuilds until touched sessions are finalized", () => {
   const home = tempHome();
   const storage = createStorage({ home });
-  const sessionId = "bulk-deferred-summary-session";
+  const sessionId = "codex:bulk-deferred-summary-session";
   const events = Array.from({ length: 4 }, (_, index) => normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
@@ -844,7 +855,7 @@ test("bulk ingest retry after SQLite rollback does not duplicate raw JSONL", () 
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "bulk-rollback-session",
+      session_id: "codex:bulk-rollback-session",
       cwd: "/tmp/bulk-rollback",
       prompt: "bulk rollback retry prompt",
     }),
@@ -873,7 +884,7 @@ test("bulk ingest retry after SQLite rollback does not duplicate raw JSONL", () 
   assert.equal(readJsonl(path.join(home, "events.jsonl")).length, 1);
   assert.equal(storage.health().event_count, 1);
   assert.deepEqual(storage.searchSessions({ query: "rollback retry", limit: 5 }).map((match) => match.session_id), [
-    "bulk-rollback-session",
+    "codex:bulk-rollback-session",
   ]);
 
   storage.close();
@@ -885,7 +896,7 @@ test("single ingest keeps a raw-durable event when SQLite indexing fails", () =>
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "single-index-failure-session",
+      session_id: "codex:single-index-failure-session",
       cwd: "/tmp/single-index-failure",
       prompt: "durable hook survives index failure",
     }),
@@ -912,7 +923,7 @@ test("single ingest keeps a raw-durable event when SQLite indexing fails", () =>
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "single-index-recovery-session",
+      session_id: "codex:single-index-recovery-session",
       cwd: "/tmp/single-index-failure",
       prompt: "trigger same-process index recovery",
     }),
@@ -922,7 +933,7 @@ test("single ingest keeps a raw-durable event when SQLite indexing fails", () =>
 
   assert.equal(storage.health().event_count, 2);
   assert.deepEqual(storage.searchSessions({ query: "durable hook survives", limit: 5 }).map((match) => match.session_id), [
-    "single-index-failure-session",
+    "codex:single-index-failure-session",
   ]);
 
   storage.close();
@@ -934,7 +945,7 @@ test("retry after a raw-log fsync failure appends and syncs the event again", ()
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "single-fsync-failure-session",
+      session_id: "codex:single-fsync-failure-session",
       cwd: "/tmp/single-fsync-failure",
       prompt: "do not acknowledge an event before its raw bytes are durable",
     }),
@@ -977,13 +988,13 @@ test("constructor replay leaves an interleaved raw append visible to the next op
   const rawLogPath = path.join(home, "events.jsonl");
   const seed = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "replay-seed", cwd: "/tmp/replay-race", prompt: "seed" }),
+    rawInput: JSON.stringify({ session_id: "codex:replay-seed", cwd: "/tmp/replay-race", prompt: "seed" }),
     env: {},
     now,
   });
   const interleaved = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "replay-interleaved", cwd: "/tmp/replay-race", prompt: "interleaved" }),
+    rawInput: JSON.stringify({ session_id: "codex:replay-interleaved", cwd: "/tmp/replay-race", prompt: "interleaved" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   });
@@ -1078,13 +1089,13 @@ test("raw-log waiter times out without evicting an active owner after ten second
   const moduleUrl = new URL("../src/raw-log.ts", import.meta.url).href;
   const holderEvent = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "slow-holder", cwd: "/tmp/slow-holder", prompt: "holder" }),
+    rawInput: JSON.stringify({ session_id: "codex:slow-holder", cwd: "/tmp/slow-holder", prompt: "holder" }),
     env: {},
     now,
   });
   const waiterEvent = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "slow-waiter", cwd: "/tmp/slow-waiter", prompt: "waiter" }),
+    rawInput: JSON.stringify({ session_id: "codex:slow-waiter", cwd: "/tmp/slow-waiter", prompt: "waiter" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   });
@@ -1190,13 +1201,13 @@ test("derived index work does not hold the raw-log writer lock", () => {
   const storage = createStorage({ home });
   const parent = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "slow-index-parent", cwd: "/tmp/slow-index", prompt: "parent" }),
+    rawInput: JSON.stringify({ session_id: "codex:slow-index-parent", cwd: "/tmp/slow-index", prompt: "parent" }),
     env: {},
     now,
   });
   const child = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "slow-index-child", cwd: "/tmp/slow-index", prompt: "child" }),
+    rawInput: JSON.stringify({ session_id: "codex:slow-index-child", cwd: "/tmp/slow-index", prompt: "child" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   });
@@ -1247,7 +1258,7 @@ test("raw event ID cache invalidates after a same-size edit with restored mtime"
   const storage = createStorage({ home });
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "cache-rewrite", cwd: "/tmp/cache-rewrite", prompt: "restore me" }),
+    rawInput: JSON.stringify({ session_id: "codex:cache-rewrite", cwd: "/tmp/cache-rewrite", prompt: "restore me" }),
     env: {},
     now,
   });
@@ -1277,7 +1288,7 @@ test("bulk ingest persists raw JSONL before surfacing a SQLite lock timeout", ()
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "bulk-lock-timeout-session",
+      session_id: "codex:bulk-lock-timeout-session",
       cwd: "/tmp/bulk-lock-timeout",
       prompt: "do not silently drop this locked import",
     }),
@@ -1303,7 +1314,7 @@ test("single ingest keeps a raw-durable event when SQLite is locked", () => {
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "single-lock-timeout-session",
+      session_id: "codex:single-lock-timeout-session",
       cwd: "/tmp/single-lock-timeout",
       prompt: "locked hook must reach the caller",
     }),
@@ -1327,7 +1338,7 @@ test("concurrent bulk ingest writers append an event ID to raw JSONL once", asyn
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "concurrent-bulk-session",
+      session_id: "codex:concurrent-bulk-session",
       cwd: "/tmp/concurrent-bulk",
       prompt: "concurrent durable import",
     }),
@@ -1345,7 +1356,7 @@ test("concurrent single ingest writers append an event ID to raw JSONL once", as
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "concurrent-single-session",
+      session_id: "codex:concurrent-single-session",
       cwd: "/tmp/concurrent-single",
       prompt: "concurrent single durable hook",
     }),
@@ -1363,7 +1374,7 @@ test("concurrent single and bulk ingest writers append an event ID to raw JSONL 
   const event = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "concurrent-mixed-session",
+      session_id: "codex:concurrent-mixed-session",
       cwd: "/tmp/concurrent-mixed",
       prompt: "concurrent mixed durable hook",
     }),
@@ -1387,7 +1398,7 @@ test("indexes large path-backed tool outputs as file references", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostToolUse",
     rawInput: JSON.stringify({
-      session_id: "file-ref-session",
+      session_id: "codex:file-ref-session",
       cwd: "/tmp/file-ref",
       tool_name: "Read",
       tool_response: {
@@ -1399,11 +1410,11 @@ test("indexes large path-backed tool outputs as file references", () => {
     now: () => new Date("2026-06-09T12:00:00.000Z"),
   }));
 
-  const refs = storage.getFileRefsForSession("file-ref-session");
+  const refs = storage.getFileRefsForSession("codex:file-ref-session");
 
   assert.equal(refs.length, 1);
   assert.equal(refs[0].path, "/tmp/file-ref/data.json");
-  assert.equal(refs[0].session_id, "file-ref-session");
+  assert.equal(refs[0].session_id, "codex:file-ref-session");
   assert.equal(refs[0].mime_type, "application/json");
   assert.equal(refs[0].byte_count, Buffer.byteLength(content, "utf8"));
   assert.match(refs[0].file_ref_id, /^file:/u);
@@ -1464,7 +1475,7 @@ test("overflow search bounds verified bytes without charging invalid references"
   const events = [normalizeHookEvent({
     hookEvent: "PostToolUse",
     rawInput: JSON.stringify({
-      session_id: "overflow-budget-old",
+      session_id: "codex:overflow-budget-old",
       cwd: "/tmp/overflow-budget",
       overflow_ref: {
         sha256: needleHash,
@@ -1496,7 +1507,7 @@ test("overflow search bounds verified bytes without charging invalid references"
   }
   storage.ingestMany(events);
 
-  assert.equal(storage.searchOverflow({ query: needle, limit: 1 })[0]?.session_id, "overflow-budget-old");
+  assert.equal(storage.searchOverflow({ query: needle, limit: 1 })[0]?.session_id, "codex:overflow-budget-old");
 
   const filler = Buffer.alloc(16 * 1024 * 1024, "x");
   const fillerHash = sha256(filler);
@@ -1533,7 +1544,7 @@ test("overflow recovery refuses event-supplied paths outside managed storage", (
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostToolUse",
     rawInput: JSON.stringify({
-      session_id: "untrusted-overflow-session",
+      session_id: "codex:untrusted-overflow-session",
       cwd: "/tmp/untrusted-overflow",
       overflow_ref: {
         sha256: hash,
@@ -1565,7 +1576,7 @@ test("overflow recovery advances past a multibyte character with a tiny byte req
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostToolUse",
     rawInput: JSON.stringify({
-      session_id: "utf8-overflow-session",
+      session_id: "codex:utf8-overflow-session",
       cwd: "/tmp/utf8-overflow",
       overflow_ref: {
         sha256: hash,
@@ -1628,7 +1639,7 @@ test("lists compact session summaries in one bounded query", () => {
     storage.ingest(normalizeHookEvent({
       hookEvent: "UserPromptSubmit",
       rawInput: JSON.stringify({
-        session_id: "session-list-summary",
+        session_id: "codex:session-list-summary",
         cwd: "/tmp/session-list-summary",
         prompt,
       }),
@@ -1639,7 +1650,7 @@ test("lists compact session summaries in one bounded query", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "session-list-summary",
+      session_id: "codex:session-list-summary",
       cwd: "/tmp/session-list-summary",
       last_assistant_message: "Cleanup implementation completed",
     }),
@@ -1663,7 +1674,7 @@ test("root usage includes descendant session tokens", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "TokenCount",
     rawInput: JSON.stringify({
-      session_id: "usage-root",
+      session_id: "codex:usage-root",
       cwd: "/tmp/usage-root",
       usage: { input_token_count: 10, total_token_count: 10 },
     }),
@@ -1673,8 +1684,8 @@ test("root usage includes descendant session tokens", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "TokenCount",
     rawInput: JSON.stringify({
-      session_id: "usage-child",
-      parent_session_id: "usage-root",
+      session_id: "codex:usage-child",
+      parent_session_id: "codex:usage-root",
       cwd: "/tmp/usage-child",
       usage: { input_token_count: 20, total_token_count: 20 },
     }),
@@ -1696,7 +1707,7 @@ test("infers child lineage from codex delegation prompts", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "delegated-child",
+      session_id: "codex:delegated-child",
       cwd: "/tmp/delegated-child",
       prompt: "<codex_delegation><source_thread_id>delegation-root</source_thread_id><task>inspect tests</task></codex_delegation>",
     }),
@@ -1706,7 +1717,7 @@ test("infers child lineage from codex delegation prompts", () => {
 
   const child = storage.listSessions({ parentSessionId: "delegation-root" }).sessions[0];
 
-  assert.equal(child.session_id, "delegated-child");
+  assert.equal(child.session_id, "codex:delegated-child");
   assert.equal(child.parent_session_id, "delegation-root");
   storage.close();
 });
@@ -1716,13 +1727,13 @@ test("cleanup compacts legacy search text while preserving the raw log", () => {
   const storage = createStorage({ home });
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "cleanup-session", cwd: "/tmp/cleanup", prompt: "keep searchable cleanup evidence" }),
+    rawInput: JSON.stringify({ session_id: "codex:cleanup-session", cwd: "/tmp/cleanup", prompt: "keep searchable cleanup evidence" }),
     env: {},
     now,
   }));
   storage.ingest(normalizeHookEvent({
     hookEvent: "PreToolUse",
-    rawInput: JSON.stringify({ session_id: "cleanup-session", cwd: "/tmp/cleanup", tool_name: "Read", tool_input: { path: "/tmp/file" } }),
+    rawInput: JSON.stringify({ session_id: "codex:cleanup-session", cwd: "/tmp/cleanup", tool_name: "Read", tool_input: { path: "/tmp/file" } }),
     env: {},
     now,
   }));
@@ -1773,7 +1784,7 @@ test("cleanup acquires the write lock before snapshotting searchable events", ()
   const storage = createStorage({ home });
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "cleanup-lock", cwd: "/tmp/cleanup-lock", prompt: "preserve concurrent evidence" }),
+    rawInput: JSON.stringify({ session_id: "codex:cleanup-lock", cwd: "/tmp/cleanup-lock", prompt: "preserve concurrent evidence" }),
     env: {},
     now,
   }));
@@ -1843,7 +1854,7 @@ test("writable storage backfills file references for existing indexed events", (
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostToolUse",
     rawInput: JSON.stringify({
-      session_id: "file-ref-backfill-session",
+      session_id: "codex:file-ref-backfill-session",
       cwd: "/tmp/file-ref-backfill",
       tool_name: "Read",
       tool_response: {
@@ -1869,7 +1880,7 @@ test("writable storage backfills file references for existing indexed events", (
   }
 
   const reopened = createStorage({ home });
-  const refs = reopened.getFileRefsForSession("file-ref-backfill-session");
+  const refs = reopened.getFileRefsForSession("codex:file-ref-backfill-session");
 
   assert.equal(refs.length, 1);
   assert.equal(refs[0].path, "/tmp/file-ref-backfill/data.json");
@@ -1885,7 +1896,7 @@ test("post-compaction reason text is a summary signal fallback", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostCompact",
     rawInput: JSON.stringify({
-      session_id: "postcompact-reason-session",
+      session_id: "codex:postcompact-reason-session",
       cwd: "/tmp/postcompact-reason",
       trigger: "manual",
       reason: "manual compaction finished after context got tight",
@@ -1894,7 +1905,7 @@ test("post-compaction reason text is a summary signal fallback", () => {
     now: () => new Date("2026-06-09T12:00:00.000Z"),
   }));
 
-  const summary = storage.getSessionMemorySummary("postcompact-reason-session");
+  const summary = storage.getSessionMemorySummary("codex:postcompact-reason-session");
   assert.match(summary?.overview ?? "", /context got tight/u);
   assert.deepEqual(summary?.outcomes, ["manual compaction finished after context got tight"]);
 
@@ -1908,7 +1919,7 @@ test("empty post-compaction events do not refresh derived summaries", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "empty-postcompact-session",
+      session_id: "codex:empty-postcompact-session",
       cwd: "/tmp/empty-postcompact",
       prompt: "initial compaction setup",
     }),
@@ -1919,7 +1930,7 @@ test("empty post-compaction events do not refresh derived summaries", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostCompact",
     rawInput: JSON.stringify({
-      session_id: "empty-postcompact-session",
+      session_id: "codex:empty-postcompact-session",
       cwd: "/tmp/empty-postcompact",
       trigger: "auto",
     }),
@@ -1927,7 +1938,7 @@ test("empty post-compaction events do not refresh derived summaries", () => {
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   }));
 
-  const summary = storage.getSessionMemorySummary("empty-postcompact-session");
+  const summary = storage.getSessionMemorySummary("codex:empty-postcompact-session");
   assert.equal(summary?.updated_at, "2026-06-09T12:00:00.000Z");
   assert.deepEqual(summary?.source_event_ids.length, 1);
   assert.deepEqual(storage.stats().hook_event_counts, { PostCompact: 1, UserPromptSubmit: 1 });
@@ -1942,7 +1953,7 @@ test("post-compaction does not create checkpoint nodes", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "PreCompact",
     rawInput: JSON.stringify({
-      session_id: "compact-checkpoint-session",
+      session_id: "codex:compact-checkpoint-session",
       cwd: "/tmp/compact-checkpoint",
       reason: "before compact",
     }),
@@ -1952,7 +1963,7 @@ test("post-compaction does not create checkpoint nodes", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostCompact",
     rawInput: JSON.stringify({
-      session_id: "compact-checkpoint-session",
+      session_id: "codex:compact-checkpoint-session",
       cwd: "/tmp/compact-checkpoint",
       summary: "after compact",
     }),
@@ -1960,7 +1971,7 @@ test("post-compaction does not create checkpoint nodes", () => {
     now: () => new Date("2026-06-09T12:00:01.000Z"),
   }));
 
-  const graph = storage.getSessionGraph("compact-checkpoint-session", { limit: 20 });
+  const graph = storage.getSessionGraph("codex:compact-checkpoint-session", { limit: 20 });
   assert.equal(graph.nodes.filter((node) => node.kind === "checkpoint").length, 1);
   assert.deepEqual(storage.stats().hook_event_counts, { PostCompact: 1, PreCompact: 1 });
 
@@ -1974,7 +1985,7 @@ test("search sessions relaxes broad queries when strict FTS has no match", () =>
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "broad-session",
+      session_id: "codex:broad-session",
       cwd: "/tmp/broad",
       prompt: "agent-lcm retrieval quality notes",
     }),
@@ -1987,7 +1998,7 @@ test("search sessions relaxes broad queries when strict FTS has no match", () =>
     limit: 5,
   });
 
-  assert.deepEqual(matches.map((match) => match.session_id), ["broad-session"]);
+  assert.deepEqual(matches.map((match) => match.session_id), ["codex:broad-session"]);
 
   storage.close();
 });
@@ -1999,7 +2010,7 @@ test("search sessions ranks substantive broad matches ahead of newer shallow mat
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "substantive-session",
+      session_id: "codex:substantive-session",
       cwd: "/tmp/broad",
       prompt: "agent-lcm retrieval quality plumbing intelligence layer assessment",
     }),
@@ -2009,7 +2020,7 @@ test("search sessions ranks substantive broad matches ahead of newer shallow mat
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "shallow-session",
+      session_id: "codex:shallow-session",
       cwd: "/tmp/broad",
       prompt: "quality",
     }),
@@ -2022,7 +2033,7 @@ test("search sessions ranks substantive broad matches ahead of newer shallow mat
     limit: 2,
   });
 
-  assert.deepEqual(matches.map((match) => match.session_id), ["substantive-session", "shallow-session"]);
+  assert.deepEqual(matches.map((match) => match.session_id), ["codex:substantive-session", "codex:shallow-session"]);
 
   storage.close();
 });
@@ -2034,7 +2045,7 @@ test("search sessions merges summary and raw-event candidates before ranking a q
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "summary-candidate",
+      session_id: "codex:summary-candidate",
       cwd: "/tmp/merged-search",
       prompt: "merged evidence",
     }),
@@ -2045,7 +2056,7 @@ test("search sessions merges summary and raw-event candidates before ranking a q
     storage.ingest(normalizeHookEvent({
       hookEvent: "UserPromptSubmit",
       rawInput: JSON.stringify({
-        session_id: "raw-candidate",
+        session_id: "codex:raw-candidate",
         cwd: "/tmp/merged-search",
         prompt: `merged evidence raw occurrence ${index}`,
       }),
@@ -2057,10 +2068,10 @@ test("search sessions merges summary and raw-event candidates before ranking a q
 
   const db = new DatabaseSync(path.join(home, "index.sqlite"));
   try {
-    db.prepare("DELETE FROM event_fts WHERE session_id = ?1").run("summary-candidate");
-    db.prepare("DELETE FROM session_summary_fts WHERE session_id = ?1").run("summary-candidate");
-    db.prepare("DELETE FROM summary_node_fts WHERE session_id = ?1").run("raw-candidate");
-    db.prepare("DELETE FROM session_summary_fts WHERE session_id = ?1").run("raw-candidate");
+    db.prepare("DELETE FROM event_fts WHERE session_id = ?1").run("codex:summary-candidate");
+    db.prepare("DELETE FROM session_summary_fts WHERE session_id = ?1").run("codex:summary-candidate");
+    db.prepare("DELETE FROM summary_node_fts WHERE session_id = ?1").run("codex:raw-candidate");
+    db.prepare("DELETE FROM session_summary_fts WHERE session_id = ?1").run("codex:raw-candidate");
   } finally {
     db.close();
   }
@@ -2068,7 +2079,7 @@ test("search sessions merges summary and raw-event candidates before ranking a q
   const readOnlyStorage = createStorage({ home, readOnly: true });
   const matches = readOnlyStorage.searchSessions({ query: "merged evidence", limit: 2 });
 
-  assert.deepEqual(matches.map((match) => match.session_id), ["raw-candidate", "summary-candidate"]);
+  assert.deepEqual(matches.map((match) => match.session_id), ["codex:raw-candidate", "codex:summary-candidate"]);
   assert.equal(matches[0].best_match?.kind, "event");
   assert.equal(matches[0].match_count, 5);
 
@@ -2081,20 +2092,20 @@ test("retrieves recent context by explicit session or latest cwd match", () => {
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "SessionStart",
-    rawInput: JSON.stringify({ session_id: "older", cwd: "/tmp/work", message: "first" }),
+    rawInput: JSON.stringify({ session_id: "codex:older", cwd: "/tmp/work", message: "first" }),
     env: {},
     now: () => new Date("2026-06-09T11:00:00.000Z"),
   }));
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "newer", cwd: "/tmp/work", prompt: "latest context" }),
+    rawInput: JSON.stringify({ session_id: "codex:newer", cwd: "/tmp/work", prompt: "latest context" }),
     env: {},
     now: () => new Date("2026-06-09T12:00:00.000Z"),
   }));
 
-  assert.equal(storage.getCurrentSession({ cwd: "/tmp/work" })?.session_id, "newer");
-  assert.equal(storage.getRecentContext({ cwd: "/tmp/work", limit: 5 }).session_id, "newer");
-  assert.equal(storage.getRecentContext({ sessionId: "older", limit: 5 }).events[0].session_id, "older");
+  assert.equal(storage.getCurrentSession({ cwd: "/tmp/work" })?.session_id, "codex:newer");
+  assert.equal(storage.getRecentContext({ cwd: "/tmp/work", limit: 5 }).session_id, "codex:newer");
+  assert.equal(storage.getRecentContext({ sessionId: "codex:older", limit: 5 }).events[0].session_id, "codex:older");
 
   storage.close();
 });
@@ -2104,7 +2115,7 @@ test("records notes and packs context within a budget", () => {
   const storage = createStorage({ home });
 
   storage.recordNote({
-    sessionId: "note-session",
+    sessionId: "codex:note-session",
     cwd: "/tmp/notes",
     text: "Important design note about session-first retrieval.",
   });
@@ -2128,7 +2139,7 @@ test("packs summary nodes before bounded source events", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "summary-session",
+      session_id: "codex:summary-session",
       cwd: "/tmp/summary",
       prompt: "Improve agent-lcm summarization ranking with topic extraction and provenance.",
     }),
@@ -2138,7 +2149,7 @@ test("packs summary nodes before bounded source events", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "summary-session",
+      session_id: "codex:summary-session",
       cwd: "/tmp/summary",
       last_assistant_message: "Implemented deterministic session summaries, indexed topics, and source event pointers.",
     }),
@@ -2159,7 +2170,7 @@ test("packs summary nodes before bounded source events", () => {
   assert.equal(summaryIndex < sourceIndex, true);
   assert.match(packed.markdown, /Topics: .*summarization/u);
   assert.match(packed.markdown, /UserPromptSubmit/u);
-  assert.equal(packed.sources.some((source) => source.kind === "summary" && source.session_id === "summary-session"), true);
+  assert.equal(packed.sources.some((source) => source.kind === "summary" && source.session_id === "codex:summary-session"), true);
 
   storage.close();
 });
@@ -2171,7 +2182,7 @@ test("search sessions uses extracted summary topics for broad semantic clues", (
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "semantic-session",
+      session_id: "codex:semantic-session",
       cwd: "/tmp/semantic",
       prompt: "The retrieval layer should surface compact clue titles across sessions.",
     }),
@@ -2184,7 +2195,7 @@ test("search sessions uses extracted summary topics for broad semantic clues", (
     limit: 5,
   });
 
-  assert.deepEqual(matches.map((match) => match.session_id), ["semantic-session"]);
+  assert.deepEqual(matches.map((match) => match.session_id), ["codex:semantic-session"]);
 
   storage.close();
 });
@@ -2196,7 +2207,7 @@ test("search sessions explains the best summary-node match", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "discovery-session",
+      session_id: "codex:discovery-session",
       cwd: "/tmp/discovery",
       prompt: "Improve search session discovery with summary node snippets and source lineage.",
     }),
@@ -2206,7 +2217,7 @@ test("search sessions explains the best summary-node match", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "discovery-session",
+      session_id: "codex:discovery-session",
       cwd: "/tmp/discovery",
       last_assistant_message: "Added explainable best-match metadata for session discovery.",
     }),
@@ -2219,7 +2230,7 @@ test("search sessions explains the best summary-node match", () => {
     limit: 5,
   });
 
-  assert.equal(match.session_id, "discovery-session");
+  assert.equal(match.session_id, "codex:discovery-session");
   assert.equal(match.best_match?.kind, "summary_node");
   assert.equal(typeof match.best_match?.score, "number");
   assert.match(match.best_match?.snippet ?? "", /summary node snippets|source lineage/u);
@@ -2237,7 +2248,7 @@ test("search sessions can exclude the latest cwd session to surface prior histor
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "prior-history",
+      session_id: "codex:prior-history",
       cwd,
       prompt: "Rebuild history for summary DAG ranking and source lineage retrieval.",
     }),
@@ -2247,7 +2258,7 @@ test("search sessions can exclude the latest cwd session to surface prior histor
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "current-chat",
+      session_id: "codex:current-chat",
       cwd,
       prompt: "Current chat repeats summary DAG ranking source lineage terms while discussing search.",
     }),
@@ -2262,7 +2273,7 @@ test("search sessions can exclude the latest cwd session to surface prior histor
     excludeCurrentSession: true,
   });
 
-  assert.deepEqual(matches.map((match) => match.session_id), ["prior-history"]);
+  assert.deepEqual(matches.map((match) => match.session_id), ["codex:prior-history"]);
   assert.equal(matches[0].best_match?.kind, "summary_node");
 
   storage.close();
@@ -2276,7 +2287,7 @@ test("search sessions prefer real work over generated suggestion sessions", () =
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "real-work",
+      session_id: "codex:real-work",
       cwd,
       prompt: "Implement lossless-claw hermes-lcm style multi-depth summary DAG ranking and retrieval.",
     }),
@@ -2286,7 +2297,7 @@ test("search sessions prefer real work over generated suggestion sessions", () =
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "real-work",
+      session_id: "codex:real-work",
       cwd,
       last_assistant_message: "Added source-rich summary nodes and tuned lcm_search_sessions discovery ranking.",
     }),
@@ -2296,7 +2307,7 @@ test("search sessions prefer real work over generated suggestion sessions", () =
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "generated-suggestions",
+      session_id: "codex:generated-suggestions",
       cwd,
       prompt: "# Overview Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex in this local project: /tmp/suggestion-noise\nSuggest lossless-claw hermes-lcm multi-depth summary DAG ranking retrieval follow-up work.",
     }),
@@ -2306,7 +2317,7 @@ test("search sessions prefer real work over generated suggestion sessions", () =
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "generated-suggestions",
+      session_id: "codex:generated-suggestions",
       cwd,
       last_assistant_message: JSON.stringify({
         suggestions: [{
@@ -2325,7 +2336,7 @@ test("search sessions prefer real work over generated suggestion sessions", () =
     limit: 5,
   });
 
-  assert.equal(matches[0].session_id, "real-work");
+  assert.equal(matches[0].session_id, "codex:real-work");
 
   const auditMatches = storage.searchSessions({
     cwd,
@@ -2333,7 +2344,7 @@ test("search sessions prefer real work over generated suggestion sessions", () =
     limit: 5,
   });
 
-  assert.equal(auditMatches[0].session_id, "generated-suggestions");
+  assert.equal(auditMatches[0].session_id, "codex:generated-suggestions");
 
   storage.close();
 });
@@ -2345,7 +2356,7 @@ test("search sessions do not surface raw tool chatter as discovery matches", () 
   storage.ingest(normalizeHookEvent({
     hookEvent: "PostToolUse",
     rawInput: JSON.stringify({
-      session_id: "tool-chatter",
+      session_id: "codex:tool-chatter",
       cwd: "/tmp/tool-chatter",
       tool_name: "Bash",
       tool_response: "lossless-claw hermes-lcm multi-depth summary DAG ranking retrieval",
@@ -2372,7 +2383,7 @@ test("search sessions only surface generated suggestions for explicit suggestion
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "generated-suggestions-only",
+      session_id: "codex:generated-suggestions-only",
       cwd,
       prompt: "# Overview Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex in this local project: /tmp/generated-suggestion-only\nMention lossless-claw hermes-lcm multi-depth summary DAG ranking retrieval.",
     }),
@@ -2382,7 +2393,7 @@ test("search sessions only surface generated suggestions for explicit suggestion
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "generated-suggestions-only",
+      session_id: "codex:generated-suggestions-only",
       cwd,
       last_assistant_message: JSON.stringify({
         suggestions: [{
@@ -2409,7 +2420,7 @@ test("search sessions only surface generated suggestions for explicit suggestion
     limit: 5,
   });
 
-  assert.deepEqual(auditMatches.map((match) => match.session_id), ["generated-suggestions-only"]);
+  assert.deepEqual(auditMatches.map((match) => match.session_id), ["codex:generated-suggestions-only"]);
 
   storage.close();
 });
@@ -2422,7 +2433,7 @@ test("search sessions rank source-rich implementation history over tiny marker s
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "implementation-history",
+      session_id: "codex:implementation-history",
       cwd,
       prompt: "Implement summary DAG ranking retrieval with source lineage and confidence scoring.",
     }),
@@ -2432,7 +2443,7 @@ test("search sessions rank source-rich implementation history over tiny marker s
   storage.ingest(normalizeHookEvent({
     hookEvent: "Stop",
     rawInput: JSON.stringify({
-      session_id: "implementation-history",
+      session_id: "codex:implementation-history",
       cwd,
       last_assistant_message: "Finished implementation history: source-rich summary nodes, ranking signals, and retrieval verification.",
     }),
@@ -2442,7 +2453,7 @@ test("search sessions rank source-rich implementation history over tiny marker s
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "tiny-marker",
+      session_id: "codex:tiny-marker",
       cwd,
       prompt: "summary DAG ranking retrieval implementation history marker reply exactly",
     }),
@@ -2456,7 +2467,7 @@ test("search sessions rank source-rich implementation history over tiny marker s
     limit: 5,
   });
 
-  assert.deepEqual(matches.map((match) => match.session_id), ["implementation-history", "tiny-marker"]);
+  assert.deepEqual(matches.map((match) => match.session_id), ["codex:implementation-history", "codex:tiny-marker"]);
   assert.equal(matches[0].discovery?.confidence, "high");
   assert.equal(matches[1].discovery?.confidence, "low");
   assert.equal((matches[0].discovery?.score ?? 0) > (matches[1].discovery?.score ?? 0), true);
@@ -2478,7 +2489,7 @@ test("search sessions prefer the strongest evidence when aggregate relevance tie
   for (const [index, prompt] of strongSignals.entries()) {
     storage.ingest(normalizeHookEvent({
       hookEvent: "UserPromptSubmit",
-      rawInput: JSON.stringify({ session_id: "strong-evidence", cwd, prompt }),
+      rawInput: JSON.stringify({ session_id: "codex:strong-evidence", cwd, prompt }),
       env: {},
       now: () => new Date(Date.UTC(2026, 5, 9, 12, 0, index)),
     }));
@@ -2486,7 +2497,7 @@ test("search sessions prefer the strongest evidence when aggregate relevance tie
   for (let index = 0; index < 4; index += 1) {
     storage.ingest(normalizeHookEvent({
       hookEvent: "UserPromptSubmit",
-      rawInput: JSON.stringify({ session_id: "recent-adjacent", cwd, prompt: "alpha beta" }),
+      rawInput: JSON.stringify({ session_id: "codex:recent-adjacent", cwd, prompt: "alpha beta" }),
       env: {},
       now: () => new Date(Date.UTC(2026, 5, 10, 12, 0, index)),
     }));
@@ -2501,7 +2512,7 @@ test("search sessions prefer the strongest evidence when aggregate relevance tie
     limit: 5,
   });
 
-  assert.deepEqual(matches.map((match) => match.session_id), ["strong-evidence", "recent-adjacent"]);
+  assert.deepEqual(matches.map((match) => match.session_id), ["codex:strong-evidence", "codex:recent-adjacent"]);
   assert.equal(matches[0].best_match?.score, 4);
   assert.equal(matches[1].best_match?.score, 2);
 
@@ -2515,7 +2526,7 @@ test("session summary topics prefer signal terms over prompt filler", () => {
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({
-      session_id: "topic-quality-session",
+      session_id: "codex:topic-quality-session",
       cwd: "/tmp/topic-quality",
       prompt: "What is the summary stop words in the code? Why is that there? Is that kind of hacky? If so, improve it.",
     }),
@@ -2523,7 +2534,7 @@ test("session summary topics prefer signal terms over prompt filler", () => {
     now,
   }));
 
-  const summary = storage.getSessionMemorySummary("topic-quality-session");
+  const summary = storage.getSessionMemorySummary("codex:topic-quality-session");
 
   assert.ok(summary);
   assert.deepEqual(summary.topics.slice(0, 5), ["summary", "stop", "words", "code", "hacky"]);
@@ -2536,7 +2547,7 @@ test("session summary topics prefer signal terms over prompt filler", () => {
 test("packed summaries expose latest matching prompts in long sessions", () => {
   const home = tempHome();
   const storage = createStorage({ home });
-  const sessionId = "summary-tail-session";
+  const sessionId = "codex:summary-tail-session";
   const cwd = "/tmp/summary-tail";
 
   for (let index = 0; index < 8; index += 1) {
@@ -2576,7 +2587,7 @@ test("packed summaries expose latest matching prompts in long sessions", () => {
 test("session summaries include latest high-signal events in very long sessions", () => {
   const home = tempHome();
   const storage = createStorage({ home });
-  const sessionId = "long-summary-session";
+  const sessionId = "codex:long-summary-session";
   const cwd = "/tmp/long-summary";
 
   for (let index = 0; index < 1001; index += 1) {
@@ -2619,7 +2630,7 @@ test("still appends raw JSONL when SQLite index is unavailable", () => {
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "raw-first", cwd: "/tmp/raw", prompt: "raw append survives" }),
+    rawInput: JSON.stringify({ session_id: "codex:raw-first", cwd: "/tmp/raw", prompt: "raw append survives" }),
     env: {},
     now,
   }));
@@ -2637,7 +2648,7 @@ test("health falls back to raw JSONL when SQLite queries fail after open", () =>
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "health-query-fail", cwd: "/tmp/raw", prompt: "raw health fallback" }),
+    rawInput: JSON.stringify({ session_id: "codex:health-query-fail", cwd: "/tmp/raw", prompt: "raw health fallback" }),
     env: {},
     now,
   }));
@@ -2664,7 +2675,7 @@ test("context plan falls back to raw JSONL when SQLite queries fail after open",
 
   storage.ingest(normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
-    rawInput: JSON.stringify({ session_id: "context-plan-query-fail", cwd: "/tmp/raw", prompt: "raw context plan fallback" }),
+    rawInput: JSON.stringify({ session_id: "codex:context-plan-query-fail", cwd: "/tmp/raw", prompt: "raw context plan fallback" }),
     env: {},
     now,
   }));
@@ -2676,8 +2687,8 @@ test("context plan falls back to raw JSONL when SQLite queries fail after open",
     close() {},
   };
 
-  const plan = storage.getContextPlan({ sessionId: "context-plan-query-fail" });
-  assert.equal(plan.session_id, "context-plan-query-fail");
+  const plan = storage.getContextPlan({ sessionId: "codex:context-plan-query-fail" });
+  assert.equal(plan.session_id, "codex:context-plan-query-fail");
   assert.equal(plan.estimated_recent_tokens > 0, true);
   assert.equal(plan.state, "under_limit");
 
@@ -2689,7 +2700,7 @@ function ingestStatsFixture(storage: ReturnType<typeof createStorage>): void {
     storage.ingest(normalizeHookEvent({
       hookEvent: "UserPromptSubmit",
       rawInput: JSON.stringify({
-        session_id: "stats-session",
+        session_id: "codex:stats-session",
         cwd: "/tmp/stats",
         prompt: `stats fixture high signal prompt ${index}`,
       }),
@@ -2700,7 +2711,7 @@ function ingestStatsFixture(storage: ReturnType<typeof createStorage>): void {
   storage.ingest(normalizeHookEvent({
     hookEvent: "PreCompact",
     rawInput: JSON.stringify({
-      session_id: "stats-session",
+      session_id: "codex:stats-session",
       cwd: "/tmp/stats",
       trigger: "auto",
       reason: "stats fixture compact marker",

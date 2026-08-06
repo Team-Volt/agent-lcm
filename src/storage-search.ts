@@ -434,7 +434,7 @@ export function searchStoredOverflow(
         maxScanBytes: MAX_OVERFLOW_SEARCH_BYTES - scannedBytes,
         onRead: (bytes) => { scannedBytes += bytes; },
       });
-      if (match) matches.push(match);
+      if (match) matches.push({ ...match, harness: event.harness });
     } catch {
       continue;
     }

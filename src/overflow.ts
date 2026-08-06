@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { NormalizedEvent } from "./events.ts";
+import type { HarnessName, NormalizedEvent } from "./events.ts";
 import { sha256 } from "./redact.ts";
 
 export const DEFAULT_OVERFLOW_READ_BYTES = 64 * 1024;
@@ -27,6 +27,7 @@ export type OverflowContent = OverflowReference & {
 export type OverflowSearchMatch = {
   file_ref_id: string;
   session_id: string;
+  harness: HarnessName;
   timestamp: string;
   byte_offset: number;
   line_number: number;
@@ -109,7 +110,7 @@ export function searchOverflowContent(args: {
   query: string;
   maxScanBytes?: number;
   onRead?: (bytes: number) => void;
-}): OverflowSearchMatch | undefined {
+}): Omit<OverflowSearchMatch, "harness"> | undefined {
   const query = args.query.trim();
   if (query.length === 0) return undefined;
   const content = readVerifiedOverflowBuffer({
