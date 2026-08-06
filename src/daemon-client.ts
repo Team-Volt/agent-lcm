@@ -15,6 +15,7 @@ export type DaemonStatus = {
 };
 
 const starts = new Map<string, Promise<void>>();
+const DAEMON_TIMEOUT_MS = 10_000;
 
 export async function ensureDaemon(config: LcmConfig = loadConfig()): Promise<void> {
   const current = starts.get(config.home);
@@ -47,7 +48,12 @@ async function ensureDaemonOnce(config: LcmConfig): Promise<void> {
     stdio: "ignore",
   });
   child.unref();
-  await waitFor(config, (candidate) => candidate.running && candidate.version === CURRENT_DAEMON_VERSION);
+  try {
+    await waitFor(config, (candidate) => candidate.running && candidate.version === CURRENT_DAEMON_VERSION);
+  } catch (error) {
+    child.kill("SIGTERM");
+    throw error;
+  }
 }
 
 export async function daemonRequest<T>(
@@ -91,7 +97,7 @@ export async function stopDaemon(config: LcmConfig = loadConfig()): Promise<void
   await waitForRelease(config, status.pid);
 }
 
-async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, timeoutMs = 5_000): Promise<void> {
+async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, timeoutMs = DAEMON_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const status = await daemonStatus(config);
@@ -105,7 +111,7 @@ async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, t
 async function waitFor(
   config: LcmConfig,
   predicate: (status: DaemonStatus) => boolean,
-  timeoutMs = 5_000,
+  timeoutMs = DAEMON_TIMEOUT_MS,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (true) {

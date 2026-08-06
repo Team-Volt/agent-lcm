@@ -26,7 +26,7 @@ export function runCli(args: string[], options: {
   cwd?: string;
   timeout?: number;
 } = {}) {
-  return spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", ...args], {
+  const result = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", ...args], {
     cwd: path.resolve("."),
     encoding: "utf8",
     input: options.input,
@@ -36,6 +36,16 @@ export function runCli(args: string[], options: {
     },
     timeout: options.timeout ?? 10_000,
   });
+  if (options.env?.AGENT_LCM_HOME && (args[0] === "mcp" || args[0] === "doctor" || args[0] === "import-codex-sessions")) {
+    const cleanup = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "stop"], {
+      cwd: options.cwd ?? path.resolve("."),
+      encoding: "utf8",
+      env: { ...process.env, ...options.env },
+      timeout: options.timeout ?? 10_000,
+    });
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+  }
+  return result;
 }
 
 export function assertCliOk(result: ReturnType<typeof runCli>): void {

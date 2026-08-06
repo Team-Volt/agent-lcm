@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 
 import type { LcmConfig } from "./config.ts";
 
@@ -17,9 +19,33 @@ export type DaemonResponse =
   | { version: 1; id: string; ok: false; error: string };
 
 export function ipcAddress(config: LcmConfig): string {
-  if (process.platform !== "win32") return config.socketPath;
-  const homeHash = crypto.createHash("sha256").update(config.home).digest("hex").slice(0, 16);
-  return `\\\\.\\pipe\\agent-lcm-${homeHash}`;
+  if (process.platform !== "win32") {
+    if (Buffer.byteLength(config.socketPath, "utf8") <= MAX_UNIX_SOCKET_PATH_BYTES) return config.socketPath;
+    return path.join(unixSocketDirectory(), `${homeHash(config.home)}.sock`);
+  }
+  return `\\\\.\\pipe\\agent-lcm-${homeHash(config.home)}`;
+}
+
+export function prepareIpcAddress(address: string): void {
+  if (process.platform === "win32") return;
+  const directory = path.dirname(address);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+}
+
+const MAX_UNIX_SOCKET_PATH_BYTES = 100;
+
+function unixSocketDirectory(): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : "user";
+  const name = `agent-lcm-${uid}`;
+  const temporaryDirectory = path.join(os.tmpdir(), name);
+  const candidate = path.join(temporaryDirectory, "0000000000000000.sock");
+  if (Buffer.byteLength(candidate, "utf8") <= MAX_UNIX_SOCKET_PATH_BYTES) return temporaryDirectory;
+  return path.join("/tmp", name);
+}
+
+function homeHash(home: string): string {
+  return crypto.createHash("sha256").update(home).digest("hex").slice(0, 16);
 }
 
 export function readOrCreateToken(config: LcmConfig): string {

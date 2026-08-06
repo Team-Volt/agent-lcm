@@ -7,7 +7,7 @@ import type { LcmConfig } from "./config.ts";
 import { importCodexSessions } from "./codex-import.ts";
 import { drainInbox } from "./inbox.ts";
 import { callTool } from "./mcp-tools.ts";
-import { hasCode, ipcAddress, readOrCreateToken, sendDaemonRequest, tokenMatches, type DaemonRequest, type DaemonResponse } from "./ipc.ts";
+import { hasCode, ipcAddress, prepareIpcAddress, readOrCreateToken, sendDaemonRequest, tokenMatches, type DaemonRequest, type DaemonResponse } from "./ipc.ts";
 import { createStorage, type LcmStorage } from "./storage.ts";
 
 export const CURRENT_DAEMON_VERSION = "0.1.0";
@@ -46,7 +46,7 @@ export async function startDaemon(config: LcmConfig): Promise<void> {
           if (server.listening) await closeServer(server);
         } finally {
           try {
-            if (ownsEndpoint && process.platform !== "win32") unlinkIfPresent(config.socketPath);
+            if (ownsEndpoint && process.platform !== "win32") unlinkIfPresent(ipcAddress(config));
             if (ownsEndpoint) {
               unlinkIfPresent(path.join(config.runtimeDir, PID_FILE));
               unlinkIfPresent(path.join(config.runtimeDir, VERSION_FILE));
@@ -299,6 +299,7 @@ function closeServer(server: net.Server): Promise<void> {
 
 async function bindDaemonEndpoint(config: LcmConfig, server: net.Server, token: string): Promise<boolean> {
   const address = ipcAddress(config);
+  prepareIpcAddress(address);
   const deadline = Date.now() + START_TIMEOUT_MS;
   while (true) {
     try {
@@ -312,7 +313,7 @@ async function bindDaemonEndpoint(config: LcmConfig, server: net.Server, token: 
     if (probe.reachable) {
       if (await waitForBoundDaemon(config, token, deadline)) return false;
     } else if (process.platform !== "win32" && (probe.code === "ENOENT" || probe.code === "ECONNREFUSED")) {
-      unlinkIfPresent(config.socketPath);
+      unlinkIfPresent(address);
     }
     if (Date.now() >= deadline) throw new Error(`Timed out waiting to own the agent-lcm endpoint at ${address}.`);
     await new Promise((resolve) => setTimeout(resolve, START_POLL_MS));

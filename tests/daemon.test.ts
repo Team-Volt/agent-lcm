@@ -76,6 +76,27 @@ test("reuses one daemon and rejects authentication without touching queued or st
   assert.equal((await daemonStatus(config)).running, false);
 });
 
+test("uses a stable private short socket for long Agent LCM homes", async (t) => {
+  if (process.platform === "win32") return;
+  const longHome = path.join(tempHome("agent-lcm-very-long-home-"), "x".repeat(160));
+  const config = loadConfig({ home: longHome });
+  const alternate = loadConfig({ home: `${longHome}-other` });
+  const address = ipcAddress(config);
+
+  assert.notEqual(address, config.socketPath);
+  assert.notEqual(address, ipcAddress(alternate));
+  assert.equal(Buffer.byteLength(address, "utf8") <= 100, true);
+  assert.match(address, /agent-lcm-\d+\/[0-9a-f]{16}\.sock$/u);
+
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+  assert.equal(fs.existsSync(address), true);
+  assert.equal(fs.statSync(path.dirname(address)).mode & 0o777, 0o700);
+  await stopDaemon(config);
+  assert.equal(fs.existsSync(address), false);
+  assert.equal(fs.existsSync(path.dirname(address)), true);
+});
+
 test("publishes a complete token atomically", () => {
   const config = loadConfig({ home: tempHome() });
   const originalWrite = fs.writeFileSync;
@@ -132,9 +153,8 @@ test("concurrent subprocess starters recover one stale POSIX socket", {
       assert.equal(fs.statSync(path.join(config.runtimeDir, name)).mode & 0o777, 0o600);
     }
   }
-  await daemonRequest(config, "tool", {
-    name: "lcm_record_note", arguments: { sessionId: "codex:stale-socket", cwd: "/tmp/stale-socket", text: "single writer" },
-  });
+  publishInboxEvent(config, sampleEvent("single writer"));
+  await daemonRequest(config, "tool", { name: "lcm_health", arguments: {} });
   assert.equal(readJsonl(config.rawLogPath).length, 1);
 
   await stopDaemon(config);
@@ -356,10 +376,7 @@ test("daemon tool requests use the daemon storage", async (t) => {
   t.after(() => stopDaemon(config));
   await ensureDaemon(config);
 
-  await daemonRequest(config, "tool", {
-    name: "lcm_record_note",
-    arguments: { sessionId: "codex:daemon-tool", cwd: "/tmp/daemon-tool", text: "one owner" },
-  });
+  publishInboxEvent(config, sampleEvent("one owner"));
   const result = await daemonRequest<{ structuredContent: { health: { event_count: number } } }>(config, "tool", {
     name: "lcm_health",
     arguments: {},

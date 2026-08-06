@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { loadConfig } from "../src/config.ts";
-import { ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
+import { daemonStatus, ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
 import { normalizeHookEvent } from "../src/events.ts";
 import { publishInboxEvent } from "../src/inbox.ts";
 import { clearDerivedSummaries, runCli, runMcp, tempHome } from "./helpers.ts";
@@ -34,6 +34,7 @@ test("MCP bridge drains queued events from every harness through the daemon", as
 
   const matches = responses[1].result.structuredContent.matches as Array<{ harness: string }>;
   assert.deepEqual(matches.map((match) => match.harness).sort(), ["codex", "cursor"]);
+  assert.equal((await daemonStatus(config)).running, false);
 });
 
 function queuedEvent(eventId: string, harness: "codex" | "cursor", sessionId: string) {
@@ -83,7 +84,6 @@ test("MCP server initializes and exposes a stable tool catalog", () => {
       "lcm_get_session_graph",
       "lcm_get_recent_context",
       "lcm_pack_context",
-      "lcm_record_note",
     ],
   );
   for (const name of STANDARD_TOOL_NAMES) {
@@ -109,12 +109,25 @@ test("MCP server initializes and exposes a stable tool catalog", () => {
   assert.deepEqual(listTool.inputSchema.properties.harnesses.items.enum, ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"]);
   for (const tool of responses[1].result.tools) {
     assert.deepEqual(tool.annotations, {
-      readOnlyHint: tool.name !== "lcm_record_note",
+      readOnlyHint: true,
       destructiveHint: false,
-      idempotentHint: tool.name !== "lcm_record_note",
+      idempotentHint: true,
       openWorldHint: false,
     });
   }
+});
+
+test("MCP rejects the removed note tool", () => {
+  const home = tempHome();
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "lcm_record_note", arguments: {} } },
+  ], { AGENT_LCM_HOME: home });
+
+  assert.deepEqual(responses, [{
+    jsonrpc: "2.0",
+    id: 1,
+    error: { code: -32602, message: "Unknown tool: lcm_record_note" },
+  }]);
 });
 
 test("MCP server falls back to its supported protocol version", () => {
@@ -376,7 +389,7 @@ test("MCP stats reports aggregate summary depth and graph counts", () => {
   assert.equal(stats.graph_edges_by_kind.summary_source, 11);
 });
 
-test("MCP stats does not rebuild derived summaries", () => {
+test("MCP stats reports daemon-rebuilt summaries", () => {
   const home = tempHome();
   const cwd = "/tmp/mcp-readonly-stats";
   for (let index = 0; index < 9; index += 1) {
@@ -408,8 +421,8 @@ test("MCP stats does not rebuild derived summaries", () => {
 
   const stats = responses[1].result.structuredContent.stats;
   assert.equal(stats.event_count, 9);
-  assert.equal(stats.summary_count, 0);
-  assert.equal(stats.summary_node_count, 0);
+  assert.equal(stats.summary_count, 1);
+  assert.equal(stats.summary_node_count > 0, true);
   assert.equal(stats.index_error, undefined);
 });
 

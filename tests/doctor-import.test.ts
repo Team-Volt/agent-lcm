@@ -59,6 +59,13 @@ test("doctor reports actionable recommendations for an unwired empty install", (
   assert.equal(report.status, "warn");
   assert.equal(report.checks.some((check: { id: string; status: string }) => check.id === "plugin-wiring" && check.status === "warn"), true);
   assert.equal(report.checks.some((check: { id: string; status: string }) => check.id === "event-capture" && check.status === "warn"), true);
+  assert.deepEqual(report.adapter_status.cursor, {
+    configured: false,
+    state: "not_configured",
+    detail: "Not configured.",
+    setup_gap: "Cursor adapter files and setup are not available yet.",
+  });
+  assert.equal(report.adapter_status.codex.configured, false);
   assert.equal(report.recommendations.some((text: string) => text.includes("Install the Agent LCM plugin")), true);
   assert.equal(report.recommendations.some((text: string) => text.includes("import-codex-sessions")), true);
 });

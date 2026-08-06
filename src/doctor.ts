@@ -14,7 +14,15 @@ export type DoctorReport = {
   checks: DoctorCheck[];
   recommendations: string[];
   status_report: Record<string, unknown>;
+  adapter_status: Record<string, AdapterStatus>;
   health: Health;
+};
+
+export type AdapterStatus = {
+  configured: boolean;
+  state: "configured" | "not_configured";
+  detail: string;
+  setup_gap?: string;
 };
 
 export function buildDoctorReport(args: {
@@ -85,13 +93,37 @@ export function buildDoctorReport(args: {
   const recommendations = checks
     .filter((item) => item.status !== "ok" && item.recommendation)
     .map((item) => item.recommendation as string);
+  const adapter_status = adapterStatus(args.status);
   return {
     status: checks.some((item) => item.status === "fail") ? "fail" : checks.some((item) => item.status === "warn") ? "warn" : "ok",
     checks,
     recommendations,
     status_report: args.status,
+    adapter_status,
     health: args.health,
   };
+}
+
+function adapterStatus(status: Record<string, unknown>): Record<string, AdapterStatus> {
+  const codexConfigured = booleanValue(status.plugin_configured)
+    && booleanValue(status.mcp_configured)
+    && booleanValue(status.hooks_configured);
+  return {
+    codex: {
+      configured: codexConfigured,
+      state: codexConfigured ? "configured" : "not_configured",
+      detail: codexConfigured ? "Codex MCP and hooks are configured." : "Codex MCP or hooks are not configured.",
+      ...(codexConfigured ? {} : { setup_gap: "Install the Agent LCM plugin and restart Codex." }),
+    },
+    cursor: missingAdapter("Cursor adapter files and setup are not available yet."),
+    vscode: missingAdapter("VS Code adapter files and setup are not available yet."),
+    copilot: missingAdapter("GitHub Copilot adapter files and setup are not available yet."),
+    kiro: missingAdapter("Kiro adapter files and setup are not available yet."),
+  };
+}
+
+function missingAdapter(setup_gap: string): AdapterStatus {
+  return { configured: false, state: "not_configured", detail: "Not configured.", setup_gap };
 }
 
 function summaryIndexCheck(health: Health): DoctorCheck {

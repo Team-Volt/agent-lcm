@@ -254,19 +254,4 @@ export const TOOLS = [
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
-  {
-    name: "lcm_record_note",
-    title: "LCM Record Note",
-    description: "Record a user-authored note as a first-class LCM event.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-        cwd: { type: "string" },
-        text: { type: "string" },
-      },
-      required: ["sessionId", "cwd", "text"],
-    },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  },
 ];

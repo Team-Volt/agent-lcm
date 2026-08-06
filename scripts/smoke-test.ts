@@ -43,11 +43,11 @@ try {
       prompt: index === 2 ? "smoke-old-dag-marker should survive long-session packing" : `smoke filler ${index}`,
     });
   }
-  publishInboxEvent(loadConfig({ home }), normalizeHookEvent({
-    harness: "cursor",
+  const cursorEvent = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({ session_id: "cursor:smoke-session", cwd: root, prompt: "smoke searchable context from cursor" }),
-  }));
+  });
+  publishInboxEvent(loadConfig({ home }), { ...cursorEvent, harness: "cursor", session_id: "cursor:smoke-session" });
 
   const responses = runMcp([
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
@@ -136,11 +136,7 @@ try {
   assert.match(expansionResponses[1].result.content[0].text, /Source Events/u);
   assert.doesNotMatch(fs.readFileSync(path.join(home, "events.jsonl"), "utf8"), /sk-proj-secret-value/u);
 
-  const stopped = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "stop"], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, AGENT_LCM_HOME: home },
-  });
+  const stopped = stopDaemon();
   assert.equal(stopped.status, 0, stopped.stderr);
   const restarted = runMcp([
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
@@ -150,12 +146,23 @@ try {
     restarted[1].result.structuredContent.matches.map((match: { harness: string }) => match.harness).sort(),
     ["codex", "cursor"],
   );
+  const finalStop = stopDaemon();
+  assert.equal(finalStop.status, 0, finalStop.stderr);
 
   process.stdout.write(`Smoke test passed with AGENT_LCM_HOME=${home}\n`);
 } finally {
+  stopDaemon();
   if (process.env.AGENT_LCM_KEEP_SMOKE !== "1") {
     fs.rmSync(home, { recursive: true, force: true });
   }
+}
+
+function stopDaemon() {
+  return spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "stop"], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, AGENT_LCM_HOME: home },
+  });
 }
 
 function runHook(event: string, payload: unknown): void {

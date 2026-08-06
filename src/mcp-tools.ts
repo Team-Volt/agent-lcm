@@ -2,7 +2,7 @@ import { compactDescription, toolResult, withoutMarkdown } from "./mcp-result.ts
 import { HARNESS_NAMES, type HarnessName } from "./events.ts";
 import type { LcmStorage } from "./storage.ts";
 
-export function callTool(storage: LcmStorage, params: Record<string, unknown>) {
+export function callTool(storage: LcmStorage, params: Record<string, unknown>): ReturnType<typeof toolResult> {
   const name = stringArg(params.name, "name");
   const args = isRecord(params.arguments) ? params.arguments : {};
   switch (name) {
@@ -181,15 +181,6 @@ export function callTool(storage: LcmStorage, params: Record<string, unknown>) {
         harnesses: optionalHarnessArray(args.harnesses),
       });
       return toolResult("Packed context is in structuredContent.markdown.", packed);
-    }
-    case "lcm_record_note": {
-      const event = storage.recordNote({
-        sessionId: stringArg(args.sessionId, "sessionId"),
-        cwd: stringArg(args.cwd, "cwd"),
-        text: stringArg(args.text, "text"),
-        harness: "mcp",
-      });
-      return toolResult(`Recorded note for ${event.session_id}.`, { event });
     }
     default:
       throw new Error(`Unknown tool: ${name}`);
