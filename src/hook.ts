@@ -2,11 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { DEFAULT_LIMITS, loadConfig } from "./config.ts";
-import { importCodexSessions } from "./codex-import.ts";
 import { normalizeHookEvent } from "./events.ts";
 import { resolveGitMetadata } from "./git.ts";
+import { publishInboxEvent } from "./inbox.ts";
 import { sha256 } from "./redact.ts";
-import { createStorage } from "./storage.ts";
 
 export async function runHook(args: string[]): Promise<void> {
   const hookEvent = args[0];
@@ -14,9 +13,6 @@ export async function runHook(args: string[]): Promise<void> {
   const config = loadConfig();
   const rawInput = await readStdinWithLimit(config.limits.maxOverflowInputBytes);
   const payloadCwd = extractStringField(rawInput, "cwd") ?? process.env.PWD ?? process.cwd();
-  const transcriptPath = hookEvent === "SubagentStop"
-    ? extractStringField(rawInput, "agent_transcript_path")
-    : undefined;
   const toolHook = hookEvent === "PreToolUse" || hookEvent === "PostToolUse";
   const repo = toolHook ? {} : resolveGitMetadata(payloadCwd);
   const event = normalizeHookEvent({
@@ -48,29 +44,7 @@ export async function runHook(args: string[]): Promise<void> {
       path: overflowPath,
     };
   }
-  const storage = createStorage({ config });
-  try {
-    if (toolHook) {
-      const session = storage.getCurrentSession({ sessionId: event.session_id });
-      event.repo_root = session?.repo_root;
-      event.git_branch = session?.git_branch;
-    }
-    storage.ingest(event);
-    if (transcriptPath) {
-      try {
-        const report = await importCodexSessions(storage, { from: transcriptPath });
-        for (const error of report.errors) {
-          process.stderr.write(`agent-lcm: failed to import subagent transcript: ${error.message}\n`);
-        }
-      } catch (error) {
-        process.stderr.write(
-          `agent-lcm: failed to import subagent transcript: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
-      }
-    }
-  } finally {
-    storage.close();
-  }
+  publishInboxEvent(config, event);
   const output = postCompactRecoveryOutput({
     home: config.home,
     hookEvent: event.hook_event,

@@ -3,9 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { Worker } from "node:worker_threads";
 
 import { assertCliOk, clearDerivedSummaries, readJsonl, runCli, tempHome } from "./helpers.ts";
+import { normalizeHookEvent } from "../src/events.ts";
+import { createStorage } from "../src/storage.ts";
 
 type HookAdditionalContextOutput = {
   readonly hookSpecificOutput: {
@@ -14,7 +15,7 @@ type HookAdditionalContextOutput = {
   };
 };
 
-test("hook command ingests a synthetic projectless prompt event", () => {
+test("hook command publishes a synthetic projectless prompt without opening storage", () => {
   const home = tempHome();
   const result = runCli(["hook", "UserPromptSubmit"], {
     input: JSON.stringify({
@@ -26,24 +27,20 @@ test("hook command ingests a synthetic projectless prompt event", () => {
   });
 
   assertCliOk(result);
-  const lines = readJsonl(path.join(home, "events.jsonl"));
+  const lines = readInboxEvents(home);
   assert.equal(lines.length, 1);
-  assert.equal((lines[0] as { session_id: string }).session_id, "hook-session");
-
-  const health = runCli(["health", "--json"], {
-    env: { AGENT_LCM_HOME: home },
-  });
-  assertCliOk(health);
-  assert.equal(JSON.parse(health.stdout).event_count, 1);
+  assert.equal((lines[0] as { session_id: string }).session_id, "codex:hook-session");
+  assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
+  assert.equal(fs.existsSync(path.join(home, "index.sqlite")), false);
 });
 
-test("hook command reports raw fsync failure and persists on retry", () => {
-  // Given: the real hook CLI loads a fault injector that fails raw fsync.
+test("hook command reports inbox fsync failure and publishes on retry", () => {
+  // Given: the real hook CLI loads a fault injector that fails inbox fsync.
   const home = tempHome();
   const preloadPath = path.join(tempHome("agent-lcm-fsync-preload-"), "fail-fsync.mjs");
   fs.writeFileSync(
     preloadPath,
-    'import fs from "node:fs"; const original = fs.fsyncSync; let calls = 0; fs.fsyncSync = (...args) => { calls += 1; if (calls === 1) throw new Error("forced raw fsync failure"); return original(...args); };\n',
+    'import fs from "node:fs"; const original = fs.fsyncSync; let calls = 0; fs.fsyncSync = (...args) => { calls += 1; if (calls === 1) throw new Error("forced inbox fsync failure"); return original(...args); };\n',
   );
   const input = JSON.stringify({
     session_id: "hook-fsync-retry",
@@ -51,7 +48,7 @@ test("hook command reports raw fsync failure and persists on retry", () => {
     prompt: "persist once after fsync recovers",
   });
 
-  // When: raw durability fails before the hook can acknowledge the event.
+  // When: inbox durability fails before the hook can acknowledge the event.
   const blocked = spawnSync(process.execPath, [
     "--no-warnings",
     "--import",
@@ -66,57 +63,34 @@ test("hook command reports raw fsync failure and persists on retry", () => {
     env: { ...process.env, AGENT_LCM_HOME: home },
   });
 
-  // Then: failure is visible and rollback leaves no acknowledged raw event.
+  // Then: failure is visible and leaves no acknowledged inbox event.
   assert.equal(blocked.status, 1, blocked.stderr);
-  assert.match(blocked.stderr, /forced raw fsync failure/u);
+  assert.match(blocked.stderr, /forced inbox fsync failure/u);
   assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
+  assert.equal(readInboxEvents(home).length, 0);
 
   // When: the same hook is retried without the injected failure.
   const retried = runCli(["hook", "UserPromptSubmit"], { input, env: { AGENT_LCM_HOME: home } });
 
-  // Then: exactly one raw and indexed event persists.
+  // Then: exactly one inbox event persists without opening storage.
   assertCliOk(retried);
-  assert.equal(readJsonl(path.join(home, "events.jsonl")).length, 1);
-  const health = runCli(["health", "--json"], { env: { AGENT_LCM_HOME: home } });
-  assertCliOk(health);
-  assert.equal(JSON.parse(health.stdout).event_count, 1);
+  assert.equal(readInboxEvents(home).length, 1);
+  assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
+  assert.equal(fs.existsSync(path.join(home, "index.sqlite")), false);
 });
 
-test("hook recovers after its lock-owning worker terminates", async () => {
-  // Given: a worker owns the raw-log coordinator, enters its callback, then terminates.
+test("hook publication creates no raw-log coordinator", () => {
   const home = tempHome();
-  const rawLogPath = path.join(home, "events.jsonl");
-  const rawLogModuleUrl = new URL("../src/raw-log.ts", import.meta.url).href;
-  const writer = new Worker(String.raw`
-    const { parentPort, workerData } = require("node:worker_threads");
-    const wait = new Int32Array(new SharedArrayBuffer(4));
-    (async () => {
-      const { withRawLogLock } = await import(workerData.rawLogModuleUrl);
-      withRawLogLock(workerData.rawLogPath, () => {
-        parentPort.postMessage("locked");
-        Atomics.wait(wait, 0, 0);
-      });
-    })();
-  `, { eval: true, workerData: { rawLogModuleUrl, rawLogPath } });
-  await new Promise<void>((resolve, reject) => {
-    writer.once("message", () => resolve());
-    writer.once("error", reject);
+  const result = runCli(["hook", "UserPromptSubmit"], {
+    input: JSON.stringify({ session_id: "inbox-only", cwd: "/tmp/inbox-only", prompt: "publish without a lock" }),
+    env: { AGENT_LCM_HOME: home },
   });
-  await writer.terminate();
-  const input = JSON.stringify({ session_id: "worker-owner-retry", cwd: "/tmp/worker-owner", prompt: "persist after worker owner crash" });
-
-  // When: another real hook writes after SQLite releases the terminated worker's transaction.
-  const retried = runCli(["hook", "UserPromptSubmit"], { input, env: { AGENT_LCM_HOME: home }, timeout: 15_000 });
-
-  // Then: the retry persists exactly one event without manual lock cleanup.
-  assertCliOk(retried);
-  assert.equal(readJsonl(rawLogPath).length, 1);
-  const health = runCli(["health", "--json"], { env: { AGENT_LCM_HOME: home } });
-  assertCliOk(health);
-  assert.equal(JSON.parse(health.stdout).event_count, 1);
+  assertCliOk(result);
+  assert.equal(readInboxEvents(home).length, 1);
+  assert.equal(fs.existsSync(path.join(home, "events.jsonl.lock.sqlite")), false);
 });
 
-test("hook command redacts credential URI passwords before persistence", () => {
+test("hook command redacts credential URI passwords before inbox publication", () => {
   const home = tempHome();
   const password = "audit-password";
   const result = runCli(["hook", "UserPromptSubmit"], {
@@ -129,7 +103,7 @@ test("hook command redacts credential URI passwords before persistence", () => {
   });
 
   assertCliOk(result);
-  const persisted = fs.readFileSync(path.join(home, "events.jsonl"), "utf8");
+  const persisted = JSON.stringify(readInboxEvents(home));
   assert.doesNotMatch(persisted, new RegExp(password, "u"));
   assert.match(persisted, /redis:\/\/:\[REDACTED:secret\]@cache\.example\.test\/0/u);
 });
@@ -187,11 +161,11 @@ test("hook command stores a sanitized overflow reference for oversized valid inp
   });
 
   assertCliOk(result);
-  const [event] = readJsonl(path.join(home, "events.jsonl")) as Array<{
+  const [event] = readInboxEvents(home) as Array<{
     session_id: string;
     payload: { overflow_ref?: { path?: string; sha256?: string; byte_count?: number } };
   }>;
-  assert.equal(event.session_id, "oversized-hook-session");
+  assert.equal(event.session_id, "codex:oversized-hook-session");
   assert.match(event.payload.overflow_ref?.sha256 ?? "", /^[a-f0-9]{64}$/u);
   assert.equal((event.payload.overflow_ref?.byte_count ?? 0) > 512 * 1024, true);
   const overflowPath = event.payload.overflow_ref?.path ?? "";
@@ -215,7 +189,7 @@ test("hook command preserves truncated large tool output below the input overflo
   });
 
   assertCliOk(result);
-  const [event] = readJsonl(path.join(home, "events.jsonl")) as Array<{
+  const [event] = readInboxEvents(home) as Array<{
     payload: { overflow_ref?: { path?: string } };
   }>;
   const overflowPath = event.payload.overflow_ref?.path ?? "";
@@ -247,7 +221,7 @@ test("hook command captures git metadata as optional session metadata", () => {
   });
 
   assertCliOk(result);
-  const [event] = readJsonl(path.join(home, "events.jsonl")) as Array<{
+  const [event] = readInboxEvents(home) as Array<{
     repo_root?: string;
     git_branch?: string;
   }>;
@@ -258,9 +232,6 @@ test("hook command captures git metadata as optional session metadata", () => {
 test("tool hooks skip Git metadata probes", () => {
   if (process.platform === "win32") return;
   const home = tempHome();
-  const repoRootResult = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd(), encoding: "utf8" });
-  assert.equal(repoRootResult.status, 0, repoRootResult.stderr);
-  const repoRoot = repoRootResult.stdout.trim();
   const binDir = tempHome("agent-lcm-fake-git-");
   const gitLog = path.join(binDir, "git.log");
   const fakeGit = path.join(binDir, "git");
@@ -285,57 +256,15 @@ test("tool hooks skip Git metadata probes", () => {
   }
 
   assert.equal(fs.existsSync(gitLog), false);
-  const toolEvents = (readJsonl(path.join(home, "events.jsonl")) as Array<{
+  const toolEvents = (readInboxEvents(home) as Array<{
     hook_event: string;
     repo_root?: string;
   }>).filter((event) => event.hook_event === "PreToolUse" || event.hook_event === "PostToolUse");
   assert.equal(toolEvents.length, 2);
-  assert.equal(toolEvents.every((event) => typeof event.repo_root === "string" && event.repo_root.length > 0), true);
-  assert.equal(toolEvents.every((event) => fs.realpathSync(event.repo_root ?? "") === fs.realpathSync(repoRoot)), true);
+  assert.equal(toolEvents.every((event) => event.repo_root === undefined), true);
 });
 
-test("tool hook closes storage when session metadata lookup fails", () => {
-  // Given: the real hook CLI loads an injector that fails tool-session lookup and records storage cleanup.
-  const home = tempHome();
-  const fixtureDir = tempHome("agent-lcm-hook-close-");
-  const closeMarker = path.join(fixtureDir, "closed");
-  const preloadPath = path.join(fixtureDir, "fail-session-lookup.mjs");
-  const storageModuleUrl = new URL("../src/storage.ts", import.meta.url).href;
-  fs.writeFileSync(preloadPath, `
-    import fs from "node:fs";
-    const { LcmStorage } = await import(process.env.STORAGE_MODULE_URL);
-    const originalClose = LcmStorage.prototype.close;
-    LcmStorage.prototype.close = function() {
-      fs.writeFileSync(process.env.CLOSE_MARKER, "closed");
-      return originalClose.call(this);
-    };
-    LcmStorage.prototype.getCurrentSession = function() {
-      throw new Error("forced tool-session lookup failure");
-    };
-  `);
-
-  // When: a tool hook fails after storage opens but before ingest begins.
-  const result = spawnSync(process.execPath, [
-    "--no-warnings",
-    "--import",
-    preloadPath,
-    "bin/agent-lcm",
-    "hook",
-    "PreToolUse",
-  ], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-    input: JSON.stringify({ session_id: "tool-close-session", cwd: "/tmp/tool-close", tool_name: "Read" }),
-    env: { ...process.env, CLOSE_MARKER: closeMarker, AGENT_LCM_HOME: home, STORAGE_MODULE_URL: storageModuleUrl },
-  });
-
-  // Then: the failure remains visible and the opened storage is closed.
-  assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /forced tool-session lookup failure/u);
-  assert.equal(fs.existsSync(closeMarker), true);
-});
-
-test("SubagentStop imports only the child portion of a forked rollout", () => {
+test("SubagentStop publishes only its normalized parent event", () => {
   const home = tempHome();
   const parentId = "019f482f-65a8-7a31-a79c-2cecf2e87c3e";
   const childId = "019f482f-c8cd-7b60-ac99-a302e7fdb5bf";
@@ -375,27 +304,18 @@ test("SubagentStop imports only the child portion of a forked rollout", () => {
   });
 
   assertCliOk(result);
-  const events = readJsonl(path.join(home, "events.jsonl")) as Array<{
+  const events = readInboxEvents(home) as Array<{
     session_id: string;
     hook_event: string;
     payload: Record<string, unknown>;
     repo_root?: string;
     git_branch?: string;
   }>;
-  const childEvents = events.filter((event) => event.session_id === childId);
-  assert.deepEqual(childEvents.map((event) => event.hook_event), ["SessionStart", "UserPromptSubmit", "Stop"]);
-  for (const event of childEvents) {
-    assert.equal(event.payload.turn_id, undefined);
-    assert.equal(event.repo_root, undefined);
-    assert.equal(event.git_branch, undefined);
-  }
-  assert.match(JSON.stringify(childEvents), /child_prompt_needle/u);
-  assert.match(JSON.stringify(childEvents), /child_result_needle/u);
-  assert.doesNotMatch(JSON.stringify(events), /inherited_parent_needle/u);
-  assert.equal(events.some((event) => event.session_id === parentId && event.hook_event === "SubagentStop"), true);
+  assert.deepEqual(events.map((event) => [event.session_id, event.hook_event]), [[`codex:${parentId}`, "SubagentStop"]]);
+  assert.doesNotMatch(JSON.stringify(events), /child_prompt_needle|child_result_needle|inherited_parent_needle/u);
 });
 
-test("SubagentStop reports a missing transcript without losing the parent event", () => {
+test("SubagentStop leaves transcript import to the daemon", () => {
   const home = tempHome();
   const parentId = "019f482f-65a8-7a31-a79c-2cecf2e87c3e";
   const transcript = path.join(tempHome("codex-subagent-missing-"), "missing.jsonl");
@@ -410,13 +330,12 @@ test("SubagentStop reports a missing transcript without losing the parent event"
   });
 
   assertCliOk(result);
-  assert.match(result.stderr, /failed to import subagent transcript/u);
-  assert.equal(result.stderr.includes(transcript), true);
-  const events = readJsonl(path.join(home, "events.jsonl")) as Array<{
+  assert.equal(result.stderr, "");
+  const events = readInboxEvents(home) as Array<{
     session_id: string;
     hook_event: string;
   }>;
-  assert.deepEqual(events.map((event) => [event.session_id, event.hook_event]), [[parentId, "SubagentStop"]]);
+  assert.deepEqual(events.map((event) => [event.session_id, event.hook_event]), [[`codex:${parentId}`, "SubagentStop"]]);
 });
 
 test("PostCompact hook emits no unsupported response", () => {
@@ -725,17 +644,7 @@ test("lookalike pack tool cannot clear post-compaction recovery", () => {
 
 test("stats command reports aggregate summary depth and graph counts", () => {
   const home = tempHome();
-  for (let index = 0; index < 9; index += 1) {
-    const hook = runCli(["hook", "UserPromptSubmit"], {
-      input: JSON.stringify({
-        session_id: "cli-stats-session",
-        cwd: "/tmp/cli-stats",
-        prompt: `cli stats high signal prompt ${index}`,
-      }),
-      env: { AGENT_LCM_HOME: home },
-    });
-    assertCliOk(hook);
-  }
+  seedStoredHookEvents(home, "cli-stats-session", "/tmp/cli-stats", "cli stats high signal prompt", 9);
 
   const result = runCli(["stats", "--json"], {
     env: { AGENT_LCM_HOME: home },
@@ -757,17 +666,7 @@ test("stats command reports aggregate summary depth and graph counts", () => {
 
 test("stats command does not rebuild derived summaries", () => {
   const home = tempHome();
-  for (let index = 0; index < 9; index += 1) {
-    const hook = runCli(["hook", "UserPromptSubmit"], {
-      input: JSON.stringify({
-        session_id: "cli-readonly-stats-session",
-        cwd: "/tmp/cli-readonly-stats",
-        prompt: `cli readonly stats high signal prompt ${index}`,
-      }),
-      env: { AGENT_LCM_HOME: home },
-    });
-    assertCliOk(hook);
-  }
+  seedStoredHookEvents(home, "cli-readonly-stats-session", "/tmp/cli-readonly-stats", "cli readonly stats high signal prompt", 9);
   clearDerivedSummaries(home);
 
   const result = runCli(["stats", "--json"], {
@@ -784,22 +683,12 @@ test("stats command does not rebuild derived summaries", () => {
 
 test("context-plan command reports budget pressure as JSON", () => {
   const home = tempHome();
-  for (let index = 0; index < 12; index += 1) {
-    const hook = runCli(["hook", "UserPromptSubmit"], {
-      input: JSON.stringify({
-        session_id: "cli-context-plan-session",
-        cwd: "/tmp/cli-context-plan",
-        prompt: `cli context budget pressure ${index} ${"signal ".repeat(40)}`,
-      }),
-      env: { AGENT_LCM_HOME: home },
-    });
-    assertCliOk(hook);
-  }
+  seedStoredHookEvents(home, "cli-context-plan-session", "/tmp/cli-context-plan", `cli context budget pressure ${"signal ".repeat(40)}`, 12);
 
   const result = runCli([
     "context-plan",
     "--session-id",
-    "cli-context-plan-session",
+    "codex:cli-context-plan-session",
     "--model-context-window",
     "2000",
     "--auto-compact-token-limit",
@@ -811,7 +700,7 @@ test("context-plan command reports budget pressure as JSON", () => {
 
   assertCliOk(result);
   const plan = JSON.parse(result.stdout);
-  assert.equal(plan.session_id, "cli-context-plan-session");
+  assert.equal(plan.session_id, "codex:cli-context-plan-session");
   assert.equal(plan.state, "over_limit");
   assert.equal(plan.can_control_compaction, false);
   assert.equal(plan.suggested_tools.includes("lcm_pack_context"), true);
@@ -825,6 +714,30 @@ function assertHookAdditionalContextOutput(value: unknown): asserts value is Hoo
   if (!isRecord(hookSpecificOutput)) return;
   assert.equal(typeof hookSpecificOutput.hookEventName, "string");
   assert.equal(typeof hookSpecificOutput.additionalContext, "string");
+}
+
+function readInboxEvents(home: string): unknown[] {
+  const inbox = path.join(home, "inbox");
+  if (!fs.existsSync(inbox)) return [];
+  return fs.readdirSync(inbox)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .flatMap((name) => readJsonl(path.join(inbox, name)));
+}
+
+function seedStoredHookEvents(home: string, sessionId: string, cwd: string, prompt: string, count: number): void {
+  const storage = createStorage({ home });
+  try {
+    for (let index = 0; index < count; index += 1) {
+      storage.ingest(normalizeHookEvent({
+        hookEvent: "UserPromptSubmit",
+        rawInput: JSON.stringify({ session_id: sessionId, cwd, prompt: `${prompt} ${index}` }),
+        now: () => new Date(`2026-08-06T12:${String(index).padStart(2, "0")}:00.000Z`),
+      }));
+    }
+  } finally {
+    storage.close();
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

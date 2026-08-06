@@ -15,6 +15,11 @@ export type LcmConfig = {
   rawLogPath: string;
   indexPath: string;
   overflowDir: string;
+  inboxDir: string;
+  quarantineDir: string;
+  runtimeDir: string;
+  socketPath: string;
+  tokenPath: string;
   limits: LcmLimits;
 };
 
@@ -37,6 +42,11 @@ export function loadConfig(options: { home?: string; env?: Record<string, string
     rawLogPath: path.join(home, "events.jsonl"),
     indexPath: path.join(home, "index.sqlite"),
     overflowDir: path.join(home, "overflow"),
+    inboxDir: path.join(home, "inbox"),
+    quarantineDir: path.join(home, "quarantine"),
+    runtimeDir: path.join(home, "runtime"),
+    socketPath: path.join(home, "runtime", "agent-lcm.sock"),
+    tokenPath: path.join(home, "runtime", "agent-lcm.token"),
     limits: DEFAULT_LIMITS,
   };
 }
