@@ -1,6 +1,12 @@
 ---
 name: lcm-recall
-description: "Search and recover local Codex session memory. Use when earlier work may matter, including prior decisions, tests, tool output, project preferences, recurring project facts, last-time or remember questions, and work resumed after compaction, interruption, or handoff across repository or projectless sessions."
+description: >-
+  Use first when earlier Codex work may affect the current task or the user asks
+  what happened in prior sessions, including "what did we do," "last time,"
+  "you changed this before," "continue," or "resume." Reconstruct exact
+  decisions, commands, tool output, tests, file changes, and context lost after
+  compaction, interruption, or handoff from source-backed session evidence.
+  Prefer over curated memory when determining what actually happened.
 ---
 
 # LCM Recall
