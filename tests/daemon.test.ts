@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { loadConfig } from "../src/config.ts";
@@ -124,6 +125,13 @@ test("concurrent subprocess starters recover one stale POSIX socket", {
   assert.equal(starters.find((child) => child.exitCode === null)?.pid, status.pid);
   assert.equal(fs.existsSync(path.join(config.runtimeDir, "daemon.lock")), false);
   assert.equal(fs.existsSync(path.join(config.runtimeDir, "daemon.lock.recover")), false);
+  assertOwnershipBusy(config);
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(config.runtimeDir).mode & 0o777, 0o700);
+    for (const name of fs.readdirSync(config.runtimeDir).filter((entry) => entry.startsWith("daemon.lock.sqlite"))) {
+      assert.equal(fs.statSync(path.join(config.runtimeDir, name)).mode & 0o777, 0o600);
+    }
+  }
   await daemonRequest(config, "tool", {
     name: "lcm_record_note", arguments: { sessionId: "codex:stale-socket", cwd: "/tmp/stale-socket", text: "single writer" },
   });
@@ -153,6 +161,115 @@ test("a responsive endpoint is never unlinked and its loser never opens storage"
   assert.equal(fs.existsSync(path.join(config.runtimeDir, "daemon.pid")), false);
 });
 
+test("an ownership loser cannot clean a stale socket or open the main index", {
+  skip: process.platform === "win32" ? "Windows named pipes do not leave filesystem socket entries" : false,
+}, async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  const ready = path.join(config.home, "lock-holder.ready");
+  const release = path.join(config.home, "lock-holder.release");
+  const waitReady = path.join(config.home, "ownership-wait.ready");
+  await seedStaleSocket(config);
+  fs.mkdirSync(config.indexPath);
+  const holder = spawnLockHolder(config, ready, release);
+  await waitUntil(async () => fs.existsSync(ready));
+  const starter = spawnFinalizeDaemon(config, { lockWaitReady: waitReady });
+  t.after(async () => {
+    touch(release);
+    if (holder.exitCode === null) holder.kill("SIGKILL");
+    if (starter.exitCode === null) starter.kill("SIGKILL");
+    await stopDaemon(config);
+  });
+
+  await waitUntil(async () => fs.existsSync(waitReady));
+  assert.equal(starter.exitCode, null);
+  assert.equal(fs.statSync(config.indexPath).isDirectory(), true);
+  assert.equal(fs.existsSync(config.socketPath), true);
+  assert.equal(fs.existsSync(path.join(config.runtimeDir, "daemon.pid")), false);
+
+  fs.rmdirSync(config.indexPath);
+  touch(release);
+  assert.equal(await waitForExit(holder), 0);
+  await waitUntil(async () => (await daemonStatus(config)).running);
+  assert.equal((await daemonStatus(config)).pid, starter.pid);
+});
+
+test("replacement waits through final drain and storage close", {
+  skip: process.platform === "win32" ? "POSIX signals provide the deterministic shutdown boundary" : false,
+}, async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  const closeReady = path.join(config.home, "storage-close.ready");
+  const closeRelease = path.join(config.home, "storage-close.release");
+  const replacementWait = path.join(config.home, "replacement-wait.ready");
+  const old = spawnFinalizeDaemon(config, { closeReady, closeRelease });
+  let replacement: ReturnType<typeof spawnDaemon> | undefined;
+  let rawLock: DatabaseSync | undefined;
+  t.after(async () => {
+    touch(closeRelease);
+    releaseSqliteLock(rawLock);
+    if (old.exitCode === null) old.kill("SIGKILL");
+    if (replacement?.exitCode === null) replacement.kill("SIGKILL");
+    await stopDaemon(config);
+  });
+  await waitUntil(async () => (await daemonStatus(config)).running);
+  const oldStatus = await daemonStatus(config);
+  rawLock = acquireSqliteLock(`${config.rawLogPath}.lock.sqlite`);
+  publishInboxEvent(config, sampleEvent("final drain owns the database"));
+  process.kill(oldStatus.pid!, "SIGTERM");
+  await waitUntil(async () => !(await daemonStatus(config)).running);
+
+  replacement = spawnFinalizeDaemon(config, { lockWaitReady: replacementWait });
+  await waitUntil(async () => fs.existsSync(replacementWait));
+  assert.equal(replacement.exitCode, null);
+  assertOwnershipBusy(config);
+  assert.equal(readPid(config), oldStatus.pid);
+
+  releaseSqliteLock(rawLock);
+  rawLock = undefined;
+  await waitUntil(async () => fs.existsSync(closeReady));
+  assert.equal(fs.readdirSync(config.inboxDir).filter((name) => name.endsWith(".json")).length, 0);
+  assert.equal(readJsonl(config.rawLogPath).length, 1);
+  assert.equal(replacement.exitCode, null);
+  assertOwnershipBusy(config);
+  assert.equal(readPid(config), oldStatus.pid);
+
+  touch(closeRelease);
+  assert.equal(await waitForExit(old), 0);
+  await waitUntil(async () => (await daemonStatus(config)).pid === replacement?.pid);
+});
+
+test("old owner removes metadata before a replacement can publish its own", {
+  skip: process.platform === "win32" ? "POSIX signals provide the deterministic shutdown boundary" : false,
+}, async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  const metadataReady = path.join(config.home, "metadata-unlink.ready");
+  const metadataRelease = path.join(config.home, "metadata-unlink.release");
+  const replacementWait = path.join(config.home, "replacement-wait.ready");
+  const old = spawnFinalizeDaemon(config, { metadataReady, metadataRelease });
+  let replacement: ReturnType<typeof spawnDaemon> | undefined;
+  t.after(async () => {
+    touch(metadataRelease);
+    if (old.exitCode === null) old.kill("SIGKILL");
+    if (replacement?.exitCode === null) replacement.kill("SIGKILL");
+    await stopDaemon(config);
+  });
+  await waitUntil(async () => (await daemonStatus(config)).running);
+  const oldStatus = await daemonStatus(config);
+  process.kill(oldStatus.pid!, "SIGTERM");
+  await waitUntil(async () => fs.existsSync(metadataReady));
+
+  replacement = spawnFinalizeDaemon(config, { lockWaitReady: replacementWait });
+  await waitUntil(async () => fs.existsSync(replacementWait));
+  assert.equal(replacement.exitCode, null);
+  assertOwnershipBusy(config);
+  assert.equal((await daemonStatus(config)).running, false);
+  assert.equal(readPid(config), oldStatus.pid);
+
+  touch(metadataRelease);
+  assert.equal(await waitForExit(old), 0);
+  await waitUntil(async () => (await daemonStatus(config)).pid === replacement?.pid);
+  assert.equal(readPid(config), replacement.pid);
+});
+
 test("keeps queued data through a killed daemon and drains it after restart", {
   skip: process.platform === "win32" ? "SIGKILL is not portable to Windows" : false,
 }, async (t) => {
@@ -161,16 +278,19 @@ test("keeps queued data through a killed daemon and drains it after restart", {
   await ensureDaemon(config);
   const status = await daemonStatus(config);
   assert.equal(status.running, true);
+  assertOwnershipBusy(config);
   publishInboxEvent(config, sampleEvent("survive crash"));
 
   process.kill(status.pid!, "SIGKILL");
   await waitUntil(async () => !(await daemonStatus(config)).running);
+  await waitUntil(async () => ownershipIsAvailable(config));
   assert.equal(fs.readdirSync(config.inboxDir).filter((name) => name.endsWith(".json")).length, 1);
 
   await ensureDaemon(config);
 
   assert.equal(fs.readdirSync(config.inboxDir).filter((name) => name.endsWith(".json")).length, 0);
   assert.equal(readJsonl(config.rawLogPath).length, 1);
+  assertOwnershipBusy(config);
 });
 
 test("drains queued data on clean shutdown", async () => {
@@ -267,6 +387,36 @@ function spawnDaemon(config: ReturnType<typeof loadConfig>, version?: string) {
   });
 }
 
+function spawnLockHolder(config: ReturnType<typeof loadConfig>, ready: string, release: string) {
+  return spawn(process.execPath, ["--no-warnings", "tests/daemon-lock-holder.ts"], {
+    cwd: path.resolve("."),
+    env: { ...process.env, AGENT_LCM_HOME: config.home, AGENT_LCM_TEST_READY: ready, AGENT_LCM_TEST_RELEASE: release },
+    stdio: "ignore",
+  });
+}
+
+function spawnFinalizeDaemon(config: ReturnType<typeof loadConfig>, barriers: {
+  closeReady?: string;
+  closeRelease?: string;
+  metadataReady?: string;
+  metadataRelease?: string;
+  lockWaitReady?: string;
+}) {
+  return spawn(process.execPath, ["--no-warnings", "tests/daemon-finalize-starter.ts"], {
+    cwd: path.resolve("."),
+    env: {
+      ...process.env,
+      AGENT_LCM_HOME: config.home,
+      AGENT_LCM_TEST_CLOSE_READY: barriers.closeReady,
+      AGENT_LCM_TEST_CLOSE_RELEASE: barriers.closeRelease,
+      AGENT_LCM_TEST_METADATA_READY: barriers.metadataReady,
+      AGENT_LCM_TEST_METADATA_RELEASE: barriers.metadataRelease,
+      AGENT_LCM_TEST_LOCK_WAIT_READY: barriers.lockWaitReady,
+    },
+    stdio: "ignore",
+  });
+}
+
 function waitForExit(child: ReturnType<typeof spawn>, timeoutMs = 5_000): Promise<number | null> {
   if (child.exitCode !== null) return Promise.resolve(child.exitCode);
   return new Promise((resolve, reject) => {
@@ -277,6 +427,57 @@ function waitForExit(child: ReturnType<typeof spawn>, timeoutMs = 5_000): Promis
       resolve(code);
     });
   });
+}
+
+function ownershipPath(config: ReturnType<typeof loadConfig>): string {
+  return path.join(config.runtimeDir, "daemon.lock.sqlite");
+}
+
+function tryAcquireOwnership(config: ReturnType<typeof loadConfig>): DatabaseSync | undefined {
+  const database = new DatabaseSync(ownershipPath(config), { timeout: 0 });
+  try {
+    database.exec("BEGIN EXCLUSIVE");
+    return database;
+  } catch (error) {
+    database.close();
+    if (error instanceof Error && Reflect.get(error, "errcode") === 5) return undefined;
+    throw error;
+  }
+}
+
+function ownershipIsAvailable(config: ReturnType<typeof loadConfig>): boolean {
+  const database = tryAcquireOwnership(config);
+  if (!database) return false;
+  releaseSqliteLock(database);
+  return true;
+}
+
+function assertOwnershipBusy(config: ReturnType<typeof loadConfig>): void {
+  const database = tryAcquireOwnership(config);
+  if (!database) return;
+  releaseSqliteLock(database);
+  assert.fail("daemon ownership database was not locked");
+}
+
+function acquireSqliteLock(filePath: string): DatabaseSync {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const database = new DatabaseSync(filePath, { timeout: 0 });
+  database.exec("BEGIN IMMEDIATE");
+  return database;
+}
+
+function releaseSqliteLock(database: DatabaseSync | undefined): void {
+  if (!database) return;
+  database.exec("ROLLBACK");
+  database.close();
+}
+
+function readPid(config: ReturnType<typeof loadConfig>): number {
+  return (JSON.parse(fs.readFileSync(path.join(config.runtimeDir, "daemon.pid"), "utf8")) as { pid: number }).pid;
+}
+
+function touch(filePath: string): void {
+  fs.writeFileSync(filePath, "ready\n", { mode: 0o600 });
 }
 
 async function seedStaleSocket(config: ReturnType<typeof loadConfig>): Promise<void> {

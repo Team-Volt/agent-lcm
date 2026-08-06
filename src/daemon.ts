@@ -1,7 +1,7 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import type { LcmConfig } from "./config.ts";
 import { drainInbox } from "./inbox.ts";
@@ -13,33 +13,49 @@ export const CURRENT_DAEMON_VERSION = "0.1.0";
 
 const PID_FILE = "daemon.pid";
 const VERSION_FILE = "daemon.version";
+const OWNERSHIP_FILE = "daemon.lock.sqlite";
 const START_TIMEOUT_MS = 5_000;
-
-type DaemonMetadata = {
-  pid: number;
-  nonce: string;
-};
+const START_POLL_MS = 25;
 
 export async function startDaemon(config: LcmConfig): Promise<void> {
   const token = readOrCreateToken(config);
   if (await daemonIsRunning(config, token)) return;
+  const ownership = await acquireOwnership(config, token);
+  if (!ownership) return;
   const server = net.createServer();
-  if (!(await bindDaemonEndpoint(config, server, token))) return;
   let storage: LcmStorage | undefined;
-  let metadata: DaemonMetadata | undefined;
+  let ownsEndpoint = false;
   let orderly = false;
   try {
-    metadata = { pid: process.pid, nonce: crypto.randomUUID() };
-    writePrivate(path.join(config.runtimeDir, PID_FILE), `${JSON.stringify(metadata)}\n`);
+    ownsEndpoint = await bindDaemonEndpoint(config, server, token);
+    if (!ownsEndpoint) return;
+    writePrivate(path.join(config.runtimeDir, PID_FILE), `${JSON.stringify({ pid: process.pid })}\n`);
     writePrivate(path.join(config.runtimeDir, VERSION_FILE), `${daemonVersion()}\n`);
     storage = createStorage({ config });
     drainStorageInbox(config, storage);
     await serve(config, server, storage, token, () => { orderly = true; });
   } finally {
-    if (orderly && storage) drainStorageInbox(config, storage);
-    storage?.close();
-    if (server.listening) await closeServer(server);
-    if (metadata) unlinkOwnedMetadata(config, metadata);
+    try {
+      if (orderly && storage) drainStorageInbox(config, storage);
+    } finally {
+      try {
+        storage?.close();
+      } finally {
+        try {
+          if (server.listening) await closeServer(server);
+        } finally {
+          try {
+            if (ownsEndpoint && process.platform !== "win32") unlinkIfPresent(config.socketPath);
+            if (ownsEndpoint) {
+              unlinkIfPresent(path.join(config.runtimeDir, PID_FILE));
+              unlinkIfPresent(path.join(config.runtimeDir, VERSION_FILE));
+            }
+          } finally {
+            releaseOwnership(ownership);
+          }
+        }
+      }
+    }
   }
 }
 
@@ -254,8 +270,62 @@ async function bindDaemonEndpoint(config: LcmConfig, server: net.Server, token: 
       unlinkIfPresent(config.socketPath);
     }
     if (Date.now() >= deadline) throw new Error(`Timed out waiting to own the agent-lcm endpoint at ${address}.`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, START_POLL_MS));
   }
+}
+
+async function acquireOwnership(config: LcmConfig, token: string): Promise<DatabaseSync | undefined> {
+  fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(config.runtimeDir, 0o700);
+  const lockPath = path.join(config.runtimeDir, OWNERSHIP_FILE);
+  fs.closeSync(fs.openSync(lockPath, "a", 0o600));
+  fs.chmodSync(lockPath, 0o600);
+  const database = new DatabaseSync(lockPath, { timeout: START_POLL_MS });
+  const deadline = Date.now() + START_TIMEOUT_MS;
+  try {
+    while (true) {
+      try {
+        database.exec("BEGIN EXCLUSIVE");
+        hardenOwnershipFiles(lockPath);
+        return database;
+      } catch (error) {
+        if (!isSqliteBusy(error)) throw error;
+      }
+      if (await daemonIsRunning(config, token)) {
+        database.close();
+        return undefined;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting to own the agent-lcm daemon at ${ipcAddress(config)}.`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, START_POLL_MS));
+    }
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+function releaseOwnership(database: DatabaseSync): void {
+  try {
+    database.exec("ROLLBACK");
+  } finally {
+    database.close();
+  }
+}
+
+function hardenOwnershipFiles(lockPath: string): void {
+  for (const candidate of [lockPath, `${lockPath}-journal`, `${lockPath}-wal`, `${lockPath}-shm`]) {
+    try {
+      fs.chmodSync(candidate, 0o600);
+    } catch (error) {
+      if (!hasCode(error, "ENOENT")) throw error;
+    }
+  }
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  return error instanceof Error && (Reflect.get(error, "errcode") === 5 || Reflect.get(error, "errcode") === 6);
 }
 
 async function daemonIsRunning(config: LcmConfig, token: string): Promise<boolean> {
@@ -302,23 +372,6 @@ function probeEndpoint(address: string, timeoutMs = 250): Promise<{ reachable: b
 function writePrivate(filePath: string, contents: string): void {
   fs.writeFileSync(filePath, contents, { mode: 0o600 });
   fs.chmodSync(filePath, 0o600);
-}
-
-function unlinkOwnedMetadata(config: LcmConfig, owner: DaemonMetadata): void {
-  const pidPath = path.join(config.runtimeDir, PID_FILE);
-  if (readDaemonMetadata(pidPath)?.nonce !== owner.nonce) return;
-  unlinkIfPresent(pidPath);
-  unlinkIfPresent(path.join(config.runtimeDir, VERSION_FILE));
-}
-
-function readDaemonMetadata(filePath: string): DaemonMetadata | undefined {
-  try {
-    const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    if (!isRecord(value) || !Number.isInteger(value.pid) || Number(value.pid) <= 0 || typeof value.nonce !== "string") return undefined;
-    return value as DaemonMetadata;
-  } catch {
-    return undefined;
-  }
 }
 
 function unlinkIfPresent(filePath: string): void {
