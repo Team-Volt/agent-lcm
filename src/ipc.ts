@@ -25,16 +25,27 @@ export function ipcAddress(config: LcmConfig): string {
 export function readOrCreateToken(config: LcmConfig): string {
   fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(config.runtimeDir, 0o700);
+  const temporaryPath = `${config.tokenPath}.${crypto.randomUUID()}.tmp`;
+  const descriptor = fs.openSync(temporaryPath, "wx", 0o600);
   try {
-    const descriptor = fs.openSync(config.tokenPath, "wx", 0o600);
     try {
       fs.writeFileSync(descriptor, `${crypto.randomBytes(32).toString("hex")}\n`);
       fs.fsyncSync(descriptor);
     } finally {
       fs.closeSync(descriptor);
     }
-  } catch (error) {
-    if (!hasCode(error, "EEXIST")) throw error;
+    try {
+      fs.linkSync(temporaryPath, config.tokenPath);
+      fsyncDirectory(config.runtimeDir);
+    } catch (error) {
+      if (!hasCode(error, "EEXIST")) throw error;
+    }
+  } finally {
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch (error) {
+      if (!hasCode(error, "ENOENT")) throw error;
+    }
   }
   fs.chmodSync(config.tokenPath, 0o600);
   const token = fs.readFileSync(config.tokenPath, "utf8").trim();
@@ -96,4 +107,14 @@ export function sendDaemonRequest(address: string, request: DaemonRequest, timeo
 
 export function hasCode(error: unknown, code: string): boolean {
   return error instanceof Error && Reflect.get(error, "code") === code;
+}
+
+function fsyncDirectory(directory: string): void {
+  if (process.platform === "win32") return;
+  const descriptor = fs.openSync(directory, "r");
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }

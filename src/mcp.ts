@@ -1,6 +1,7 @@
 import { DEFAULT_LIMITS } from "./config.ts";
 import { TOOLS } from "./mcp-catalog.ts";
 import { callTool } from "./mcp-tools.ts";
+import { createStorage } from "./storage.ts";
 
 type JsonRpcRequest = {
   readonly jsonrpc: "2.0";
@@ -138,10 +139,13 @@ function handleMessage(message: JsonRpcRequest): void {
       sendError(id, -32602, "Invalid params");
       return;
     }
+    const storage = createStorage({ readOnly: params.name !== "lcm_record_note" });
     try {
-      sendResult(id, callTool(params));
+      sendResult(id, callTool(storage, params));
     } catch (error) {
       sendError(id, -32602, error instanceof Error ? error.message : String(error));
+    } finally {
+      storage.close();
     }
     return;
   }

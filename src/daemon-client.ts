@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { loadConfig, pluginRoot, type LcmConfig } from "./config.ts";
-import { CURRENT_DAEMON_VERSION } from "./daemon.ts";
+import { CURRENT_DAEMON_VERSION, daemonLockPath } from "./daemon.ts";
 import { ipcAddress, readToken, sendDaemonRequest, type DaemonRequest } from "./ipc.ts";
 
 export type DaemonStatus = {
@@ -33,7 +33,7 @@ async function ensureDaemonOnce(config: LcmConfig): Promise<void> {
     } catch {
       // Another starter may already be replacing it.
     }
-    await waitFor(config, (candidate) => !candidate.running || candidate.pid !== status.pid);
+    await waitForRelease(config, status.pid);
     status = await daemonStatus(config);
     if (status.running && status.version === CURRENT_DAEMON_VERSION) return;
   }
@@ -88,7 +88,18 @@ export async function stopDaemon(config: LcmConfig = loadConfig()): Promise<void
   } catch {
     // A concurrent shutdown can close the socket before this client reads its response.
   }
-  await waitFor(config, (candidate) => !candidate.running);
+  await waitForRelease(config, status.pid);
+}
+
+async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const status = await daemonStatus(config);
+    if (status.running && status.pid !== ownerPid) return;
+    if (!status.running && !fs.existsSync(daemonLockPath(config))) return;
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for the agent-lcm daemon lock at ${daemonLockPath(config)}.`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 async function waitFor(
