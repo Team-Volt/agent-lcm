@@ -1,5 +1,5 @@
 node_modules/
-.codex-lcm/
+.agent-lcm/
 .omo/
 **/docs/*plan*.md
 *.sqlite

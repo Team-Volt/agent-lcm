@@ -1,0 +1,200 @@
+import { loadConfig, pluginRoot } from "./config.ts";
+import { runLongContextBenchmark, runRetrievalQualityBenchmark } from "./benchmark.ts";
+import { importCodexSessions } from "./codex-import.ts";
+import { buildDoctorReport } from "./doctor.ts";
+import { runHook } from "./hook.ts";
+import { readStatus } from "./installer.ts";
+import { startMcpServer } from "./mcp.ts";
+import { createStorage } from "./storage.ts";
+
+export async function main(argv: string[]): Promise<void> {
+  const [command, ...rest] = argv;
+  if (command === "--version" || command === "-v") {
+    process.stdout.write("0.1.0\n");
+    return;
+  }
+  if (command === "--help" || command === "-h" || command === undefined) {
+    printHelp();
+    return;
+  }
+  if (command === "mcp") {
+    startMcpServer();
+    return;
+  }
+  if (command === "hook") {
+    await runHook(rest);
+    return;
+  }
+  if (command === "status") {
+    printObjectOrText(readStatus({ codexHome: optionValue(rest, "--codex-home"), root: pluginRoot() }));
+    return;
+  }
+  if (command === "doctor") {
+    const storage = createStorage({ config: loadConfig(), readOnly: true });
+    try {
+      printObjectOrText(buildDoctorReport({
+        status: readStatus({ codexHome: optionValue(rest, "--codex-home"), root: pluginRoot() }),
+        health: storage.health(),
+      }));
+    } finally {
+      storage.close();
+    }
+    return;
+  }
+  if (command === "import-codex-sessions") {
+    const dryRun = rest.includes("--dry-run");
+    const showProgress = rest.includes("--progress");
+    const storage = createStorage({ config: loadConfig(), readOnly: dryRun });
+    try {
+      printObjectOrText(await importCodexSessions(storage, {
+        from: optionValue(rest, "--from"),
+        dryRun,
+        batchSize: numberOptionValue(rest, "--batch-size"),
+        progress: showProgress ? (report) => {
+          process.stderr.write(`agent-lcm import: files=${report.files_scanned} records=${report.records_read} importable=${report.events_importable} imported=${report.events_imported} duplicates=${report.events_skipped_duplicate} skipped=${report.records_skipped} rate=${report.events_per_second}/s\n`);
+        } : undefined,
+      }));
+    } finally {
+      storage.close();
+    }
+    return;
+  }
+  if (command === "benchmark") {
+    const benchmarkName = rest[0];
+    if (benchmarkName === "long-context") {
+      printObjectOrText(runLongContextBenchmark({
+        events: numberOptionValue(rest, "--events"),
+        budgetTokens: numberOptionValue(rest, "--budget-tokens"),
+        home: optionValue(rest, "--home"),
+      }));
+      return;
+    }
+    if (benchmarkName === "retrieval-quality") {
+      printObjectOrText(runRetrievalQualityBenchmark({
+        home: optionValue(rest, "--home"),
+      }));
+      return;
+    }
+    throw new Error("Usage: agent-lcm benchmark long-context|retrieval-quality [options] [--json]");
+  }
+  if (command === "health") {
+    const storage = createStorage({ config: loadConfig(), readOnly: true });
+    try {
+      printObjectOrText(storage.health());
+    } finally {
+      storage.close();
+    }
+    return;
+  }
+  if (command === "stats") {
+    const storage = createStorage({ config: loadConfig(), readOnly: true });
+    try {
+      printObjectOrText(storage.stats());
+    } finally {
+      storage.close();
+    }
+    return;
+  }
+  if (command === "cleanup") {
+    const apply = rest.includes("--apply");
+    const storage = createStorage({ config: loadConfig(), readOnly: !apply });
+    try {
+      printObjectOrText(storage.cleanupIndex({ apply }));
+    } finally {
+      storage.close();
+    }
+    return;
+  }
+  if (command === "sessions") {
+    const storage = createStorage({ config: loadConfig(), readOnly: true });
+    try {
+      printObjectOrText(storage.listSessions({
+        since: optionValue(rest, "--since"),
+        until: optionValue(rest, "--until"),
+        cwd: optionValue(rest, "--cwd"),
+        repoRoot: optionValue(rest, "--repo-root"),
+        parentSessionId: optionValue(rest, "--parent-session-id"),
+        rootsOnly: rest.includes("--roots-only"),
+        includeSummaries: rest.includes("--include-summaries"),
+        limit: numberOptionValue(rest, "--limit"),
+        cursor: optionValue(rest, "--cursor"),
+      }));
+    } finally {
+      storage.close();
+    }
+    return;
+  }
+  if (command === "usage") {
+    const storage = createStorage({ config: loadConfig(), readOnly: true });
+    try {
+      printObjectOrText(storage.usage({
+        since: optionValue(rest, "--since"),
+        until: optionValue(rest, "--until"),
+        cwd: optionValue(rest, "--cwd"),
+        repoRoot: optionValue(rest, "--repo-root"),
+        parentSessionId: optionValue(rest, "--parent-session-id"),
+        rootsOnly: rest.includes("--roots-only"),
+      }));
+    } finally {
+      storage.close();
+    }
+    return;
+  }
+  if (command === "context-plan") {
+    const storage = createStorage({ config: loadConfig(), readOnly: true });
+    try {
+      printObjectOrText(storage.getContextPlan({
+        sessionId: optionValue(rest, "--session-id"),
+        cwd: optionValue(rest, "--cwd"),
+        repoRoot: optionValue(rest, "--repo-root"),
+        modelContextWindow: numberOptionValue(rest, "--model-context-window"),
+        autoCompactTokenLimit: numberOptionValue(rest, "--auto-compact-token-limit"),
+        recentEventLimit: numberOptionValue(rest, "--recent-event-limit"),
+      }));
+    } finally {
+      storage.close();
+    }
+    return;
+  }
+  throw new Error(`Unknown command: ${command}`);
+}
+
+function printHelp(): void {
+  process.stdout.write(`agent-lcm
+
+Commands:
+  agent-lcm mcp
+  agent-lcm hook <event>
+  agent-lcm status [--codex-home PATH] [--json]
+  agent-lcm doctor [--codex-home PATH] [--json]  Diagnose install, storage, and capture state
+  agent-lcm health [--json]
+  agent-lcm stats [--json]
+  agent-lcm cleanup [--apply] [--json]   Preview or apply safe derived-index compaction; raw events are preserved
+  agent-lcm sessions [--since ISO] [--until ISO] [--cwd PATH] [--repo-root PATH] [--parent-session-id ID] [--roots-only] [--include-summaries] [--limit N] [--cursor N] [--json]
+  agent-lcm usage [--since ISO] [--until ISO] [--cwd PATH] [--repo-root PATH] [--parent-session-id ID] [--roots-only] [--json]
+  agent-lcm context-plan [--session-id ID] [--cwd PATH] [--repo-root PATH] [--model-context-window N] [--auto-compact-token-limit N] [--recent-event-limit N] [--json]
+  agent-lcm benchmark long-context [--events N] [--budget-tokens N] [--home PATH] [--json]
+  agent-lcm benchmark retrieval-quality [--home PATH] [--json]
+  agent-lcm import-codex-sessions [--from PATH] [--dry-run] [--progress] [--batch-size N] [--json]
+`);
+}
+
+function optionValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  if (index === -1) return undefined;
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith("--")) throw new Error(`${flag} requires a value.`);
+  return value;
+}
+
+function numberOptionValue(args: string[], flag: string): number | undefined {
+  const value = optionValue(args, flag);
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${flag} requires a positive number.`);
+  return parsed;
+}
+
+function printObjectOrText(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
