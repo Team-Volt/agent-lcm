@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
@@ -14,62 +13,33 @@ export const CURRENT_DAEMON_VERSION = "0.1.0";
 
 const PID_FILE = "daemon.pid";
 const VERSION_FILE = "daemon.version";
-const LOCK_FILE = "daemon.lock";
-const RECOVERY_CLAIM_FILE = "daemon.lock.recover";
 const START_TIMEOUT_MS = 5_000;
-const LOCK_STABILITY_MS = 250;
-const RECOVERY_CLAIM_STALE_MS = 2_000;
 
-type DaemonOwner = {
+type DaemonMetadata = {
   pid: number;
   nonce: string;
-  process_identity: string;
-  created_at: string;
 };
-
-type DaemonLock = {
-  descriptor: number;
-  owner: DaemonOwner;
-};
-
-export function daemonLockPath(config: LcmConfig): string {
-  return path.join(config.runtimeDir, LOCK_FILE);
-}
 
 export async function startDaemon(config: LcmConfig): Promise<void> {
   const token = readOrCreateToken(config);
-  const deadline = Date.now() + START_TIMEOUT_MS;
-  let lock: DaemonLock | undefined;
-  while (!lock) {
-    if (await daemonIsRunning(config, token)) return;
-    lock = acquireDaemonLock(config);
-    if (lock) break;
-    if (Date.now() >= deadline) throw new Error("Timed out waiting to own the agent-lcm daemon lock.");
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-
+  if (await daemonIsRunning(config, token)) return;
+  const server = net.createServer();
+  if (!(await bindDaemonEndpoint(config, server, token))) return;
   let storage: LcmStorage | undefined;
-  let server: net.Server | undefined;
-  let ownsSocket = false;
+  let metadata: DaemonMetadata | undefined;
   let orderly = false;
   try {
-    if (await daemonIsRunning(config, token)) return;
-    writePrivate(path.join(config.runtimeDir, PID_FILE), `${JSON.stringify(lock.owner)}\n`);
+    metadata = { pid: process.pid, nonce: crypto.randomUUID() };
+    writePrivate(path.join(config.runtimeDir, PID_FILE), `${JSON.stringify(metadata)}\n`);
     writePrivate(path.join(config.runtimeDir, VERSION_FILE), `${daemonVersion()}\n`);
-    if (process.platform !== "win32") unlinkIfPresent(config.socketPath);
-    server = net.createServer();
     storage = createStorage({ config });
-    await serve(config, server, storage, token, () => {
-      ownsSocket = true;
-      drainStorageInbox(config, storage!);
-    }, () => { orderly = true; });
+    drainStorageInbox(config, storage);
+    await serve(config, server, storage, token, () => { orderly = true; });
   } finally {
     if (orderly && storage) drainStorageInbox(config, storage);
     storage?.close();
-    if (server?.listening) await closeServer(server);
-    unlinkOwnedMetadata(config, lock.owner);
-    if (ownsSocket && process.platform !== "win32") unlinkIfPresent(config.socketPath);
-    releaseDaemonLock(config, lock);
+    if (server.listening) await closeServer(server);
+    if (metadata) unlinkOwnedMetadata(config, metadata);
   }
 }
 
@@ -78,7 +48,6 @@ async function serve(
   server: net.Server,
   storage: LcmStorage,
   token: string,
-  ready: () => void,
   markOrderly: () => void,
 ): Promise<void> {
   let chain = Promise.resolve();
@@ -92,11 +61,11 @@ async function serve(
     if (shuttingDown) return;
     shuttingDown = true;
     markOrderly();
-    server.close();
+    const closing = closeServer(server);
     for (const socket of sockets) {
       if (!activeSockets.has(socket)) socket.destroy();
     }
-    void chain.finally(() => {
+    void Promise.all([chain, closing]).finally(() => {
       for (const socket of sockets) socket.destroy();
       resolveStopped();
     });
@@ -166,8 +135,6 @@ async function serve(
   });
 
   try {
-    await listen(server, ipcAddress(config));
-    ready();
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
     await stopped;
@@ -269,80 +236,26 @@ function closeServer(server: net.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
 }
 
-function acquireDaemonLock(config: LcmConfig): DaemonLock | undefined {
-  const lockPath = daemonLockPath(config);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+async function bindDaemonEndpoint(config: LcmConfig, server: net.Server, token: string): Promise<boolean> {
+  const address = ipcAddress(config);
+  const deadline = Date.now() + START_TIMEOUT_MS;
+  while (true) {
     try {
-      const descriptor = fs.openSync(lockPath, "wx", 0o600);
-      const identity = processIdentity(process.pid);
-      if (identity.length === 0) {
-        fs.closeSync(descriptor);
-        unlinkIfPresent(lockPath);
-        throw new Error("Unable to verify the agent-lcm daemon process identity.");
-      }
-      const owner: DaemonOwner = {
-        pid: process.pid,
-        nonce: crypto.randomUUID(),
-        process_identity: identity,
-        created_at: new Date().toISOString(),
-      };
-      try {
-        fs.writeFileSync(descriptor, `${JSON.stringify(owner)}\n`);
-        fs.fsyncSync(descriptor);
-        return { descriptor, owner };
-      } catch (error) {
-        fs.closeSync(descriptor);
-        unlinkIfPresent(lockPath);
-        throw error;
-      }
+      await listen(server, address);
+      return true;
     } catch (error) {
-      if (!hasCode(error, "EEXIST")) throw error;
-      if (!recoverStaleDaemonLock(config, lockPath)) return undefined;
+      if (!hasCode(error, "EADDRINUSE")) throw error;
     }
-  }
-  return undefined;
-}
 
-function recoverStaleDaemonLock(config: LcmConfig, lockPath: string): boolean {
-  const claimPath = path.join(config.runtimeDir, RECOVERY_CLAIM_FILE);
-  try {
-    fs.linkSync(lockPath, claimPath);
-  } catch (error) {
-    if (hasCode(error, "ENOENT")) return true;
-    if (!hasCode(error, "EEXIST")) throw error;
-    removeAbandonedRecoveryClaim(claimPath);
-    return false;
+    const probe = await probeEndpoint(address);
+    if (probe.reachable) {
+      if (await waitForBoundDaemon(config, token, deadline)) return false;
+    } else if (process.platform !== "win32" && (probe.code === "ENOENT" || probe.code === "ECONNREFUSED")) {
+      unlinkIfPresent(config.socketPath);
+    }
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting to own the agent-lcm endpoint at ${address}.`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
-
-  const claimedIdentity = fileIdentity(claimPath);
-  try {
-    if (!claimedIdentity || !sameFile(lockPath, claimedIdentity)) return false;
-    const claimedRecord = fs.readFileSync(claimPath, "utf8");
-    if (!daemonLockIsStale(config, claimPath)) return false;
-    if (!sameFile(lockPath, claimedIdentity) || fs.readFileSync(claimPath, "utf8") !== claimedRecord) return false;
-    fs.unlinkSync(lockPath);
-    return true;
-  } finally {
-    unlinkIfSameFile(claimPath, claimedIdentity);
-  }
-}
-
-function removeAbandonedRecoveryClaim(claimPath: string): void {
-  let stat: fs.BigIntStats;
-  try {
-    stat = fs.statSync(claimPath, { bigint: true });
-  } catch (error) {
-    if (hasCode(error, "ENOENT")) return;
-    throw error;
-  }
-  if (BigInt(Date.now()) - stat.ctimeMs < BigInt(RECOVERY_CLAIM_STALE_MS)) return;
-  unlinkIfSameFile(claimPath, { dev: stat.dev, ino: stat.ino });
-}
-
-function releaseDaemonLock(config: LcmConfig, lock: DaemonLock): void {
-  fs.closeSync(lock.descriptor);
-  const lockPath = daemonLockPath(config);
-  if (readDaemonOwner(lockPath)?.nonce === lock.owner.nonce) unlinkIfPresent(lockPath);
 }
 
 async function daemonIsRunning(config: LcmConfig, token: string): Promise<boolean> {
@@ -360,77 +273,30 @@ async function daemonIsRunning(config: LcmConfig, token: string): Promise<boolea
   }
 }
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return hasCode(error, "EPERM");
+async function waitForBoundDaemon(config: LcmConfig, token: string, deadline: number): Promise<boolean> {
+  while (Date.now() < deadline) {
+    if (await daemonIsRunning(config, token)) return true;
+    if (!(await probeEndpoint(ipcAddress(config))).reachable) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
+  throw new Error(`Timed out waiting for the agent-lcm daemon at ${ipcAddress(config)}.`);
 }
 
-function daemonLockIsStale(config: LcmConfig, lockPath: string): boolean {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(lockPath);
-  } catch (error) {
-    if (hasCode(error, "ENOENT")) return true;
-    throw error;
-  }
-  const owner = readDaemonOwner(lockPath);
-  if (!owner) return Date.now() - stat.mtimeMs >= LOCK_STABILITY_MS;
-  if (!processIsAlive(owner.pid)) return true;
-  if (owner.process_identity !== processIdentity(owner.pid)) return true;
-  const metadata = readDaemonOwner(path.join(config.runtimeDir, PID_FILE));
-  if (metadata?.nonce === owner.nonce && metadata.process_identity === owner.process_identity) return false;
-  return Date.now() - stat.mtimeMs >= LOCK_STABILITY_MS;
-}
-
-function readDaemonOwner(filePath: string): DaemonOwner | undefined {
-  try {
-    const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    if (!isRecord(value) || !Number.isInteger(value.pid) || Number(value.pid) <= 0 || typeof value.nonce !== "string"
-      || typeof value.process_identity !== "string" || typeof value.created_at !== "string") return undefined;
-    return value as DaemonOwner;
-  } catch {
-    return undefined;
-  }
-}
-
-type FileIdentity = { dev: bigint; ino: bigint };
-
-function fileIdentity(filePath: string): FileIdentity | undefined {
-  try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    return { dev: stat.dev, ino: stat.ino };
-  } catch (error) {
-    if (hasCode(error, "ENOENT")) return undefined;
-    throw error;
-  }
-}
-
-function sameFile(filePath: string, identity: FileIdentity): boolean {
-  const candidate = fileIdentity(filePath);
-  return candidate?.dev === identity.dev && candidate.ino === identity.ino;
-}
-
-function unlinkIfSameFile(filePath: string, identity: FileIdentity | undefined): void {
-  if (!identity || !sameFile(filePath, identity)) return;
-  unlinkIfPresent(filePath);
-}
-
-function processIdentity(pid: number): string {
-  try {
-    if (process.platform === "win32") {
-      return execFileSync("powershell.exe", [
-        "-NoProfile", "-NonInteractive", "-Command",
-        `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().Ticks`,
-      ], { encoding: "utf8", timeout: 1_000 }).trim();
-    }
-    return execFileSync("ps", ["-o", "lstart=", "-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 1_000 }).trim();
-  } catch {
-    return "";
-  }
+function probeEndpoint(address: string, timeoutMs = 250): Promise<{ reachable: boolean; code?: string }> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(address);
+    let settled = false;
+    const finish = (result: { reachable: boolean; code?: string }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve(result);
+    };
+    const timeout = setTimeout(() => finish({ reachable: false }), timeoutMs);
+    socket.once("connect", () => finish({ reachable: true }));
+    socket.once("error", (error) => finish({ reachable: false, code: String(Reflect.get(error, "code") ?? "") }));
+  });
 }
 
 function writePrivate(filePath: string, contents: string): void {
@@ -438,11 +304,21 @@ function writePrivate(filePath: string, contents: string): void {
   fs.chmodSync(filePath, 0o600);
 }
 
-function unlinkOwnedMetadata(config: LcmConfig, owner: DaemonOwner): void {
+function unlinkOwnedMetadata(config: LcmConfig, owner: DaemonMetadata): void {
   const pidPath = path.join(config.runtimeDir, PID_FILE);
-  if (readDaemonOwner(pidPath)?.nonce !== owner.nonce) return;
+  if (readDaemonMetadata(pidPath)?.nonce !== owner.nonce) return;
   unlinkIfPresent(pidPath);
   unlinkIfPresent(path.join(config.runtimeDir, VERSION_FILE));
+}
+
+function readDaemonMetadata(filePath: string): DaemonMetadata | undefined {
+  try {
+    const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (!isRecord(value) || !Number.isInteger(value.pid) || Number(value.pid) <= 0 || typeof value.nonce !== "string") return undefined;
+    return value as DaemonMetadata;
+  } catch {
+    return undefined;
+  }
 }
 
 function unlinkIfPresent(filePath: string): void {

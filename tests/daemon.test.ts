@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -32,10 +32,10 @@ test("independent starters converge on one authenticated daemon", async (t) => {
   assert.equal(starters.some((child) => child.pid === status.pid), true);
   const loser = starters.find((child) => child.pid !== status.pid)!;
   assert.equal(await waitForExit(loser), 0);
-  const lockBefore = fs.readFileSync(path.join(config.runtimeDir, "daemon.lock"), "utf8");
+  const socketBefore = process.platform === "win32" ? undefined : fs.statSync(config.socketPath).ino;
   await ensureDaemon(config);
   assert.equal((await daemonStatus(config)).pid, status.pid);
-  assert.equal(fs.readFileSync(path.join(config.runtimeDir, "daemon.lock"), "utf8"), lockBefore);
+  if (socketBefore !== undefined) assert.equal(fs.statSync(config.socketPath).ino, socketBefore);
   assert.match(fs.readFileSync(config.tokenPath, "utf8").trim(), /^[0-9a-f]{64}$/u);
 });
 
@@ -94,14 +94,12 @@ test("publishes a complete token atomically", () => {
   assert.equal(checked, true);
 });
 
-test("recovers stale pid, version, and socket metadata", async (t) => {
+test("replaces stale pid and version diagnostics after binding", async (t) => {
   const config = loadConfig({ home: tempHome() });
   t.after(() => stopDaemon(config));
   fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(config.runtimeDir, "daemon.pid"), "99999999\n", { mode: 0o600 });
   fs.writeFileSync(path.join(config.runtimeDir, "daemon.version"), "0.0.0\n", { mode: 0o600 });
-  if (process.platform !== "win32") fs.writeFileSync(config.socketPath, "stale", { mode: 0o600 });
-
   await ensureDaemon(config);
 
   const status = await daemonStatus(config);
@@ -110,53 +108,24 @@ test("recovers stale pid, version, and socket metadata", async (t) => {
   assert.equal(status.version, CURRENT_DAEMON_VERSION);
 });
 
-test("recovers a stale daemon lock owned by a live unrelated PID", async (t) => {
+test("concurrent subprocess starters recover one stale POSIX socket", {
+  skip: process.platform === "win32" ? "Windows named pipes do not leave filesystem socket entries" : false,
+}, async (t) => {
   const config = loadConfig({ home: tempHome() });
   t.after(() => stopDaemon(config));
-  fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
-  const lockPath = path.join(config.runtimeDir, "daemon.lock");
-  fs.writeFileSync(lockPath, `${JSON.stringify({
-    pid: process.pid,
-    nonce: "stale-live-unrelated-owner",
-    process_identity: testProcessIdentity(process.pid),
-    created_at: "2026-08-06T00:00:00.000Z",
-  })}\n`, { mode: 0o600 });
-  const stale = new Date(Date.now() - 60_000);
-  fs.utimesSync(lockPath, stale, stale);
-
-  await ensureDaemon(config);
-
-  const status = await daemonStatus(config);
-  assert.equal(status.running, true);
-  assert.notEqual(status.pid, process.pid);
-});
-
-test("concurrent subprocess starters recover one stale lock without unlinking the winner", async (t) => {
-  const config = loadConfig({ home: tempHome() });
-  t.after(() => stopDaemon(config));
-  fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
-  const lockPath = path.join(config.runtimeDir, "daemon.lock");
-  fs.writeFileSync(lockPath, `${JSON.stringify({
-    pid: process.pid,
-    nonce: "stale-concurrent-owner",
-    process_identity: testProcessIdentity(process.pid),
-    created_at: "2026-08-06T00:00:00.000Z",
-  })}\n`, { mode: 0o600 });
-  const stale = new Date(Date.now() - 60_000);
-  fs.utimesSync(lockPath, stale, stale);
-  const starters = Array.from({ length: 4 }, () => spawnStaleRaceDaemon(config));
+  await seedStaleSocket(config);
+  const starters = Array.from({ length: 4 }, () => spawnDaemon(config));
 
   await waitUntil(async () => (await daemonStatus(config)).running);
   await waitUntil(async () => starters.filter((child) => child.exitCode === null).length === 1);
   const status = await daemonStatus(config);
-  const lockOwner = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid: number; nonce: string };
-  const pidOwner = JSON.parse(fs.readFileSync(path.join(config.runtimeDir, "daemon.pid"), "utf8")) as { pid: number; nonce: string };
-  assert.equal(lockOwner.pid, status.pid);
-  assert.equal(lockOwner.nonce, pidOwner.nonce);
+  const pidOwner = JSON.parse(fs.readFileSync(path.join(config.runtimeDir, "daemon.pid"), "utf8")) as { pid: number };
+  assert.equal(pidOwner.pid, status.pid);
   assert.equal(starters.find((child) => child.exitCode === null)?.pid, status.pid);
+  assert.equal(fs.existsSync(path.join(config.runtimeDir, "daemon.lock")), false);
+  assert.equal(fs.existsSync(path.join(config.runtimeDir, "daemon.lock.recover")), false);
   await daemonRequest(config, "tool", {
-    name: "lcm_record_note",
-    arguments: { sessionId: "codex:stale-race", cwd: "/tmp/stale-race", text: "single writer" },
+    name: "lcm_record_note", arguments: { sessionId: "codex:stale-socket", cwd: "/tmp/stale-socket", text: "single writer" },
   });
   assert.equal(readJsonl(config.rawLogPath).length, 1);
 
@@ -164,29 +133,24 @@ test("concurrent subprocess starters recover one stale lock without unlinking th
   assert.deepEqual(await Promise.all(starters.map((child) => waitForExit(child))), starters.map(() => 0));
 });
 
-test("removes an abandoned recovery claim before recovering its stale lock", async (t) => {
+test("a responsive endpoint is never unlinked and its loser never opens storage", async (t) => {
   const config = loadConfig({ home: tempHome() });
-  t.after(() => stopDaemon(config));
   fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
-  const lockPath = path.join(config.runtimeDir, "daemon.lock");
-  const claimPath = path.join(config.runtimeDir, "daemon.lock.recover");
-  fs.writeFileSync(lockPath, `${JSON.stringify({
-    pid: process.pid,
-    nonce: "abandoned-recovery-owner",
-    process_identity: testProcessIdentity(process.pid),
-    created_at: "2026-08-06T00:00:00.000Z",
-  })}\n`, { mode: 0o600 });
-  const stale = new Date(Date.now() - 60_000);
-  fs.utimesSync(lockPath, stale, stale);
-  fs.linkSync(lockPath, claimPath);
-  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  fs.mkdirSync(config.indexPath);
+  const token = readOrCreateToken(config);
+  const owner = responsiveEndpoint(config, token);
+  await listenTestServer(owner, ipcAddress(config));
+  t.after(() => closeTestServer(owner));
+  const endpointBefore = process.platform === "win32" ? undefined : fs.statSync(config.socketPath).ino;
 
-  await ensureDaemon(config);
+  const loser = spawnDaemon(config);
+  assert.equal(await waitForExit(loser), 0);
 
-  const status = await daemonStatus(config);
-  assert.equal(status.running, true);
-  assert.equal(fs.existsSync(claimPath), false);
-  assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).pid, status.pid);
+  assert.equal(owner.listening, true);
+  if (endpointBefore !== undefined) assert.equal(fs.statSync(config.socketPath).ino, endpointBefore);
+  assert.equal(fs.statSync(config.indexPath).isDirectory(), true);
+  assert.equal(fs.existsSync(config.rawLogPath), false);
+  assert.equal(fs.existsSync(path.join(config.runtimeDir, "daemon.pid")), false);
 });
 
 test("keeps queued data through a killed daemon and drains it after restart", {
@@ -244,7 +208,7 @@ test("drains then replaces an older daemon version", async (t) => {
   assert.equal(readJsonl(config.rawLogPath).length, 1);
 });
 
-test("replacement closes an idle client and waits for the old lock owner", async (t) => {
+test("replacement closes an idle client and waits for the old endpoint owner", async (t) => {
   const config = loadConfig({ home: tempHome() });
   t.after(() => stopDaemon(config));
   const old = spawnDaemon(config, "0.0.0");
@@ -303,14 +267,6 @@ function spawnDaemon(config: ReturnType<typeof loadConfig>, version?: string) {
   });
 }
 
-function spawnStaleRaceDaemon(config: ReturnType<typeof loadConfig>) {
-  return spawn(process.execPath, ["--no-warnings", "tests/daemon-stale-race-starter.ts"], {
-    cwd: path.resolve("."),
-    env: { ...process.env, AGENT_LCM_HOME: config.home },
-    stdio: "ignore",
-  });
-}
-
 function waitForExit(child: ReturnType<typeof spawn>, timeoutMs = 5_000): Promise<number | null> {
   if (child.exitCode !== null) return Promise.resolve(child.exitCode);
   return new Promise((resolve, reject) => {
@@ -323,12 +279,43 @@ function waitForExit(child: ReturnType<typeof spawn>, timeoutMs = 5_000): Promis
   });
 }
 
-function testProcessIdentity(pid: number): string {
-  if (process.platform === "win32") {
-    return execFileSync("powershell.exe", [
-      "-NoProfile", "-NonInteractive", "-Command",
-      `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().Ticks`,
-    ], { encoding: "utf8" }).trim();
-  }
-  return execFileSync("ps", ["-o", "lstart=", "-o", "command=", "-p", String(pid)], { encoding: "utf8" }).trim();
+async function seedStaleSocket(config: ReturnType<typeof loadConfig>): Promise<void> {
+  fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
+  const server = net.createServer();
+  await listenTestServer(server, config.socketPath);
+  const parkedPath = `${config.socketPath}.parked`;
+  fs.renameSync(config.socketPath, parkedPath);
+  await closeTestServer(server);
+  fs.renameSync(parkedPath, config.socketPath);
+}
+
+function responsiveEndpoint(config: ReturnType<typeof loadConfig>, token: string): net.Server {
+  return net.createServer((socket) => {
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      const request = JSON.parse(buffer.slice(0, newline)) as { id: string; token: string };
+      socket.end(`${JSON.stringify(request.token === token ? {
+        version: 1,
+        id: request.id,
+        ok: true,
+        result: { running: true, pid: process.pid, version: CURRENT_DAEMON_VERSION, queue_depth: 0, quarantine_count: 0 },
+      } : { version: 1, id: request.id, ok: false, error: "authentication failed" })}\n`);
+    });
+  });
+}
+
+function listenTestServer(server: net.Server, address: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(address, resolve);
+  });
+}
+
+function closeTestServer(server: net.Server): Promise<void> {
+  if (!server.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }

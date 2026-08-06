@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { loadConfig, pluginRoot, type LcmConfig } from "./config.ts";
-import { CURRENT_DAEMON_VERSION, daemonLockPath } from "./daemon.ts";
+import { CURRENT_DAEMON_VERSION } from "./daemon.ts";
 import { ipcAddress, readToken, sendDaemonRequest, type DaemonRequest } from "./ipc.ts";
 
 export type DaemonStatus = {
@@ -96,8 +96,8 @@ async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, t
   while (true) {
     const status = await daemonStatus(config);
     if (status.running && status.pid !== ownerPid) return;
-    if (!status.running && !fs.existsSync(daemonLockPath(config))) return;
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for the agent-lcm daemon lock at ${daemonLockPath(config)}.`);
+    if (!status.running) return;
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for the agent-lcm daemon at ${ipcAddress(config)}.`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
