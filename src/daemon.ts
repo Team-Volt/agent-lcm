@@ -15,8 +15,10 @@ export const CURRENT_DAEMON_VERSION = "0.1.0";
 const PID_FILE = "daemon.pid";
 const VERSION_FILE = "daemon.version";
 const LOCK_FILE = "daemon.lock";
+const RECOVERY_CLAIM_FILE = "daemon.lock.recover";
 const START_TIMEOUT_MS = 5_000;
 const LOCK_STABILITY_MS = 250;
+const RECOVERY_CLAIM_STALE_MS = 2_000;
 
 type DaemonOwner = {
   pid: number;
@@ -295,11 +297,46 @@ function acquireDaemonLock(config: LcmConfig): DaemonLock | undefined {
       }
     } catch (error) {
       if (!hasCode(error, "EEXIST")) throw error;
-      if (!daemonLockIsStale(config, lockPath)) return undefined;
-      unlinkIfPresent(lockPath);
+      if (!recoverStaleDaemonLock(config, lockPath)) return undefined;
     }
   }
   return undefined;
+}
+
+function recoverStaleDaemonLock(config: LcmConfig, lockPath: string): boolean {
+  const claimPath = path.join(config.runtimeDir, RECOVERY_CLAIM_FILE);
+  try {
+    fs.linkSync(lockPath, claimPath);
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return true;
+    if (!hasCode(error, "EEXIST")) throw error;
+    removeAbandonedRecoveryClaim(claimPath);
+    return false;
+  }
+
+  const claimedIdentity = fileIdentity(claimPath);
+  try {
+    if (!claimedIdentity || !sameFile(lockPath, claimedIdentity)) return false;
+    const claimedRecord = fs.readFileSync(claimPath, "utf8");
+    if (!daemonLockIsStale(config, claimPath)) return false;
+    if (!sameFile(lockPath, claimedIdentity) || fs.readFileSync(claimPath, "utf8") !== claimedRecord) return false;
+    fs.unlinkSync(lockPath);
+    return true;
+  } finally {
+    unlinkIfSameFile(claimPath, claimedIdentity);
+  }
+}
+
+function removeAbandonedRecoveryClaim(claimPath: string): void {
+  let stat: fs.BigIntStats;
+  try {
+    stat = fs.statSync(claimPath, { bigint: true });
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return;
+    throw error;
+  }
+  if (BigInt(Date.now()) - stat.ctimeMs < BigInt(RECOVERY_CLAIM_STALE_MS)) return;
+  unlinkIfSameFile(claimPath, { dev: stat.dev, ino: stat.ino });
 }
 
 function releaseDaemonLock(config: LcmConfig, lock: DaemonLock): void {
@@ -358,6 +395,28 @@ function readDaemonOwner(filePath: string): DaemonOwner | undefined {
   } catch {
     return undefined;
   }
+}
+
+type FileIdentity = { dev: bigint; ino: bigint };
+
+function fileIdentity(filePath: string): FileIdentity | undefined {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    return { dev: stat.dev, ino: stat.ino };
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return undefined;
+    throw error;
+  }
+}
+
+function sameFile(filePath: string, identity: FileIdentity): boolean {
+  const candidate = fileIdentity(filePath);
+  return candidate?.dev === identity.dev && candidate.ino === identity.ino;
+}
+
+function unlinkIfSameFile(filePath: string, identity: FileIdentity | undefined): void {
+  if (!identity || !sameFile(filePath, identity)) return;
+  unlinkIfPresent(filePath);
 }
 
 function processIdentity(pid: number): string {

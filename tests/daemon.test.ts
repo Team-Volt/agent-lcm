@@ -131,6 +131,64 @@ test("recovers a stale daemon lock owned by a live unrelated PID", async (t) => 
   assert.notEqual(status.pid, process.pid);
 });
 
+test("concurrent subprocess starters recover one stale lock without unlinking the winner", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  t.after(() => stopDaemon(config));
+  fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
+  const lockPath = path.join(config.runtimeDir, "daemon.lock");
+  fs.writeFileSync(lockPath, `${JSON.stringify({
+    pid: process.pid,
+    nonce: "stale-concurrent-owner",
+    process_identity: testProcessIdentity(process.pid),
+    created_at: "2026-08-06T00:00:00.000Z",
+  })}\n`, { mode: 0o600 });
+  const stale = new Date(Date.now() - 60_000);
+  fs.utimesSync(lockPath, stale, stale);
+  const starters = Array.from({ length: 4 }, () => spawnStaleRaceDaemon(config));
+
+  await waitUntil(async () => (await daemonStatus(config)).running);
+  await waitUntil(async () => starters.filter((child) => child.exitCode === null).length === 1);
+  const status = await daemonStatus(config);
+  const lockOwner = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid: number; nonce: string };
+  const pidOwner = JSON.parse(fs.readFileSync(path.join(config.runtimeDir, "daemon.pid"), "utf8")) as { pid: number; nonce: string };
+  assert.equal(lockOwner.pid, status.pid);
+  assert.equal(lockOwner.nonce, pidOwner.nonce);
+  assert.equal(starters.find((child) => child.exitCode === null)?.pid, status.pid);
+  await daemonRequest(config, "tool", {
+    name: "lcm_record_note",
+    arguments: { sessionId: "codex:stale-race", cwd: "/tmp/stale-race", text: "single writer" },
+  });
+  assert.equal(readJsonl(config.rawLogPath).length, 1);
+
+  await stopDaemon(config);
+  assert.deepEqual(await Promise.all(starters.map((child) => waitForExit(child))), starters.map(() => 0));
+});
+
+test("removes an abandoned recovery claim before recovering its stale lock", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  t.after(() => stopDaemon(config));
+  fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
+  const lockPath = path.join(config.runtimeDir, "daemon.lock");
+  const claimPath = path.join(config.runtimeDir, "daemon.lock.recover");
+  fs.writeFileSync(lockPath, `${JSON.stringify({
+    pid: process.pid,
+    nonce: "abandoned-recovery-owner",
+    process_identity: testProcessIdentity(process.pid),
+    created_at: "2026-08-06T00:00:00.000Z",
+  })}\n`, { mode: 0o600 });
+  const stale = new Date(Date.now() - 60_000);
+  fs.utimesSync(lockPath, stale, stale);
+  fs.linkSync(lockPath, claimPath);
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
+
+  await ensureDaemon(config);
+
+  const status = await daemonStatus(config);
+  assert.equal(status.running, true);
+  assert.equal(fs.existsSync(claimPath), false);
+  assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).pid, status.pid);
+});
+
 test("keeps queued data through a killed daemon and drains it after restart", {
   skip: process.platform === "win32" ? "SIGKILL is not portable to Windows" : false,
 }, async (t) => {
@@ -241,6 +299,14 @@ function spawnDaemon(config: ReturnType<typeof loadConfig>, version?: string) {
   return spawn(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "run"], {
     cwd: path.resolve("."),
     env,
+    stdio: "ignore",
+  });
+}
+
+function spawnStaleRaceDaemon(config: ReturnType<typeof loadConfig>) {
+  return spawn(process.execPath, ["--no-warnings", "tests/daemon-stale-race-starter.ts"], {
+    cwd: path.resolve("."),
+    env: { ...process.env, AGENT_LCM_HOME: config.home },
     stdio: "ignore",
   });
 }
