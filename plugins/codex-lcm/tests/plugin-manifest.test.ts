@@ -36,10 +36,10 @@ test("plugin includes a compact skill with routable frontmatter", () => {
   assert.match(frontmatter, /^---\n/mu);
   assert.match(frontmatter, /^name: lcm-recall$/mu);
   assert.match(frontmatter, /^description: \S/mu);
-  assert.match(frontmatter, /session memory/u);
-  assert.match(frontmatter, /prior decisions/u);
-  assert.match(frontmatter, /project preferences/u);
-  assert.match(frontmatter, /projectless sessions/u);
+  assert.match(frontmatter, /Use first/u);
+  assert.match(frontmatter, /what did we do/u);
+  assert.match(frontmatter, /source-backed session evidence/u);
+  assert.match(frontmatter, /curated memory/u);
   assert.equal(Buffer.byteLength(skill, "utf8") <= 6_000, true);
 });
 
