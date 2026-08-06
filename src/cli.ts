@@ -1,13 +1,47 @@
 import { loadConfig, pluginRoot } from "./config.ts";
 import { runLongContextBenchmark, runRetrievalQualityBenchmark } from "./benchmark.ts";
-import { importCodexSessions } from "./codex-import.ts";
+import type { ImportCodexSessionsReport } from "./codex-import.ts";
 import { buildDoctorReport } from "./doctor.ts";
-import { daemonStatus, ensureDaemon, stopDaemon } from "./daemon-client.ts";
+import { daemonRequest, daemonStatus, ensureDaemon, stopDaemon } from "./daemon-client.ts";
 import { startDaemon } from "./daemon.ts";
 import { runHook } from "./hook.ts";
 import { readStatus } from "./installer.ts";
 import { startMcpServer } from "./mcp.ts";
-import { createStorage } from "./storage.ts";
+
+type DaemonCliParams =
+  | { command: "health" | "stats" }
+  | { command: "cleanup"; apply: boolean }
+  | {
+    command: "sessions";
+    since?: string;
+    until?: string;
+    cwd?: string;
+    repoRoot?: string;
+    parentSessionId?: string;
+    rootsOnly: boolean;
+    includeSummaries: boolean;
+    limit?: number;
+    cursor?: string;
+  }
+  | {
+    command: "usage";
+    since?: string;
+    until?: string;
+    cwd?: string;
+    repoRoot?: string;
+    parentSessionId?: string;
+    rootsOnly: boolean;
+  }
+  | {
+    command: "context-plan";
+    sessionId?: string;
+    cwd?: string;
+    repoRoot?: string;
+    modelContextWindow?: number;
+    autoCompactTokenLimit?: number;
+    recentEventLimit?: number;
+  }
+  | { command: "import-codex-sessions"; from?: string; dryRun: boolean; batchSize?: number };
 
 export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
@@ -54,33 +88,26 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   if (command === "doctor") {
-    const storage = createStorage({ config: loadConfig(), readOnly: true });
-    try {
-      printObjectOrText(buildDoctorReport({
-        status: readStatus({ codexHome: optionValue(rest, "--codex-home"), root: pluginRoot() }),
-        health: storage.health(),
-      }));
-    } finally {
-      storage.close();
-    }
+    const config = loadConfig();
+    await ensureDaemon(config);
+    printObjectOrText(buildDoctorReport({
+      status: readStatus({ codexHome: optionValue(rest, "--codex-home"), root: pluginRoot() }),
+      health: await daemonCli(config, { command: "health" }),
+      daemon: await daemonStatus(config),
+    }));
     return;
   }
   if (command === "import-codex-sessions") {
     const dryRun = rest.includes("--dry-run");
     const showProgress = rest.includes("--progress");
-    const storage = createStorage({ config: loadConfig(), readOnly: dryRun });
-    try {
-      printObjectOrText(await importCodexSessions(storage, {
-        from: optionValue(rest, "--from"),
-        dryRun,
-        batchSize: numberOptionValue(rest, "--batch-size"),
-        progress: showProgress ? (report) => {
-          process.stderr.write(`agent-lcm import: files=${report.files_scanned} records=${report.records_read} importable=${report.events_importable} imported=${report.events_imported} duplicates=${report.events_skipped_duplicate} skipped=${report.records_skipped} rate=${report.events_per_second}/s\n`);
-        } : undefined,
-      }));
-    } finally {
-      storage.close();
-    }
+    const report = await daemonCli<ImportCodexSessionsReport>(loadConfig(), {
+      command: "import-codex-sessions",
+      from: optionValue(rest, "--from"),
+      dryRun,
+      batchSize: numberOptionValue(rest, "--batch-size"),
+    });
+    if (showProgress) writeImportProgress(report);
+    printObjectOrText(report);
     return;
   }
   if (command === "benchmark") {
@@ -102,85 +129,67 @@ export async function main(argv: string[]): Promise<void> {
     throw new Error("Usage: agent-lcm benchmark long-context|retrieval-quality [options] [--json]");
   }
   if (command === "health") {
-    const storage = createStorage({ config: loadConfig(), readOnly: true });
-    try {
-      printObjectOrText(storage.health());
-    } finally {
-      storage.close();
-    }
+    printObjectOrText(await daemonCli(loadConfig(), { command: "health" }));
     return;
   }
   if (command === "stats") {
-    const storage = createStorage({ config: loadConfig(), readOnly: true });
-    try {
-      printObjectOrText(storage.stats());
-    } finally {
-      storage.close();
-    }
+    printObjectOrText(await daemonCli(loadConfig(), { command: "stats" }));
     return;
   }
   if (command === "cleanup") {
     const apply = rest.includes("--apply");
-    const storage = createStorage({ config: loadConfig(), readOnly: !apply });
-    try {
-      printObjectOrText(storage.cleanupIndex({ apply }));
-    } finally {
-      storage.close();
-    }
+    printObjectOrText(await daemonCli(loadConfig(), { command: "cleanup", apply }));
     return;
   }
   if (command === "sessions") {
-    const storage = createStorage({ config: loadConfig(), readOnly: true });
-    try {
-      printObjectOrText(storage.listSessions({
-        since: optionValue(rest, "--since"),
-        until: optionValue(rest, "--until"),
-        cwd: optionValue(rest, "--cwd"),
-        repoRoot: optionValue(rest, "--repo-root"),
-        parentSessionId: optionValue(rest, "--parent-session-id"),
-        rootsOnly: rest.includes("--roots-only"),
-        includeSummaries: rest.includes("--include-summaries"),
-        limit: numberOptionValue(rest, "--limit"),
-        cursor: optionValue(rest, "--cursor"),
-      }));
-    } finally {
-      storage.close();
-    }
+    printObjectOrText(await daemonCli(loadConfig(), {
+      command: "sessions",
+      since: optionValue(rest, "--since"),
+      until: optionValue(rest, "--until"),
+      cwd: optionValue(rest, "--cwd"),
+      repoRoot: optionValue(rest, "--repo-root"),
+      parentSessionId: optionValue(rest, "--parent-session-id"),
+      rootsOnly: rest.includes("--roots-only"),
+      includeSummaries: rest.includes("--include-summaries"),
+      limit: numberOptionValue(rest, "--limit"),
+      cursor: optionValue(rest, "--cursor"),
+    }));
     return;
   }
   if (command === "usage") {
-    const storage = createStorage({ config: loadConfig(), readOnly: true });
-    try {
-      printObjectOrText(storage.usage({
-        since: optionValue(rest, "--since"),
-        until: optionValue(rest, "--until"),
-        cwd: optionValue(rest, "--cwd"),
-        repoRoot: optionValue(rest, "--repo-root"),
-        parentSessionId: optionValue(rest, "--parent-session-id"),
-        rootsOnly: rest.includes("--roots-only"),
-      }));
-    } finally {
-      storage.close();
-    }
+    printObjectOrText(await daemonCli(loadConfig(), {
+      command: "usage",
+      since: optionValue(rest, "--since"),
+      until: optionValue(rest, "--until"),
+      cwd: optionValue(rest, "--cwd"),
+      repoRoot: optionValue(rest, "--repo-root"),
+      parentSessionId: optionValue(rest, "--parent-session-id"),
+      rootsOnly: rest.includes("--roots-only"),
+    }));
     return;
   }
   if (command === "context-plan") {
-    const storage = createStorage({ config: loadConfig(), readOnly: true });
-    try {
-      printObjectOrText(storage.getContextPlan({
-        sessionId: optionValue(rest, "--session-id"),
-        cwd: optionValue(rest, "--cwd"),
-        repoRoot: optionValue(rest, "--repo-root"),
-        modelContextWindow: numberOptionValue(rest, "--model-context-window"),
-        autoCompactTokenLimit: numberOptionValue(rest, "--auto-compact-token-limit"),
-        recentEventLimit: numberOptionValue(rest, "--recent-event-limit"),
-      }));
-    } finally {
-      storage.close();
-    }
+    printObjectOrText(await daemonCli(loadConfig(), {
+      command: "context-plan",
+      sessionId: optionValue(rest, "--session-id"),
+      cwd: optionValue(rest, "--cwd"),
+      repoRoot: optionValue(rest, "--repo-root"),
+      modelContextWindow: numberOptionValue(rest, "--model-context-window"),
+      autoCompactTokenLimit: numberOptionValue(rest, "--auto-compact-token-limit"),
+      recentEventLimit: numberOptionValue(rest, "--recent-event-limit"),
+    }));
     return;
   }
   throw new Error(`Unknown command: ${command}`);
+}
+
+async function daemonCli<T = unknown>(config: ReturnType<typeof loadConfig>, params: DaemonCliParams): Promise<T> {
+  await ensureDaemon(config);
+  return daemonRequest<T>(config, "cli", params);
+}
+
+function writeImportProgress(report: ImportCodexSessionsReport): void {
+  process.stderr.write(`agent-lcm import: files=${report.files_scanned} records=${report.records_read} importable=${report.events_importable} imported=${report.events_imported} duplicates=${report.events_skipped_duplicate} skipped=${report.records_skipped} rate=${report.events_per_second}/s\n`);
 }
 
 function printHelp(): void {

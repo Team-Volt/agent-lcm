@@ -483,7 +483,7 @@ export function expandQuery(db: DatabaseSync | undefined, rawLogPath: string, ar
   ];
 
   const lines = [
-    "# Codex LCM Recursive Evidence",
+    "# Agent LCM Recursive Evidence",
     "",
     `query: ${query}`,
     "",

@@ -565,7 +565,7 @@ function groupEventsBySession(events: NormalizedEvent[]): Map<string, Normalized
 
 export function isCodexLcmToolEvent(event: NormalizedEvent): boolean {
   const toolName = event.tool_name || stringField(event.payload.tool_name) || stringField(event.payload.toolName);
-  return toolName?.startsWith("mcp__codex_lcm__") ?? false;
+  return toolName?.startsWith("mcp__agent_lcm__") ?? false;
 }
 
 export function isSearchIndexEvent(event: NormalizedEvent): boolean {

@@ -8,12 +8,12 @@ export function callTool(storage: LcmStorage, params: Record<string, unknown>) {
   switch (name) {
     case "lcm_health": {
       const health = storage.health();
-      return toolResult(`Codex LCM has ${health.event_count} events across ${health.session_count} sessions.`, { health });
+      return toolResult(`Agent LCM has ${health.event_count} events across ${health.session_count} sessions.`, { health });
     }
     case "lcm_stats": {
       const stats = storage.stats();
       return toolResult(
-        `Codex LCM has ${stats.event_count} events, ${stats.summary_node_count ?? 0} summary nodes, and ${stats.graph_node_count ?? 0} graph nodes.`,
+        `Agent LCM has ${stats.event_count} events, ${stats.summary_node_count ?? 0} summary nodes, and ${stats.graph_node_count ?? 0} graph nodes.`,
         { stats },
       );
     }
@@ -175,7 +175,7 @@ export function callTool(storage: LcmStorage, params: Record<string, unknown>) {
       const packed = storage.packContext({
         query: optionalString(args.query),
         sessionIds: optionalStringArray(args.sessionIds),
-        currentThreadId: currentThreadId(),
+        currentThreadId: optionalString(args.currentThreadId) ?? currentThreadId(),
         budgetTokens: optionalNumber(args.budgetTokens),
         cwd: optionalString(args.cwd),
         harnesses: optionalHarnessArray(args.harnesses),
@@ -187,6 +187,7 @@ export function callTool(storage: LcmStorage, params: Record<string, unknown>) {
         sessionId: stringArg(args.sessionId, "sessionId"),
         cwd: stringArg(args.cwd, "cwd"),
         text: stringArg(args.text, "text"),
+        harness: "mcp",
       });
       return toolResult(`Recorded note for ${event.session_id}.`, { event });
     }

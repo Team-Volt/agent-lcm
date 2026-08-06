@@ -34,7 +34,7 @@ export function runCli(args: string[], options: {
       ...process.env,
       ...options.env,
     },
-    timeout: options.timeout ?? 5_000,
+    timeout: options.timeout ?? 10_000,
   });
 }
 

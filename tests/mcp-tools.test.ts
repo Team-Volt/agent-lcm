@@ -11,8 +11,9 @@ test("callTool uses its injected storage", () => {
     const result = callTool(storage, {
       name: "lcm_record_note",
       arguments: { sessionId: "codex:injected-tool", cwd: "/tmp/injected-tool", text: "injected owner" },
-    }) as { structuredContent: { event: { session_id: string } } };
-    assert.equal(result.structuredContent.event.session_id, "codex:injected-tool");
+    }) as { structuredContent: { event: { harness: string; session_id: string } } };
+    assert.equal(result.structuredContent.event.harness, "mcp");
+    assert.equal(result.structuredContent.event.session_id, "mcp:codex:injected-tool");
     assert.equal(storage.health().event_count, 1);
   } finally {
     storage.close();

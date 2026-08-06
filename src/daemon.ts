@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { LcmConfig } from "./config.ts";
+import { importCodexSessions } from "./codex-import.ts";
 import { drainInbox } from "./inbox.ts";
 import { callTool } from "./mcp-tools.ts";
 import { hasCode, ipcAddress, readOrCreateToken, sendDaemonRequest, tokenMatches, type DaemonRequest, type DaemonResponse } from "./ipc.ts";
@@ -131,7 +132,7 @@ async function serve(
         chain = chain.then(async () => {
           try {
             drainStorageInbox(config, storage);
-            const result = dispatchRequest(config, storage, request);
+            const result = await dispatchRequest(config, storage, request);
             await writeResponse(socket, { version: 1, id: request.id, ok: true, result }).catch(() => socket.destroy());
             if (request.method === "shutdown" || request.method === "replace") scheduleShutdown();
           } catch (error) {
@@ -161,7 +162,7 @@ async function serve(
   }
 }
 
-function dispatchRequest(config: LcmConfig, storage: LcmStorage, request: DaemonRequest): unknown {
+async function dispatchRequest(config: LcmConfig, storage: LcmStorage, request: DaemonRequest): Promise<unknown> {
   switch (request.method) {
     case "health":
       return {
@@ -184,13 +185,57 @@ function dispatchRequest(config: LcmConfig, storage: LcmStorage, request: Daemon
   }
 }
 
-function callCli(storage: LcmStorage, params: Record<string, unknown>): unknown {
+async function callCli(storage: LcmStorage, params: Record<string, unknown>): Promise<unknown> {
   switch (params.command) {
     case "health": return storage.health();
     case "stats": return storage.stats();
     case "cleanup": return storage.cleanupIndex({ apply: params.apply === true });
+    case "sessions": return storage.listSessions({
+      since: stringParam(params.since),
+      until: stringParam(params.until),
+      cwd: stringParam(params.cwd),
+      repoRoot: stringParam(params.repoRoot),
+      parentSessionId: stringParam(params.parentSessionId),
+      rootsOnly: booleanParam(params.rootsOnly),
+      includeSummaries: booleanParam(params.includeSummaries),
+      limit: numberParam(params.limit),
+      cursor: stringParam(params.cursor),
+    });
+    case "usage": return storage.usage({
+      since: stringParam(params.since),
+      until: stringParam(params.until),
+      cwd: stringParam(params.cwd),
+      repoRoot: stringParam(params.repoRoot),
+      parentSessionId: stringParam(params.parentSessionId),
+      rootsOnly: booleanParam(params.rootsOnly),
+    });
+    case "context-plan": return storage.getContextPlan({
+      sessionId: stringParam(params.sessionId),
+      cwd: stringParam(params.cwd),
+      repoRoot: stringParam(params.repoRoot),
+      modelContextWindow: numberParam(params.modelContextWindow),
+      autoCompactTokenLimit: numberParam(params.autoCompactTokenLimit),
+      recentEventLimit: numberParam(params.recentEventLimit),
+    });
+    case "import-codex-sessions": return importCodexSessions(storage, {
+      from: stringParam(params.from),
+      dryRun: params.dryRun === true,
+      batchSize: numberParam(params.batchSize),
+    });
     default: throw new Error("Unsupported daemon CLI command.");
   }
+}
+
+function stringParam(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function numberParam(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanParam(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function drainStorageInbox(config: LcmConfig, storage: LcmStorage) {

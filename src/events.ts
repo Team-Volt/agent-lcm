@@ -40,6 +40,8 @@ export type NormalizedEvent = {
 export type NormalizeHookEventArgs = {
   hookEvent: string;
   rawInput: string | Buffer;
+  harness?: HarnessName;
+  nativeEvent?: string;
   env?: Record<string, string | undefined>;
   now?: () => Date;
   repo?: RepoMetadata;
@@ -62,8 +64,11 @@ export function normalizeHookEvent(args: NormalizeHookEventArgs): NormalizedEven
       parse_error: true,
       raw_preview: sanitizedPreview.value,
     };
-    const sessionId = codexSessionId(fallbackSessionId(args.hookEvent, cwd, rawHash));
+    const harness = args.harness ?? "codex";
+    const sessionId = harnessSessionId(harness, fallbackSessionId(args.hookEvent, cwd, rawHash));
     return finalizeEvent({
+      harness,
+      nativeEvent: args.nativeEvent ?? args.hookEvent,
       hookEvent: args.hookEvent,
       timestamp,
       sessionId,
@@ -81,7 +86,8 @@ export function normalizeHookEvent(args: NormalizeHookEventArgs): NormalizedEven
 
   const payloadObject = isRecord(parsed.value) ? parsed.value : { value: parsed.value };
   const cwd = stringValue(payloadObject.cwd) || env.PWD || process.cwd();
-  const sessionId = codexSessionId(
+  const harness = args.harness ?? "codex";
+  const sessionId = harnessSessionId(harness,
     stringValue(payloadObject.session_id) ||
     stringValue(payloadObject.sessionId) ||
     stringValue(payloadObject.conversation_id) ||
@@ -92,6 +98,8 @@ export function normalizeHookEvent(args: NormalizeHookEventArgs): NormalizedEven
   const sanitized = sanitizeForStorage(payloadObject, limits);
 
   return finalizeEvent({
+    harness,
+    nativeEvent: args.nativeEvent ?? args.hookEvent,
     hookEvent: args.hookEvent,
     timestamp,
     sessionId,
@@ -113,6 +121,7 @@ export function createNoteEvent(args: {
   sessionId: string;
   cwd: string;
   text: string;
+  harness?: HarnessName;
   now?: () => Date;
   repo?: RepoMetadata;
 }): NormalizedEvent {
@@ -124,12 +133,15 @@ export function createNoteEvent(args: {
   return normalizeHookEvent({
     hookEvent: "Note",
     rawInput: raw,
+    harness: args.harness,
     now: args.now,
     repo: args.repo,
   });
 }
 
 function finalizeEvent(args: {
+  harness: HarnessName;
+  nativeEvent: string;
   hookEvent: string;
   timestamp: string;
   sessionId: string;
@@ -154,13 +166,13 @@ function finalizeEvent(args: {
     toolName: args.toolName,
     limits: args.limits,
   });
-  const eventId = sha256(`${args.hookEvent}\0${args.sessionId}\0${args.timestamp}\0${args.rawHash}`);
+  const eventId = sha256(`${args.harness}\0${args.nativeEvent}\0${args.sessionId}\0${args.timestamp}\0${args.rawHash}`);
   return {
     schema_version: 1,
     event_id: eventId,
     timestamp: args.timestamp,
-    harness: "codex",
-    native_event: args.hookEvent,
+    harness: args.harness,
+    native_event: args.nativeEvent,
     hook_event: args.hookEvent,
     session_id: metadata.sessionId,
     cwd: metadata.cwd,
@@ -241,10 +253,4 @@ function stringValue(value: unknown): string | undefined {
 
 function fallbackSessionId(hookEvent: string, cwd: string, rawHash: string): string {
   return `unknown-${sha256(`${hookEvent}\0${cwd}\0${rawHash}`).slice(0, 12)}`;
-}
-
-function codexSessionId(sessionId: string): string {
-  return HARNESS_NAMES.some((harness) => sessionId.startsWith(`${harness}:`))
-    ? sessionId
-    : harnessSessionId("codex", sessionId);
 }

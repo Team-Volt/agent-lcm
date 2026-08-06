@@ -302,7 +302,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
     if (checkpoint) checkpointCandidates.set(checkpoint.node_id, checkpoint);
   }
 
-  const lines = ["# Codex LCM Context", ""];
+  const lines = ["# Agent LCM Context", ""];
   const sources: PackedContext["sources"] = [];
   let chars = lines.join("\n").length;
 

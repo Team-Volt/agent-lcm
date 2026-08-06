@@ -366,7 +366,7 @@ export function buildSessionMemorySummary(events: NormalizedEvent[]): SessionMem
     .filter((text) => text.length > 0);
   const tools = uniqueStrings(sorted
     .map((event) => event.tool_name || stringField(event.payload.tool_name) || stringField(event.payload.toolName))
-    .filter((tool): tool is string => typeof tool === "string" && tool.length > 0 && !tool.startsWith("mcp__codex_lcm__")))
+    .filter((tool): tool is string => typeof tool === "string" && tool.length > 0 && !tool.startsWith("mcp__agent_lcm__")))
     .slice(0, 8);
   const signalTexts = [...prompts, ...outcomes];
   const topics = extractTopics(signalTexts);

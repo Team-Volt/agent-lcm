@@ -3,10 +3,47 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import { loadConfig } from "../src/config.ts";
+import { ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
 import { importCodexSessions } from "../src/codex-import.ts";
 import { normalizeHookEvent } from "../src/events.ts";
+import { publishInboxEvent } from "../src/inbox.ts";
 import { createStorage } from "../src/storage.ts";
 import { assertCliOk, runCli, runMcp, tempHome } from "./helpers.ts";
+
+test("CLI storage commands use the daemon and daemon status controls its lifetime", async (t) => {
+  const home = tempHome("agent-lcm-daemon-cli-");
+  const config = loadConfig({ home });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+  const event = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "cli-session", cwd: "/tmp/cli", prompt: "cli bridge needle" }),
+    now: () => new Date("2026-08-06T12:00:00.000Z"),
+  });
+  publishInboxEvent(config, event);
+
+  const env = { AGENT_LCM_HOME: home };
+  for (const args of [
+    ["health", "--json"],
+    ["stats", "--json"],
+    ["sessions", "--json"],
+    ["usage", "--json"],
+    ["context-plan", "--session-id", "codex:cli-session", "--json"],
+    ["cleanup", "--apply", "--json"],
+  ]) {
+    const result = runCli(args, { env });
+    assertCliOk(result);
+  }
+  const health = JSON.parse(runCli(["health", "--json"], { env }).stdout);
+  assert.equal(health.event_count, 1);
+  const status = runCli(["daemon", "status", "--json"], { env });
+  assertCliOk(status);
+  assert.equal(JSON.parse(status.stdout).running, true);
+  const stopped = runCli(["daemon", "stop", "--json"], { env });
+  assertCliOk(stopped);
+  assert.equal(JSON.parse(stopped.stdout).running, false);
+});
 
 test("doctor reports actionable recommendations for an unwired empty install", () => {
   const codexHome = tempHome("codex-home-");
@@ -22,7 +59,7 @@ test("doctor reports actionable recommendations for an unwired empty install", (
   assert.equal(report.status, "warn");
   assert.equal(report.checks.some((check: { id: string; status: string }) => check.id === "plugin-wiring" && check.status === "warn"), true);
   assert.equal(report.checks.some((check: { id: string; status: string }) => check.id === "event-capture" && check.status === "warn"), true);
-  assert.equal(report.recommendations.some((text: string) => text.includes("codex plugin add agent-lcm@agent-lcm")), true);
+  assert.equal(report.recommendations.some((text: string) => text.includes("Install the Agent LCM plugin")), true);
   assert.equal(report.recommendations.some((text: string) => text.includes("import-codex-sessions")), true);
 });
 
@@ -167,7 +204,7 @@ test("import-codex-sessions exposes child lineage, runtime metadata, usage, and 
   const page = JSON.parse(listed.stdout);
   assert.equal(page.sessions.length, 1);
   assert.deepEqual(page.sessions[0], {
-    session_id: "child-session",
+    session_id: "codex:child-session",
     harness: "codex",
     first_seen: "2026-07-14T14:00:00.000Z",
     last_seen: "2026-07-14T14:00:02.000Z",

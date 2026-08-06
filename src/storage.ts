@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig, type LcmConfig } from "./config.ts";
-import { createNoteEvent, type NormalizedEvent } from "./events.ts";
+import { createNoteEvent, type HarnessName, type NormalizedEvent } from "./events.ts";
 import type { FileReference } from "./file-refs.ts";
 import type { OverflowReference, OverflowSearchMatch } from "./overflow.ts";
 import {
@@ -531,11 +531,12 @@ export class LcmStorage {
     }
   }
 
-  recordNote(args: { sessionId: string; cwd: string; text: string }): NormalizedEvent {
+  recordNote(args: { sessionId: string; cwd: string; text: string; harness?: HarnessName }): NormalizedEvent {
     const event = createNoteEvent({
       sessionId: args.sessionId,
       cwd: args.cwd,
       text: args.text,
+      harness: args.harness,
     });
     this.ingest(event);
     return event;

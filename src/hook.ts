@@ -66,7 +66,7 @@ function postCompactRecoveryOutput(args: {
   }
   if (args.hookEvent === "PostToolUse" && hasPostCompactPending(args.home, args.sessionId)) {
     const toolName = args.payload.tool_name;
-    const isPackTool = toolName === "lcm_pack_context" || toolName === "mcp__codex_lcm__lcm_pack_context";
+    const isPackTool = toolName === "lcm_pack_context" || toolName === "mcp__agent_lcm__lcm_pack_context";
     if (isPackTool && hasPackedContextResult(args.payload)) {
       claimPostCompactPending(args.home, args.sessionId);
       return "";
@@ -142,7 +142,7 @@ function buildPostCompactLcmDirective(): string {
   return [
     "## MANDATORY: POST-COMPACTION LCM RECOVERY",
     "",
-    "Context compaction just ran. Before continuing any task that may depend on earlier turns, call Codex LCM now.",
+    "Context compaction just ran. Before continuing any task that may depend on earlier turns, call Agent LCM now.",
     "",
     "Call `lcm_pack_context` once for broad recovery of the current task/session.",
     "Consume `structuredContent.markdown` from that same result; do not call it again to retrieve the Markdown.",

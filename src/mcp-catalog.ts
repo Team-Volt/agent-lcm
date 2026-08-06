@@ -38,7 +38,7 @@ export const TOOLS = [
   {
     name: "lcm_usage",
     title: "LCM Usage",
-    description: "Aggregate captured Codex token usage across filtered sessions. With rootsOnly, selected roots include all descendant sessions.",
+    description: "Aggregate captured token usage across filtered sessions. With rootsOnly, selected roots include all descendant sessions.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,7 +56,7 @@ export const TOOLS = [
   {
     name: "lcm_grep",
     title: "LCM Grep",
-    description: "Preferred standard workflow step 1 (grep): find relevant sessions in indexed memory, or search bounded sanitized overflow payloads when contentScope is overflow or both. Codex may surface this tool as mcp__codex_lcm__lcm_grep.",
+    description: "Preferred standard workflow step 1 (grep): find relevant sessions in indexed memory, or search bounded sanitized overflow payloads when contentScope is overflow or both",
     inputSchema: {
       type: "object",
       properties: {
@@ -75,7 +75,7 @@ export const TOOLS = [
   {
     name: "lcm_describe",
     title: "LCM Describe",
-    description: "Preferred standard workflow step 2 (describe): inspect a session, summary node, or file reference, including summary-node depth and source lineage metadata. Codex may surface this tool as mcp__codex_lcm__lcm_describe.",
+    description: "Preferred standard workflow step 2 (describe): inspect a session, summary node, or file reference, including summary-node depth and source lineage metadata",
     inputSchema: {
       type: "object",
       properties: {
@@ -93,7 +93,7 @@ export const TOOLS = [
   {
     name: "lcm_expand",
     title: "LCM Expand",
-    description: "Preferred standard workflow step 3 (expand): expand one summary node into bounded source summary nodes and high-signal source events. Codex may surface this tool as mcp__codex_lcm__lcm_expand.",
+    description: "Preferred standard workflow step 3 (expand): expand one summary node into bounded source summary nodes and high-signal source events",
     inputSchema: {
       type: "object",
       properties: {
@@ -129,7 +129,7 @@ export const TOOLS = [
   {
     name: "lcm_context_plan",
     title: "LCM Context Plan",
-    description: "Estimate recent-session token pressure and report compaction proximity. Returns diagnostics only; Codex owns compaction.",
+    description: "Estimate recent-session token pressure and report compaction proximity. Returns diagnostics only; Agent LCM does not control compaction.",
     inputSchema: {
       type: "object",
       properties: {
@@ -143,7 +143,7 @@ export const TOOLS = [
           type: "boolean",
           const: false,
           default: false,
-          description: "Always false; this tool reports context pressure but cannot own Codex compaction.",
+          description: "Always false; this tool reports context pressure but cannot control harness compaction.",
         },
       },
     },
@@ -241,7 +241,7 @@ export const TOOLS = [
   {
     name: "lcm_pack_context",
     title: "LCM Pack Context",
-    description: "Recover and resume prior Codex work after compaction, interruption, or handoff. Call once, then consume the model-ready Markdown from that result's structuredContent.markdown; do not call again to retrieve it.",
+    description: "Recover and resume prior agent work after compaction, interruption, or handoff. Call once, then consume the model-ready Markdown from that result's structuredContent.markdown; do not call again to retrieve it.",
     inputSchema: {
       type: "object",
       properties: {

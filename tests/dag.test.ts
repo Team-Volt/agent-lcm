@@ -377,7 +377,7 @@ test("pack context ignores LCM retrieval tool self-references", () => {
     session_id: sessionId,
     turn_id: "turn-1",
     cwd,
-    tool_name: "mcp__codex_lcm__lcm_pack_context",
+    tool_name: "mcp__agent_lcm__lcm_pack_context",
     tool_input: {
       query: "needle-public-readme prompt from the user",
       budgetTokens: 600,
@@ -392,7 +392,7 @@ test("pack context ignores LCM retrieval tool self-references", () => {
   });
 
   assert.match(packed.markdown, /needle-public-readme prompt from the user/u);
-  assert.doesNotMatch(packed.markdown, /mcp__codex_lcm__lcm_pack_context/u);
+  assert.doesNotMatch(packed.markdown, /mcp__agent_lcm__lcm_pack_context/u);
 
   storage.close();
 });

@@ -1,4 +1,5 @@
 import type { Health } from "./storage.ts";
+import type { DaemonStatus } from "./daemon-client.ts";
 
 export type DoctorCheck = {
   id: string;
@@ -19,15 +20,16 @@ export type DoctorReport = {
 export function buildDoctorReport(args: {
   status: Record<string, unknown>;
   health: Health;
+  daemon: DaemonStatus;
 }): DoctorReport {
   const checks: DoctorCheck[] = [
     check(
       "plugin-wiring",
-      "Codex plugin wiring",
+      "Plugin wiring",
       booleanValue(args.status.plugin_configured) && booleanValue(args.status.mcp_configured) && booleanValue(args.status.hooks_configured),
-      "agent-lcm is configured as a Codex plugin with MCP and hooks.",
-      "agent-lcm is not fully wired into Codex.",
-      "Run `codex plugin add agent-lcm@agent-lcm`, then restart Codex so MCP and hooks load.",
+      "agent-lcm is configured with MCP and capture hooks.",
+      "agent-lcm is not fully wired into this adapter.",
+      "Install the Agent LCM plugin for this adapter, then restart the harness so MCP and hooks load.",
     ),
     check(
       "recall-skill",
@@ -52,7 +54,31 @@ export function buildDoctorReport(args: {
       args.health.event_count > 0,
       `${args.health.event_count} events are indexed.`,
       "No LCM events are indexed yet.",
-      "Start a new Codex session after installing hooks, or run `agent-lcm import-codex-sessions` to backfill existing sessions.",
+      "Start a new harness session after installing hooks, or run `agent-lcm import-codex-sessions` to backfill existing sessions.",
+    ),
+    check(
+      "daemon",
+      "Shared daemon",
+      args.daemon.running,
+      `The shared daemon is running (PID ${args.daemon.pid ?? "unknown"}).`,
+      "The shared daemon is not running.",
+      "Run `agent-lcm daemon start`.",
+    ),
+    check(
+      "capture-queue",
+      "Capture queue",
+      args.daemon.queue_depth === 0,
+      "The capture queue is empty.",
+      `${args.daemon.queue_depth} captured event${args.daemon.queue_depth === 1 ? " is" : "s are"} waiting for the daemon.`,
+      "Run `agent-lcm daemon start`; if the count remains nonzero, run `agent-lcm doctor --json` again after checking the daemon.",
+    ),
+    check(
+      "capture-quarantine",
+      "Capture quarantine",
+      args.daemon.quarantine_count === 0,
+      "No malformed capture files are quarantined.",
+      `${args.daemon.quarantine_count} malformed capture file${args.daemon.quarantine_count === 1 ? " is" : "s are"} quarantined.`,
+      "Inspect the local Agent LCM quarantine directory before removing malformed capture files.",
     ),
     summaryIndexCheck(args.health),
   ];

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { loadConfig } from "../src/config.ts";
+import { ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
+import { normalizeHookEvent } from "../src/events.ts";
+import { publishInboxEvent } from "../src/inbox.ts";
 import { clearDerivedSummaries, runCli, runMcp, tempHome } from "./helpers.ts";
 
 type FramedMcpResponse = {
@@ -14,6 +18,32 @@ type FramedMcpResponse = {
 
 const SUPPORTED_PROTOCOL_VERSION = "2025-11-25";
 const STANDARD_TOOL_NAMES = ["lcm_grep", "lcm_describe", "lcm_expand"] as const;
+
+test("MCP bridge drains queued events from every harness through the daemon", async (t) => {
+  const home = tempHome();
+  const config = loadConfig({ home });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+  publishInboxEvent(config, queuedEvent("c1", "codex", "codex:one"));
+  publishInboxEvent(config, queuedEvent("u1", "cursor", "cursor:two"));
+
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "lcm_grep", arguments: { query: "bridge needle" } } },
+  ], { AGENT_LCM_HOME: home });
+
+  const matches = responses[1].result.structuredContent.matches as Array<{ harness: string }>;
+  assert.deepEqual(matches.map((match) => match.harness).sort(), ["codex", "cursor"]);
+});
+
+function queuedEvent(eventId: string, harness: "codex" | "cursor", sessionId: string) {
+  const event = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: sessionId, cwd: "/tmp/bridge", prompt: "bridge needle" }),
+    now: () => new Date("2026-08-06T12:00:00.000Z"),
+  });
+  return { ...event, event_id: eventId, harness, session_id: sessionId };
+}
 
 test("MCP server initializes and exposes a stable tool catalog", () => {
   const home = tempHome();
@@ -360,6 +390,10 @@ test("MCP stats does not rebuild derived summaries", () => {
     });
     assert.equal(hook.status, 0, hook.stderr);
   }
+  runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "lcm_stats", arguments: {} } },
+  ], { AGENT_LCM_HOME: home });
   clearDerivedSummaries(home);
 
   const responses = runMcp([

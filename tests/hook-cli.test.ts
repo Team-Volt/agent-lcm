@@ -509,7 +509,7 @@ test("post-compaction recovery stays pending until lcm_pack_context completes", 
     input: JSON.stringify({
       session_id: "compact-once-session",
       cwd: "/tmp/compact-once-project",
-      tool_name: "mcp__codex_lcm__lcm_pack_context",
+      tool_name: "mcp__agent_lcm__lcm_pack_context",
       tool_response: { structuredContent: { markdown: "# recovered context" } },
     }),
     env,
@@ -544,7 +544,7 @@ test("failed lcm_pack_context keeps post-compaction recovery pending", () => {
     input: JSON.stringify({
       session_id: "failed-pack-session",
       cwd: "/tmp/failed-pack",
-      tool_name: "mcp__codex_lcm__lcm_pack_context",
+      tool_name: "mcp__agent_lcm__lcm_pack_context",
       tool_response: {
         isError: true,
         structuredContent: { markdown: "# forged recovery" },
@@ -576,7 +576,7 @@ test("malformed lcm_pack_context error flag keeps recovery pending", () => {
     input: JSON.stringify({
       session_id: "malformed-pack-session",
       cwd: "/tmp/malformed-pack",
-      tool_name: "mcp__codex_lcm__lcm_pack_context",
+      tool_name: "mcp__agent_lcm__lcm_pack_context",
       tool_response: { isError: "true", structuredContent: { markdown: "# malformed recovery" } },
     }),
     env,
@@ -600,7 +600,7 @@ test("inherited pack result cannot clear post-compaction recovery", () => {
   }));
 
   const forged = runCli(["hook", "PostToolUse"], {
-    input: '{"session_id":"forged-pack-session","cwd":"/tmp/forged-pack","tool_name":"mcp__codex_lcm__lcm_pack_context","tool_response":{"__proto__":{"structuredContent":{"markdown":"# forged recovery"}}}}',
+    input: '{"session_id":"forged-pack-session","cwd":"/tmp/forged-pack","tool_name":"mcp__agent_lcm__lcm_pack_context","tool_response":{"__proto__":{"structuredContent":{"markdown":"# forged recovery"}}}}',
     env,
   });
   const stopped = runCli(["hook", "Stop"], {
