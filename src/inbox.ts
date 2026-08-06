@@ -23,16 +23,13 @@ export function publishInboxEvent(config: LcmConfig, event: NormalizedEvent): st
   } finally {
     fs.closeSync(descriptor);
   }
-  if (fs.existsSync(targetPath)) {
+  try {
+    fs.linkSync(temporaryPath, targetPath);
+    fs.unlinkSync(temporaryPath);
+    fsyncDirectory(config.inboxDir);
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
     resolveExistingPublication(config, temporaryPath, targetPath, event);
-  } else {
-    try {
-      fs.renameSync(temporaryPath, targetPath);
-      fsyncDirectory(config.inboxDir);
-    } catch (error) {
-      if (!isAlreadyExists(error)) throw error;
-      resolveExistingPublication(config, temporaryPath, targetPath, event);
-    }
   }
   return targetPath;
 }
@@ -91,24 +88,28 @@ function resolveExistingPublication(
 }
 
 function quarantine(config: LcmConfig, sourcePath: string, targetName: string): void {
-  const targetPath = uniquePath(config.quarantineDir, targetName);
-  fs.renameSync(sourcePath, targetPath);
-  fs.chmodSync(targetPath, 0o600);
-  fsyncDirectory(path.dirname(sourcePath));
-  fsyncDirectory(config.quarantineDir);
+  for (let attempt = 0; ; attempt += 1) {
+    const targetPath = quarantinePath(config.quarantineDir, targetName, attempt);
+    try {
+      fs.linkSync(sourcePath, targetPath);
+    } catch (error) {
+      if (isAlreadyExists(error)) continue;
+      throw error;
+    }
+    fs.chmodSync(targetPath, 0o600);
+    fs.unlinkSync(sourcePath);
+    fsyncDirectory(path.dirname(sourcePath));
+    fsyncDirectory(config.quarantineDir);
+    return;
+  }
 }
 
-function uniquePath(directory: string, name: string): string {
+function quarantinePath(directory: string, name: string, attempt: number): string {
   const base = path.basename(name);
+  if (attempt === 0) return path.join(directory, base);
   const extension = path.extname(base);
   const stem = extension ? base.slice(0, -extension.length) : base;
-  let index = 0;
-  let candidate = path.join(directory, base);
-  while (fs.existsSync(candidate)) {
-    index += 1;
-    candidate = path.join(directory, `${stem}.${index}${extension}`);
-  }
-  return candidate;
+  return path.join(directory, `${stem}.${attempt}${extension}`);
 }
 
 function fsyncDirectory(directory: string): void {
