@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeHookEvent } from "../src/events.ts";
+import { HARNESS_NAMES, harnessSessionId, normalizeHookEvent } from "../src/events.ts";
 
 const fixedNow = () => new Date("2026-06-09T12:00:00.000Z");
 
@@ -20,12 +20,20 @@ test("normalizes Codex-style hook payloads without project as primary boundary",
 
   assert.equal(event.schema_version, 1);
   assert.equal(event.hook_event, "UserPromptSubmit");
+  assert.equal(event.harness, "codex");
+  assert.equal(event.native_event, "UserPromptSubmit");
   assert.equal(event.session_id, "session-123");
   assert.equal(event.cwd, "/tmp/projectless");
   assert.equal(event.project, undefined);
   assert.equal(event.payload.prompt, "remember this");
   assert.deepEqual(event.payload.extra_field, { keep: true });
   assert.equal(event.raw_input_sha256, "9f2e0ba73fc9eaea101940d45cfe72e65bcc9712703a07b19b02aea027b3b9d4");
+});
+
+test("namespaces native session identifiers by harness", () => {
+  assert.deepEqual(HARNESS_NAMES, ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"]);
+  assert.equal(harnessSessionId("cursor", "  abc  "), "cursor:abc");
+  assert.throws(() => harnessSessionId("codex", "  "), /native session id must not be empty/u);
 });
 
 test("accepts camelCase session and tool keys", () => {

@@ -1,4 +1,4 @@
-import type { NormalizedEvent } from "./events.ts";
+import { HARNESS_NAMES, type HarnessName, type NormalizedEvent } from "./events.ts";
 
 export class PersistedEventError extends Error {
   constructor() {
@@ -21,7 +21,12 @@ export function parsePersistedEvent(serialized: string): NormalizedEvent | undef
     if (error instanceof SyntaxError) return undefined;
     throw error;
   }
-  return isNormalizedEvent(value) ? value : undefined;
+  if (!isNormalizedEvent(value)) return undefined;
+  return {
+    ...value,
+    harness: isHarnessName(value.harness) ? value.harness : "codex",
+    native_event: isString(value.native_event) ? value.native_event : value.hook_event,
+  };
 }
 
 function isNormalizedEvent(value: unknown): value is NormalizedEvent {
@@ -42,6 +47,10 @@ function isNormalizedEvent(value: unknown): value is NormalizedEvent {
     && isString(value.raw_input_sha256)
     && isNonNegativeNumber(value.original_bytes)
     && isNonNegativeNumber(value.sanitized_bytes);
+}
+
+function isHarnessName(value: unknown): value is HarnessName {
+  return typeof value === "string" && (HARNESS_NAMES as readonly string[]).includes(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

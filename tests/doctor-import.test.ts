@@ -168,6 +168,7 @@ test("import-codex-sessions exposes child lineage, runtime metadata, usage, and 
   assert.equal(page.sessions.length, 1);
   assert.deepEqual(page.sessions[0], {
     session_id: "child-session",
+    harness: "codex",
     first_seen: "2026-07-14T14:00:00.000Z",
     last_seen: "2026-07-14T14:00:02.000Z",
     cwd: "/tmp/lineage",

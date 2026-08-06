@@ -7,7 +7,7 @@ import { readRawEvents } from "./raw-log.ts";
 import { parseStringArray, recordValue, rowToSessionSummary } from "./storage-rows.ts";
 import { getCurrentStoredSession, summarizeSessions } from "./storage-sessions.ts";
 export { searchSummaryNodes } from "./storage-summaries.ts";
-import type { SearchOverflowArgs, SearchSessionArgs, SessionDiscovery, SessionSearchMatch, SessionSummary } from "./storage-types.ts";
+import { harnessSet, harnessSqlFragment, matchesHarness, type SearchOverflowArgs, type SearchSessionArgs, type SessionDiscovery, type SessionSearchMatch, type SessionSummary } from "./storage-types.ts";
 import { eventSignalText, isGeneratedSuggestionEvent, isSummarySourceEvent, matchesQueryText, queryTermHitCount, toFtsQueries } from "./summary.ts";
 
 const MAX_OVERFLOW_SEARCH_BYTES = 64 * 1024 * 1024;
@@ -306,9 +306,11 @@ export function searchStoredSessions(db: DatabaseSync | undefined, rawLogPath: s
   const excludedSessionIds = excludedSearchSessionIds(db, rawLogPath, args);
   if (!db) {
     const query = args.query?.trim() ?? "";
+    const selectedHarnesses = harnessSet(args.harnesses);
     return summarizeSessions(readRawEvents(rawLogPath)
       .filter((event) => !args.cwd || event.cwd === args.cwd)
       .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
+      .filter((event) => matchesHarness(event, selectedHarnesses))
       .filter((event) => !excludedSessionIds.has(event.session_id))
       .filter((event) => isSearchDiscoveryEvent(event, query))
       .filter((event) => matchesQueryText(JSON.stringify(event), query)))
@@ -317,20 +319,23 @@ export function searchStoredSessions(db: DatabaseSync | undefined, rawLogPath: s
   const query = args.query?.trim() ?? "";
   if (query.length === 0) {
     const searchLimit = excludedSessionIds.size > 0 ? Math.max(limit * 4, 20) : limit;
+    const harnessFilter = harnessSqlFragment("harness", args.harnesses, 4);
     return db.prepare(`
       SELECT *
       FROM sessions
       WHERE (?1 IS NULL OR cwd = ?1)
         AND (?2 IS NULL OR repo_root = ?2)
+        ${harnessFilter.sql}
       ORDER BY last_seen DESC
       LIMIT ?3
-    `).all(args.cwd ?? null, args.repoRoot ?? null, searchLimit)
+    `).all(args.cwd ?? null, args.repoRoot ?? null, searchLimit, ...harnessFilter.values)
       .map(rowToSessionSummary)
       .filter((session) => !excludedSessionIds.has(session.session_id))
       .slice(0, limit);
   }
 
   let rows: unknown[] = [];
+  const harnessFilter = harnessSqlFragment("s.harness", args.harnesses, 5);
   const eventStatement = db.prepare(`
     SELECT s.*,
            e.raw_json AS match_text, e.timestamp AS match_timestamp, 1 AS match_weight,
@@ -342,6 +347,7 @@ export function searchStoredSessions(db: DatabaseSync | undefined, rawLogPath: s
       AND (?2 IS NULL OR s.cwd = ?2)
       AND (?3 IS NULL OR s.repo_root = ?3)
       AND e.hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')
+      ${harnessFilter.sql}
     ORDER BY bm25(event_fts) ASC, e.timestamp DESC
     LIMIT ?4
   `);
@@ -356,6 +362,7 @@ export function searchStoredSessions(db: DatabaseSync | undefined, rawLogPath: s
     WHERE session_summary_fts MATCH ?1
       AND (?2 IS NULL OR s.cwd = ?2)
       AND (?3 IS NULL OR s.repo_root = ?3)
+      ${harnessFilter.sql}
     ORDER BY bm25(session_summary_fts) ASC, ss.updated_at DESC
     LIMIT ?4
   `);
@@ -372,12 +379,13 @@ export function searchStoredSessions(db: DatabaseSync | undefined, rawLogPath: s
     WHERE summary_node_fts MATCH ?1
       AND (?2 IS NULL OR s.cwd = ?2)
       AND (?3 IS NULL OR s.repo_root = ?3)
+      ${harnessFilter.sql}
     ORDER BY bm25(summary_node_fts) ASC, n.depth DESC, n.latest_at DESC
     LIMIT ?4
   `);
   for (const ftsQuery of toFtsQueries(query)) {
     const candidateRows = [summaryNodeStatement, summaryStatement, eventStatement]
-      .flatMap((statement) => statement.all(ftsQuery, args.cwd ?? null, args.repoRoot ?? null, Math.max(limit * 20, 50)));
+      .flatMap((statement) => statement.all(ftsQuery, args.cwd ?? null, args.repoRoot ?? null, Math.max(limit * 20, 50), ...harnessFilter.values));
     rows = candidateRows
       .filter((row) => !excludedSessionIds.has(String(recordValue(row).session_id)))
       .filter((row) => isSearchDiscoveryRow(row, query));
@@ -393,6 +401,7 @@ export function searchStoredOverflow(
   args: SearchOverflowArgs,
 ): OverflowSearchMatch[] {
   const limit = clampLimit(args.limit, 10, 50);
+  const selectedHarnesses = harnessSet(args.harnesses);
   const events = db
     ? db.prepare(`
         SELECT raw_json
@@ -400,13 +409,15 @@ export function searchStoredOverflow(
         WHERE json_extract(raw_json, '$.payload.overflow_ref.sha256') IS NOT NULL
           AND (?1 IS NULL OR cwd = ?1)
           AND (?2 IS NULL OR repo_root = ?2)
+          ${harnessSqlFragment("harness", args.harnesses, 4).sql}
         ORDER BY timestamp DESC, rowid DESC
         LIMIT ?3
-      `).all(args.cwd ?? null, args.repoRoot ?? null, MAX_OVERFLOW_SEARCH_REFERENCES)
+      `).all(args.cwd ?? null, args.repoRoot ?? null, MAX_OVERFLOW_SEARCH_REFERENCES, ...harnessSqlFragment("harness", args.harnesses, 4).values)
       .map((row) => decodePersistedEvent(String(recordValue(row).raw_json)))
     : readRawEvents(rawLogPath)
       .filter((event) => !args.cwd || event.cwd === args.cwd)
       .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
+      .filter((event) => matchesHarness(event, selectedHarnesses))
       .reverse()
       .slice(0, MAX_OVERFLOW_SEARCH_REFERENCES);
   const matches: OverflowSearchMatch[] = [];

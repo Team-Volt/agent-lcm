@@ -14,6 +14,20 @@ import { clearDerivedSummaries, readJsonl, tempHome } from "./helpers.ts";
 
 const now = () => new Date("2026-06-09T12:00:00.000Z");
 
+function harnessEvent(eventId: string, harness: "codex" | "cursor", sessionId: string, text: string): NormalizedEvent {
+  return {
+    ...normalizeHookEvent({
+      hookEvent: "UserPromptSubmit",
+      rawInput: JSON.stringify({ session_id: sessionId, cwd: "/tmp/harness", prompt: text }),
+      env: {},
+      now,
+    }),
+    event_id: eventId,
+    harness,
+    native_event: "UserPromptSubmit",
+  };
+}
+
 test("writable storage restricts its home and SQLite index permissions", () => {
   if (process.platform === "win32") return;
   const home = tempHome();
@@ -51,6 +65,28 @@ test("appends JSONL and indexes searchable cross-session events", () => {
   const matches = storage.searchSessions({ query: "pool chemistry", limit: 5 });
   assert.deepEqual(matches.map((match) => match.session_id), ["s1"]);
   assert.equal(matches[0].cwd, "/tmp/a");
+
+  storage.close();
+});
+
+test("storage scopes cross-harness retrieval only when requested", () => {
+  const home = tempHome();
+  const storage = createStorage({ home });
+  const codex = harnessEvent("c1", "codex", "codex:one", "shared needle");
+  const cursor = harnessEvent("u1", "cursor", "cursor:two", "shared needle");
+  storage.ingest(codex);
+  storage.ingest(cursor);
+
+  assert.deepEqual(storage.searchSessions({ query: "shared needle" }).map((session) => session.harness).sort(), ["codex", "cursor"]);
+  assert.deepEqual(storage.searchSessions({ query: "shared needle", harnesses: ["cursor"] }).map((session) => session.session_id), ["cursor:two"]);
+  assert.deepEqual(storage.listSessions().sessions.map((session) => session.harness).sort(), ["codex", "cursor"]);
+  assert.deepEqual(storage.listSessions({ harnesses: ["cursor"] }).sessions.map((session) => session.session_id), ["cursor:two"]);
+  assert.equal(storage.usage().totals.sessions, 2);
+  assert.equal(storage.usage({ harnesses: ["cursor"] }).totals.sessions, 1);
+  assert.deepEqual([...new Set(storage.expandQuery({ query: "shared needle", budgetTokens: 2_000 }).sources.map((source) => source.harness))].sort(), ["codex", "cursor"]);
+  assert.deepEqual([...new Set(storage.expandQuery({ query: "shared needle", harnesses: ["cursor"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["cursor"]);
+  assert.deepEqual([...new Set(storage.packContext({ query: "shared needle", budgetTokens: 2_000 }).sources.map((source) => source.harness))].sort(), ["codex", "cursor"]);
+  assert.deepEqual([...new Set(storage.packContext({ query: "shared needle", harnesses: ["cursor"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["cursor"]);
 
   storage.close();
 });

@@ -76,6 +76,7 @@ test("MCP server initializes and exposes a stable tool catalog", () => {
   assert.equal(contextPlanTool.inputSchema.properties.canControlCompaction.const, false);
   const listTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_list_sessions");
   assert.equal(listTool.inputSchema.properties.includeSummaries.type, "boolean");
+  assert.deepEqual(listTool.inputSchema.properties.harnesses.items.enum, ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"]);
   for (const tool of responses[1].result.tools) {
     assert.deepEqual(tool.annotations, {
       readOnlyHint: tool.name !== "lcm_record_note",
@@ -176,12 +177,14 @@ test("MCP rejects malformed optional string arrays", () => {
   const responses = runMcp([
     { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "lcm_pack_context", arguments: { sessionIds: "not-an-array" } } },
     { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "lcm_pack_context", arguments: { sessionIds: ["valid", ""] } } },
+    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "lcm_pack_context", arguments: { harnesses: ["unknown"] } } },
   ], { AGENT_LCM_HOME: home });
 
   // Then
   assert.deepEqual(responses.map((response) => response.error), [
     { code: -32602, message: "value must be an array of non-empty strings." },
     { code: -32602, message: "value must be an array of non-empty strings." },
+    { code: -32602, message: "harnesses must contain only: codex, cursor, vscode, copilot, kiro, mcp, import." },
   ]);
 });
 

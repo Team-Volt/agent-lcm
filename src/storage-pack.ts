@@ -13,6 +13,7 @@ import {
 } from "./storage-search.ts";
 import {
   getCurrentStoredSession,
+  getStoredSessionSummary,
   isCodexLcmToolEvent,
   resolveStoredSessionIdentifier,
 } from "./storage-sessions.ts";
@@ -24,7 +25,7 @@ import {
   getTopSummaryNodesForSession,
   searchSummaryNodes,
 } from "./storage-summaries.ts";
-import type { GraphNode, PackedContext, PackContextArgs } from "./storage-types.ts";
+import { harnessSet, harnessSqlFragment, matchesHarness, type GraphNode, type PackedContext, type PackContextArgs } from "./storage-types.ts";
 import {
   HISTORICAL_SOURCE_TEXT_NOTICE,
   SUMMARY_NODE_PACK_LIMIT,
@@ -89,16 +90,19 @@ function searchContextEvents(db: DatabaseSync | undefined, rawLogPath: string, a
   query: string;
   cwd?: string;
   sessionIds?: string[];
+  harnesses?: PackContextArgs["harnesses"];
   limit: number;
 }): NormalizedEvent[] {
   const sessionIds = [...new Set(args.sessionIds?.filter(Boolean) ?? [])];
   const sessionFilter = sessionIds.length > 0 ? new Set(sessionIds) : undefined;
+  const selectedHarnesses = harnessSet(args.harnesses);
   if (!db) {
     return rankContextEvents(readRawEvents(rawLogPath)
       .filter(isSummarySourceEvent)
       .filter((event) => !isCodexLcmToolEvent(event))
       .filter((event) => !args.cwd || event.cwd === args.cwd)
       .filter((event) => !sessionFilter || sessionFilter.has(event.session_id))
+      .filter((event) => matchesHarness(event, selectedHarnesses))
       .filter((event) => matchesQueryText(eventSignalText(event), args.query)), args.query)
       .slice(0, args.limit);
   }
@@ -107,6 +111,7 @@ function searchContextEvents(db: DatabaseSync | undefined, rawLogPath: string, a
     ? `AND e.session_id IN (${sessionIds.map((_, index) => `?${index + 3}`).join(", ")})`
     : "";
   const limitParameter = sessionIds.length + 3;
+  const harnessFilter = harnessSqlFragment("e.harness", args.harnesses, limitParameter + 1);
   const statement = db.prepare(`
     SELECT e.raw_json
     FROM event_fts f
@@ -115,18 +120,20 @@ function searchContextEvents(db: DatabaseSync | undefined, rawLogPath: string, a
       AND (?2 IS NULL OR e.cwd = ?2)
       AND e.hook_event IN ${SUMMARY_SOURCE_HOOKS}
       ${sessionClause}
+      ${harnessFilter.sql}
     ORDER BY bm25(event_fts) ASC, e.timestamp DESC
     LIMIT ?${limitParameter}
   `);
   let rows: unknown[] = [];
   for (const ftsQuery of toFtsQueries(args.query)) {
-    rows = statement.all(ftsQuery, args.cwd ?? null, ...sessionIds, Math.max(args.limit * 10, 50));
+    rows = statement.all(ftsQuery, args.cwd ?? null, ...sessionIds, Math.max(args.limit * 10, 50), ...harnessFilter.values);
     if (rows.length > 0) break;
   }
   return rankContextEvents(rows
     .map((row) => decodePersistedEvent(String(recordValue(row).raw_json)))
     .filter(isSummarySourceEvent)
-    .filter((event) => !isCodexLcmToolEvent(event)), args.query)
+    .filter((event) => !isCodexLcmToolEvent(event))
+    .filter((event) => matchesHarness(event, selectedHarnesses)), args.query)
     .slice(0, args.limit);
 }
 
@@ -159,13 +166,17 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
   const exactEventCandidates = new Map<string, NormalizedEvent>();
   const recentEventCandidates = new Map<string, NormalizedEvent>();
   const query = args.query?.trim() ?? "";
-  const candidateSessionIds = new Set(args.sessionIds ?? []);
-  const explicitSessionIds = args.sessionIds ?? [];
+  const selectedHarnesses = harnessSet(args.harnesses);
+  const harnessForSession = (sessionId: string) => getStoredSessionSummary(db, rawLogPath, sessionId)?.harness ?? "codex";
+  const acceptsSession = (sessionId: string) => !selectedHarnesses || selectedHarnesses.has(harnessForSession(sessionId));
+  const candidateSessionIds = new Set((args.sessionIds ?? []).filter(acceptsSession));
+  const explicitSessionIds = (args.sessionIds ?? []).filter(acceptsSession);
   const currentThreadId = !explicitSessionIds.length ? args.currentThreadId?.trim() : undefined;
   const currentSessionId = currentThreadId ? resolveStoredSessionIdentifier(db, rawLogPath, currentThreadId) : undefined;
   const queryTermCount = query.length > 0 ? queryTermHitCount(query, query) : 0;
 
   const addSummaryNode = (node: SummaryNode) => {
+    if (!acceptsSession(node.session_id)) return;
     if (query.length > 0 && queryTermHitCount(summaryNodeSearchText(node), query) === 0) return;
     summaryNodeCandidates.set(node.node_id, node);
     candidateSessionIds.add(node.session_id);
@@ -197,12 +208,14 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
       query,
       cwd: args.cwd,
       sessionIds: explicitSessionIds,
+      harnesses: args.harnesses,
       limit: 3,
     });
     if (events.length === 0 && args.cwd && explicitSessionIds.length === 0) {
-      events = searchContextEvents(db, rawLogPath, { query, limit: 3 });
+      events = searchContextEvents(db, rawLogPath, { query, harnesses: args.harnesses, limit: 3 });
     }
     for (const event of events) {
+      if (!matchesHarness(event, selectedHarnesses)) continue;
       exactEventCandidates.set(event.event_id, event);
       candidateSessionIds.add(event.session_id);
     }
@@ -231,7 +244,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
     );
     const hasWeakScopedMatches = args.cwd && !explicitSessionIds.length && queryTermCount >= 4 && bestSummaryHitCount <= 1;
     if (hasWeakScopedMatches) {
-      const sessions = searchStoredSessions(db, rawLogPath, { query, limit: 8 });
+      const sessions = searchStoredSessions(db, rawLogPath, { query, harnesses: args.harnesses, limit: 8 });
       for (const session of sessions) {
         addSessionIfSummaryMatches(session.session_id);
         addRankedSessionNodes(session.session_id, 2);
@@ -239,9 +252,9 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
     }
 
     if (summaryNodeCandidates.size === 0 && !explicitSessionIds.length) {
-      let sessions = searchStoredSessions(db, rawLogPath, { query, cwd: args.cwd, limit: 8 });
+      let sessions = searchStoredSessions(db, rawLogPath, { query, cwd: args.cwd, harnesses: args.harnesses, limit: 8 });
       if (sessions.length === 0 && args.cwd) {
-        sessions = searchStoredSessions(db, rawLogPath, { query, limit: 8 });
+        sessions = searchStoredSessions(db, rawLogPath, { query, harnesses: args.harnesses, limit: 8 });
       }
       for (const session of sessions) {
         candidateSessionIds.add(session.session_id);
@@ -251,7 +264,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
   } else {
     if (candidateSessionIds.size === 0) {
       const session = getCurrentStoredSession(db, rawLogPath, { cwd: args.cwd });
-      if (session) candidateSessionIds.add(session.session_id);
+      if (session && acceptsSession(session.session_id)) candidateSessionIds.add(session.session_id);
     }
     for (const sessionId of candidateSessionIds) {
       for (const node of getTopSummaryNodesForSession(db, sessionId, 3)) addSummaryNode(node);
@@ -259,9 +272,9 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
   }
 
   if (candidateSessionIds.size === 0) {
-    let sessions = searchStoredSessions(db, rawLogPath, { query: args.query, cwd: args.cwd, limit: 8 });
+    let sessions = searchStoredSessions(db, rawLogPath, { query: args.query, cwd: args.cwd, harnesses: args.harnesses, limit: 8 });
     if (sessions.length === 0 && query.length > 0 && args.cwd && !explicitSessionIds.length) {
-      sessions = searchStoredSessions(db, rawLogPath, { query: args.query, limit: 8 });
+      sessions = searchStoredSessions(db, rawLogPath, { query: args.query, harnesses: args.harnesses, limit: 8 });
     }
     for (const session of sessions) candidateSessionIds.add(session.session_id);
   }
@@ -274,7 +287,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
         ? [...candidateSessionIds].slice(0, 1)
         : [];
   for (const sessionId of recentSessionIds) {
-    for (const event of getRecentContextEvents(db, rawLogPath, sessionId, 2)) {
+    for (const event of getRecentContextEvents(db, rawLogPath, sessionId, 2).filter((event) => matchesHarness(event, selectedHarnesses))) {
       if (!exactEventCandidates.has(event.event_id)) recentEventCandidates.set(event.event_id, event);
       if (recentEventCandidates.size >= 4) break;
     }
@@ -337,6 +350,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
       sources.push({
         kind: event.hook_event === "Note" ? "note" : "event",
         session_id: event.session_id,
+        harness: event.harness,
         event_id: event.event_id,
         timestamp: event.timestamp,
       });
@@ -350,6 +364,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
       sources.push({
         kind: "checkpoint",
         session_id: checkpoint.session_id,
+        harness: harnessForSession(checkpoint.session_id),
         node_id: checkpoint.node_id,
         timestamp: checkpoint.timestamp,
       });
@@ -367,6 +382,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
       sources.push({
         kind: "summary",
         session_id: summary.session_id,
+        harness: harnessForSession(summary.session_id),
         event_id: summary.source_event_ids[0],
         timestamp: summary.updated_at,
       });
@@ -386,6 +402,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
       sources.push({
         kind: "summary",
         session_id: node.session_id,
+        harness: harnessForSession(node.session_id),
         node_id: node.node_id,
         event_id: node.source_event_ids[0],
         timestamp: node.latest_at,
@@ -395,6 +412,7 @@ export function packContext(db: DatabaseSync | undefined, rawLogPath: string, ar
         sources.push({
           kind: "note",
           session_id: note.session_id,
+          harness: note.harness,
           event_id: note.event_id,
           timestamp: note.timestamp,
         });

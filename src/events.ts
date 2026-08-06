@@ -1,6 +1,15 @@
 import { DEFAULT_LIMITS, type LcmLimits } from "./config.ts";
 import { sanitizeForStorage, sha256 } from "./redact.ts";
 
+export const HARNESS_NAMES = ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"] as const;
+export type HarnessName = (typeof HARNESS_NAMES)[number];
+
+export function harnessSessionId(harness: HarnessName, nativeId: string): string {
+  const id = nativeId.trim();
+  if (!id) throw new Error("native session id must not be empty");
+  return `${harness}:${id}`;
+}
+
 export type RepoMetadata = {
   repoRoot?: string;
   gitBranch?: string;
@@ -10,6 +19,8 @@ export type NormalizedEvent = {
   schema_version: 1;
   event_id: string;
   timestamp: string;
+  harness: HarnessName;
+  native_event: string;
   hook_event: string;
   session_id: string;
   cwd: string;
@@ -146,6 +157,8 @@ function finalizeEvent(args: {
     schema_version: 1,
     event_id: eventId,
     timestamp: args.timestamp,
+    harness: "codex",
+    native_event: args.hookEvent,
     hook_event: args.hookEvent,
     session_id: metadata.sessionId,
     cwd: metadata.cwd,

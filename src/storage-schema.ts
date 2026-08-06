@@ -11,6 +11,7 @@ export function initializeStorageSchema(db: DatabaseSync): SchemaInitialization 
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS sessions (
       session_id TEXT PRIMARY KEY,
+      harness TEXT NOT NULL DEFAULT 'codex',
       first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
       cwd TEXT NOT NULL,
@@ -31,6 +32,7 @@ export function initializeStorageSchema(db: DatabaseSync): SchemaInitialization 
     CREATE TABLE IF NOT EXISTS events (
       event_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
+      harness TEXT NOT NULL DEFAULT 'codex',
       timestamp TEXT NOT NULL,
       hook_event TEXT NOT NULL,
       cwd TEXT NOT NULL,
@@ -123,8 +125,10 @@ export function initializeStorageSchema(db: DatabaseSync): SchemaInitialization 
   `);
   ensureColumn(db, "events", "turn_id", "TEXT");
   ensureColumn(db, "events", "tool_use_id", "TEXT");
+  ensureColumn(db, "events", "harness", "TEXT NOT NULL DEFAULT 'codex'");
   ensureColumn(db, "session_summaries", "summary_version", "INTEGER");
   const backfillSessionMetadata = [
+    ensureColumn(db, "sessions", "harness", "TEXT NOT NULL DEFAULT 'codex'"),
     ensureColumn(db, "sessions", "parent_session_id", "TEXT"),
     ensureColumn(db, "sessions", "agent_role", "TEXT"),
     ensureColumn(db, "sessions", "agent_nickname", "TEXT"),
@@ -168,7 +172,7 @@ function sqlIdentifier(value: string): string {
 }
 
 function sqlColumnType(value: string): string {
-  if (value !== "TEXT" && value !== "INTEGER") {
+  if (value !== "TEXT" && value !== "INTEGER" && value !== "TEXT NOT NULL DEFAULT 'codex'") {
     throw new TypeError(`Invalid SQL column type: ${value}`);
   }
   return value;

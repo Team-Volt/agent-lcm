@@ -90,6 +90,7 @@ export type {
   SessionDiscovery, SessionGraph, SessionListSummary, SessionPage, SessionSearchMatch, SessionSummary,
   StorageOptions, UsageReport,
 } from "./storage-types.ts";
+export type { HarnessName } from "./events.ts";
 export type { FileReference, OverflowContent, OverflowReference, OverflowSearchMatch, SessionMemorySummary, SummaryNode, SummarySourceType } from "./storage-types.ts";
 
 import type { StorageOptions, IngestManyResult, IngestManyOptions, SearchSessionArgs, SearchOverflowArgs, ListSessionsArgs, SessionPage, UsageReport, IndexCleanupReport, SessionSummary, SessionDetail, RecentContext, ContextPlan, PackedContext, PackContextArgs, LcmQueryExpansion, LcmDescription, LcmExpansion, SessionGraph, Health, LcmStats } from "./storage-types.ts";
@@ -584,6 +585,7 @@ export class LcmStorage {
     limit?: number;
     sourceLimit?: number;
     overview?: boolean;
+    harnesses?: SearchSessionArgs["harnesses"];
   }): LcmQueryExpansion {
     return expandStoredQuery(this.db, this.config.rawLogPath, args);
   }

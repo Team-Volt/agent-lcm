@@ -26,16 +26,18 @@ import {
   getTopSummaryNodesForSession,
   searchSummaryNodes,
 } from "./storage-summaries.ts";
-import type {
-  ContextPlan,
-  ContextPlanState,
-  LcmDescription,
-  LcmExpansion,
-  LcmQueryExpansion,
-  QueryExpansionSource,
-  RecentContext,
-  SearchSessionArgs,
-  SessionSummary,
+import {
+  harnessSet,
+  matchesHarness,
+  type ContextPlan,
+  type ContextPlanState,
+  type LcmDescription,
+  type LcmExpansion,
+  type LcmQueryExpansion,
+  type QueryExpansionSource,
+  type RecentContext,
+  type SearchSessionArgs,
+  type SessionSummary,
 } from "./storage-types.ts";
 import {
   HISTORICAL_SOURCE_TEXT_NOTICE,
@@ -386,6 +388,7 @@ export function expandQuery(db: DatabaseSync | undefined, rawLogPath: string, ar
   limit?: number;
   sourceLimit?: number;
   overview?: boolean;
+  harnesses?: SearchSessionArgs["harnesses"];
 }): LcmQueryExpansion {
   const query = args.query.trim();
   if (query.length === 0) throw new Error("query must be a non-empty string.");
@@ -395,6 +398,9 @@ export function expandQuery(db: DatabaseSync | undefined, rawLogPath: string, ar
   const searchLimit = args.overview ? Math.max(candidateLimit * 4, 24) : candidateLimit;
   const sourceLimit = clampLimit(args.sourceLimit, 6, 24);
   const maxNodes = Math.max(candidateLimit * 12, 24);
+  const selectedHarnesses = harnessSet(args.harnesses);
+  const sessionHarness = (sessionId: string) => getStoredSessionSummary(db, rawLogPath, sessionId)?.harness ?? "codex";
+  const hasHarness = (sessionId: string) => !selectedHarnesses || selectedHarnesses.has(sessionHarness(sessionId));
 
   let candidates = findSummaryNodes(db, {
     query,
@@ -402,23 +408,24 @@ export function expandQuery(db: DatabaseSync | undefined, rawLogPath: string, ar
     repoRoot: args.repoRoot,
     sessionIds: args.sessionIds,
     limit: searchLimit,
-  });
+  }).filter((node) => hasHarness(node.session_id));
   if (candidates.length === 0 && args.cwd && !args.sessionIds?.length) {
     candidates = findSummaryNodes(db, {
       query,
       repoRoot: args.repoRoot,
       limit: searchLimit,
-    });
+    }).filter((node) => hasHarness(node.session_id));
   }
   if (candidates.length === 0 && !args.sessionIds?.length) {
     const sessions = searchStoredSessions(db, rawLogPath, {
       query,
       cwd: args.cwd,
       repoRoot: args.repoRoot,
+      harnesses: args.harnesses,
       limit: candidateLimit,
     });
     for (const session of sessions) {
-      candidates.push(...topSummaryNodesForSession(db, session.session_id, 1));
+      candidates.push(...topSummaryNodesForSession(db, session.session_id, 1).filter((node) => hasHarness(node.session_id)));
     }
   }
 
@@ -429,9 +436,10 @@ export function expandQuery(db: DatabaseSync | undefined, rawLogPath: string, ar
       const summary = getSessionMemorySummary(db, rawLogPath, sessionId);
       if (!summary || (args.cwd && summary.cwd !== args.cwd) || (args.repoRoot && summary.repo_root !== args.repoRoot)) continue;
       if (!matchesQueryText(summarySearchText(summary), query)) continue;
+      if (!hasHarness(sessionId)) continue;
       candidates.push(...topSummaryNodesForSession(db, sessionId, 1));
       for (const event of sessionSummarySourceEvents(db, summary, query, sourceLimit)) {
-        eventsById.set(event.event_id, event);
+        if (matchesHarness(event, selectedHarnesses)) eventsById.set(event.event_id, event);
       }
     }
   }
@@ -439,7 +447,7 @@ export function expandQuery(db: DatabaseSync | undefined, rawLogPath: string, ar
     if (nodesById.has(node.node_id) || nodesById.size >= maxNodes) return;
     nodesById.set(node.node_id, node);
     for (const event of summaryNodeSourceEvents(db, node, query, sourceLimit)) {
-      eventsById.set(event.event_id, event);
+      if (matchesHarness(event, selectedHarnesses)) eventsById.set(event.event_id, event);
     }
     if (node.source_type !== "nodes") return;
     const sourceNodes = rankQueryExpansionNodes(sourceSummaryNodes(db, node, sourceLimit), query, args.overview === true);
@@ -459,6 +467,7 @@ export function expandQuery(db: DatabaseSync | undefined, rawLogPath: string, ar
     ...nodes.map((node) => ({
       kind: "summary" as const,
       session_id: node.session_id,
+      harness: sessionHarness(node.session_id),
       node_id: node.node_id,
       timestamp: node.latest_at,
       depth: node.depth,
@@ -466,6 +475,7 @@ export function expandQuery(db: DatabaseSync | undefined, rawLogPath: string, ar
     ...events.map((event) => ({
       kind: "event" as const,
       session_id: event.session_id,
+      harness: event.harness,
       event_id: event.event_id,
       timestamp: event.timestamp,
       hook_event: event.hook_event,

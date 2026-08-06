@@ -1,4 +1,5 @@
 import type { FileReference } from "./file-refs.ts";
+import type { HarnessName } from "./events.ts";
 import type { SessionSummary } from "./storage-types.ts";
 import type { SessionMemorySummary, SummaryNode } from "./summary.ts";
 
@@ -6,6 +7,7 @@ export function rowToSessionSummary(row: unknown): SessionSummary {
   const record = recordValue(row);
   return {
     session_id: String(record.session_id),
+    harness: (record.harness === "cursor" || record.harness === "vscode" || record.harness === "copilot" || record.harness === "kiro" || record.harness === "mcp" || record.harness === "import") ? record.harness : "codex" as HarnessName,
     first_seen: String(record.first_seen),
     last_seen: String(record.last_seen),
     cwd: String(record.cwd),

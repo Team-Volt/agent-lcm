@@ -1,4 +1,5 @@
 import { compactDescription, toolResult, withoutMarkdown } from "./mcp-result.ts";
+import { HARNESS_NAMES, type HarnessName } from "./events.ts";
 import { createStorage } from "./storage.ts";
 
 export function callTool(params: Record<string, unknown>) {
@@ -25,6 +26,7 @@ export function callTool(params: Record<string, unknown>) {
           cwd: optionalString(args.cwd),
           repoRoot: optionalString(args.repoRoot),
           parentSessionId: optionalString(args.parentSessionId),
+          harnesses: optionalHarnessArray(args.harnesses),
           rootsOnly: optionalBoolean(args.rootsOnly),
           includeSummaries: optionalBoolean(args.includeSummaries),
           limit: optionalNumber(args.limit),
@@ -39,6 +41,7 @@ export function callTool(params: Record<string, unknown>) {
           cwd: optionalString(args.cwd),
           repoRoot: optionalString(args.repoRoot),
           parentSessionId: optionalString(args.parentSessionId),
+          harnesses: optionalHarnessArray(args.harnesses),
           rootsOnly: optionalBoolean(args.rootsOnly),
         });
         return toolResult(`Captured ${usage.totals.total_tokens} tokens across ${usage.totals.sessions} sessions.`, { usage });
@@ -55,6 +58,7 @@ export function callTool(params: Record<string, unknown>) {
             repoRoot: optionalString(args.repoRoot),
             excludeCurrentSession: optionalBoolean(args.excludeCurrentSession),
             excludeSessionIds: optionalStringArray(args.excludeSessionIds),
+            harnesses: optionalHarnessArray(args.harnesses),
           });
         const overflowMatches = scope === "memory"
           ? []
@@ -63,6 +67,7 @@ export function callTool(params: Record<string, unknown>) {
             limit: optionalNumber(args.limit),
             cwd: optionalString(args.cwd),
             repoRoot: optionalString(args.repoRoot),
+            harnesses: optionalHarnessArray(args.harnesses),
           });
         return toolResult(
           `Found ${matches.length} LCM matches and ${overflowMatches.length} overflow matches.`,
@@ -107,6 +112,7 @@ export function callTool(params: Record<string, unknown>) {
           limit: optionalNumber(args.limit),
           sourceLimit: optionalNumber(args.sourceLimit),
           overview: optionalBoolean(args.overview),
+          harnesses: optionalHarnessArray(args.harnesses),
         });
         return toolResult(expansion.markdown, { expansion: withoutMarkdown(expansion) });
       }
@@ -137,6 +143,7 @@ export function callTool(params: Record<string, unknown>) {
           repoRoot: optionalString(args.repoRoot),
           excludeCurrentSession: optionalBoolean(args.excludeCurrentSession),
           excludeSessionIds: optionalStringArray(args.excludeSessionIds),
+          harnesses: optionalHarnessArray(args.harnesses),
         });
         return toolResult(`Found ${matches.length} matching sessions.`, { matches });
       }
@@ -173,6 +180,7 @@ export function callTool(params: Record<string, unknown>) {
           currentThreadId: currentThreadId(),
           budgetTokens: optionalNumber(args.budgetTokens),
           cwd: optionalString(args.cwd),
+          harnesses: optionalHarnessArray(args.harnesses),
         });
         return toolResult("Packed context is in structuredContent.markdown.", packed);
       }
@@ -217,6 +225,15 @@ function optionalStringArray(value: unknown): string[] | undefined {
     throw new Error("value must be an array of non-empty strings.");
   }
   return value.map((item) => item.trim());
+}
+
+function optionalHarnessArray(value: unknown): HarnessName[] | undefined {
+  const values = optionalStringArray(value);
+  if (!values) return undefined;
+  if (values.some((harness) => !(HARNESS_NAMES as readonly string[]).includes(harness))) {
+    throw new Error(`harnesses must contain only: ${HARNESS_NAMES.join(", ")}.`);
+  }
+  return values as HarnessName[];
 }
 
 function contentScope(value: unknown): "memory" | "overflow" | "both" {

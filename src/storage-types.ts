@@ -1,5 +1,5 @@
 import type { LcmConfig } from "./config.ts";
-import type { NormalizedEvent } from "./events.ts";
+import type { HarnessName, NormalizedEvent } from "./events.ts";
 import type { FileReference } from "./file-refs.ts";
 import type { OverflowContent } from "./overflow.ts";
 import type { SessionMemorySummary, SummaryNode } from "./summary.ts";
@@ -31,6 +31,7 @@ export type SearchSessionArgs = {
   repoRoot?: string;
   excludeCurrentSession?: boolean;
   excludeSessionIds?: string[];
+  harnesses?: HarnessName[];
 };
 
 export type SearchOverflowArgs = {
@@ -38,6 +39,7 @@ export type SearchOverflowArgs = {
   limit?: number;
   cwd?: string;
   repoRoot?: string;
+  harnesses?: HarnessName[];
 };
 
 export type ListSessionsArgs = {
@@ -50,6 +52,7 @@ export type ListSessionsArgs = {
   includeSummaries?: boolean;
   limit?: number;
   cursor?: string;
+  harnesses?: HarnessName[];
 };
 
 export type SessionPage = {
@@ -86,6 +89,7 @@ export type IndexCleanupReport = {
 
 export type SessionSummary = {
   session_id: string;
+  harness: HarnessName;
   first_seen: string;
   last_seen: string;
   cwd: string;
@@ -171,7 +175,7 @@ export type ContextPlan = {
 export type PackedContext = {
   markdown: string;
   estimated_tokens: number;
-  sources: Array<{ kind: "event" | "note" | "checkpoint" | "summary"; session_id: string; event_id?: string; node_id?: string; timestamp: string }>;
+  sources: Array<{ kind: "event" | "note" | "checkpoint" | "summary"; session_id: string; harness: HarnessName; event_id?: string; node_id?: string; timestamp: string }>;
 };
 
 export type PackContextArgs = {
@@ -180,11 +184,13 @@ export type PackContextArgs = {
   currentThreadId?: string;
   budgetTokens?: number;
   cwd?: string;
+  harnesses?: HarnessName[];
 };
 
 export type QueryExpansionSource = {
   kind: "summary" | "event";
   session_id: string;
+  harness: HarnessName;
   timestamp: string;
   node_id?: string;
   event_id?: string;
@@ -201,6 +207,21 @@ export type LcmQueryExpansion = {
   events: NormalizedEvent[];
   sources: QueryExpansionSource[];
 };
+
+export function harnessSet(harnesses?: readonly HarnessName[]): Set<HarnessName> | undefined {
+  return harnesses?.length ? new Set(harnesses) : undefined;
+}
+
+export function matchesHarness(event: Pick<NormalizedEvent, "harness">, selectedHarnesses?: ReadonlySet<HarnessName>): boolean {
+  return !selectedHarnesses || selectedHarnesses.has(event.harness);
+}
+
+export function harnessSqlFragment(column: string, harnesses: readonly HarnessName[] | undefined, parameter: number): { sql: string; values: HarnessName[] } {
+  const values = [...(harnessSet(harnesses) ?? [])];
+  return values.length === 0
+    ? { sql: "", values }
+    : { sql: ` AND ${column} IN (${values.map((_, index) => `?${parameter + index}`).join(", ")})`, values };
+}
 
 export type LcmDescription =
   | {

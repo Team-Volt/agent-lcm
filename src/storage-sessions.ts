@@ -14,6 +14,7 @@ import type {
   SessionSummary,
   UsageReport,
 } from "./storage-types.ts";
+import { harnessSqlFragment, harnessSet } from "./storage-types.ts";
 import { buildSessionMemorySummary, eventSignalText, isGeneratedSuggestionEvent, isSummarySourceEvent, type SessionMemorySummary } from "./summary.ts";
 
 export function sortedSessionIds(sessionIds: Iterable<string>): string[] {
@@ -59,6 +60,7 @@ export function summarizeSessions(events: NormalizedEvent[]): SessionSummary[] {
     if (!existing) {
       sessions.set(event.session_id, {
         session_id: event.session_id,
+        harness: event.harness,
         first_seen: event.timestamp,
         last_seen: event.timestamp,
         cwd: event.cwd,
@@ -72,6 +74,7 @@ export function summarizeSessions(events: NormalizedEvent[]): SessionSummary[] {
     }
     existing.first_seen = event.timestamp < existing.first_seen ? event.timestamp : existing.first_seen;
     existing.last_seen = event.timestamp > existing.last_seen ? event.timestamp : existing.last_seen;
+    existing.harness = event.harness;
     existing.cwd = event.cwd;
     existing.repo_root = event.repo_root ?? existing.repo_root;
     existing.git_branch = event.git_branch ?? existing.git_branch;
@@ -262,13 +265,15 @@ export function listStoredSessions(
 ): SessionPage {
   if (!db) {
     const rawEvents = readRawEvents(rawLogPath);
+    const selectedHarnesses = harnessSet(args.harnesses);
     const matches = summarizeSessions(rawEvents)
       .filter((session) => !since || session.last_seen >= since)
       .filter((session) => !until || session.first_seen <= until)
       .filter((session) => !args.cwd || session.cwd === args.cwd)
       .filter((session) => !args.repoRoot || session.repo_root === args.repoRoot)
       .filter((session) => !args.rootsOnly || !session.parent_session_id)
-      .filter((session) => !args.parentSessionId || session.parent_session_id === args.parentSessionId);
+      .filter((session) => !args.parentSessionId || session.parent_session_id === args.parentSessionId)
+      .filter((session) => !selectedHarnesses || selectedHarnesses.has(session.harness));
     const eventsBySession = args.includeSummaries ? groupEventsBySession(rawEvents) : undefined;
     const sessions = matches.slice(offset, offset + limit).map((session) => {
       const events = eventsBySession?.get(session.session_id) ?? [];
@@ -290,6 +295,7 @@ export function listStoredSessions(
       ss.outcomes_json AS summary_outcomes_json,
       ss.source_event_ids_json AS summary_source_event_ids_json` : "";
   const summaryJoin = args.includeSummaries ? "LEFT JOIN session_summaries ss ON ss.session_id = s.session_id" : "";
+  const harnessFilter = harnessSqlFragment("s.harness", args.harnesses, 9);
   const rows = db.prepare(`
     SELECT s.*${summaryColumns}
     FROM sessions s
@@ -300,6 +306,7 @@ export function listStoredSessions(
       AND (?4 IS NULL OR s.repo_root = ?4)
       AND (?5 = 0 OR s.parent_session_id IS NULL)
       AND (?6 IS NULL OR s.parent_session_id = ?6)
+      ${harnessFilter.sql}
     ORDER BY s.last_seen DESC, s.session_id ASC
     LIMIT ?7 OFFSET ?8
   `).all(
@@ -311,6 +318,7 @@ export function listStoredSessions(
     args.parentSessionId ?? null,
     limit + 1,
     offset,
+    ...harnessFilter.values,
   );
   const sessions = rows.slice(0, limit).map(rowToSessionSummary);
   return {
@@ -328,16 +336,24 @@ export function storedUsage(
 ): UsageReport {
   if (!db) {
     const allSessions = summarizeSessions(readRawEvents(rawLogPath));
+    const selectedHarnesses = harnessSet(args.harnesses);
     let sessions = allSessions
       .filter((session) => !since || session.last_seen >= since)
       .filter((session) => !until || session.first_seen <= until)
       .filter((session) => !args.cwd || session.cwd === args.cwd)
       .filter((session) => !args.repoRoot || session.repo_root === args.repoRoot)
-      .filter((session) => !args.parentSessionId || session.parent_session_id === args.parentSessionId);
-    if (args.rootsOnly) sessions = sessionsWithDescendants(allSessions, sessions.filter((session) => !session.parent_session_id));
+      .filter((session) => !args.parentSessionId || session.parent_session_id === args.parentSessionId)
+      .filter((session) => !selectedHarnesses || selectedHarnesses.has(session.harness));
+    if (args.rootsOnly) {
+      sessions = sessionsWithDescendants(
+        selectedHarnesses ? allSessions.filter((session) => selectedHarnesses.has(session.harness)) : allSessions,
+        sessions.filter((session) => !session.parent_session_id),
+      );
+    }
     return usageFromSessions(sessions);
   }
   if (args.rootsOnly) {
+    const harnessFilter = harnessSqlFragment("harness", args.harnesses, 6);
     const row = db.prepare(`
       WITH RECURSIVE selected_sessions(session_id) AS (
         SELECT session_id
@@ -348,10 +364,12 @@ export function storedUsage(
           AND (?3 IS NULL OR cwd = ?3)
           AND (?4 IS NULL OR repo_root = ?4)
           AND (?5 IS NULL OR parent_session_id = ?5)
+          ${harnessFilter.sql}
         UNION
         SELECT child.session_id
         FROM sessions child
         JOIN selected_sessions parent ON child.parent_session_id = parent.session_id
+        WHERE 1 = 1 ${harnessSqlFragment("child.harness", args.harnesses, 6).sql}
       )
       SELECT
         COUNT(*) AS sessions,
@@ -368,6 +386,7 @@ export function storedUsage(
       args.cwd ?? null,
       args.repoRoot ?? null,
       args.parentSessionId ?? null,
+      ...harnessFilter.values,
     );
     return usageReportFromRow(recordValue(row));
   }
@@ -385,12 +404,14 @@ export function storedUsage(
       AND (?3 IS NULL OR cwd = ?3)
       AND (?4 IS NULL OR repo_root = ?4)
       AND (?5 IS NULL OR parent_session_id = ?5)
+      ${harnessSqlFragment("harness", args.harnesses, 6).sql}
   `).get(
     since ?? null,
     until ?? null,
     args.cwd ?? null,
     args.repoRoot ?? null,
     args.parentSessionId ?? null,
+    ...harnessSqlFragment("harness", args.harnesses, 6).values,
   );
   return usageReportFromRow(recordValue(row));
 }

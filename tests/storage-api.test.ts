@@ -43,6 +43,7 @@ import type {
   SummarySourceType,
   UsageReport,
 } from "../src/storage.ts";
+import type { HarnessName } from "../src/storage.ts";
 import { tempHome } from "./helpers.ts";
 
 type StorageApiTypeExports = [
@@ -81,9 +82,10 @@ type StorageApiTypeExports = [
   SummaryNode,
   SummarySourceType,
   UsageReport,
+  HarnessName,
 ];
 
-const storageApiTypeExportCount: StorageApiTypeExports["length"] = 35;
+const storageApiTypeExportCount: StorageApiTypeExports["length"] = 36;
 
 type PublicMethodNames = readonly [
   "close",
@@ -160,7 +162,7 @@ function rawPrompt(sessionId: string, cwd: string, prompt: string) {
 }
 
 test("storage module preserves its named runtime exports", () => {
-  assert.equal(storageApiTypeExportCount, 35);
+  assert.equal(storageApiTypeExportCount, 36);
   assert.deepEqual(Object.keys(storageModule).sort(), ["LcmStorage", "createStorage"]);
 });
 

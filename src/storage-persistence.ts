@@ -247,23 +247,24 @@ export function indexEventInTransaction(db: DatabaseSync | undefined, event: Nor
   const sessionMetadata = extractSessionMetadata(event);
   const insert = db.prepare(`
     INSERT OR IGNORE INTO events
-      (event_id, session_id, timestamp, hook_event, cwd, repo_root, git_branch, turn_id, tool_use_id, text, raw_json)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+      (event_id, session_id, harness, timestamp, hook_event, cwd, repo_root, git_branch, turn_id, tool_use_id, text, raw_json)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
   `).run(
-    event.event_id, event.session_id, event.timestamp, event.hook_event, event.cwd,
+    event.event_id, event.session_id, event.harness, event.timestamp, event.hook_event, event.cwd,
     event.repo_root ?? null, event.git_branch ?? null, metadata.turn_id ?? null,
     metadata.tool_use_id ?? null, "", JSON.stringify(event),
   );
   if (insert.changes === 0) return { inserted: false, summaryTouched: false };
   db.prepare(`
     INSERT INTO sessions
-      (session_id, first_seen, last_seen, cwd, repo_root, git_branch, event_count,
+      (session_id, harness, first_seen, last_seen, cwd, repo_root, git_branch, event_count,
        parent_session_id, agent_role, agent_nickname, model, reasoning_effort,
        total_input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens)
-    VALUES (?1, ?2, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+    VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
     ON CONFLICT(session_id) DO UPDATE SET
       first_seen = CASE WHEN excluded.first_seen < sessions.first_seen THEN excluded.first_seen ELSE sessions.first_seen END,
       last_seen = CASE WHEN excluded.last_seen > sessions.last_seen THEN excluded.last_seen ELSE sessions.last_seen END,
+      harness = excluded.harness,
       cwd = excluded.cwd,
       repo_root = COALESCE(excluded.repo_root, sessions.repo_root),
       git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
@@ -279,7 +280,7 @@ export function indexEventInTransaction(db: DatabaseSync | undefined, event: Nor
       total_tokens = ${maxNullable("sessions.total_tokens", "excluded.total_tokens")},
       event_count = sessions.event_count + 1
   `).run(
-    event.session_id, event.timestamp, event.cwd, event.repo_root ?? null, event.git_branch ?? null,
+    event.session_id, event.harness, event.timestamp, event.cwd, event.repo_root ?? null, event.git_branch ?? null,
     sessionMetadata.parent_session_id ?? null, sessionMetadata.agent_role ?? null,
     sessionMetadata.agent_nickname ?? null, sessionMetadata.model ?? null,
     sessionMetadata.reasoning_effort ?? null, sessionMetadata.total_input_tokens ?? null,
