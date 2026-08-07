@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -23,8 +24,14 @@ export function writeSetupConfiguration(target: string, configuration: Record<st
   const directory = path.dirname(target);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
-  const temporary = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(configuration, null, 2)}\n`, { mode: 0o600 });
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  const descriptor = fs.openSync(temporary, "wx", 0o600);
+  try {
+    fs.writeFileSync(descriptor, `${JSON.stringify(configuration, null, 2)}\n`);
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
   fs.renameSync(temporary, target);
   fs.chmodSync(target, 0o600);
 }

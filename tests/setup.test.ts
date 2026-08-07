@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import { writeSetupConfiguration } from "../src/setup-files.ts";
 import { setupHarness, setupStatus } from "../src/setup.ts";
 import { assertCliOk, runCli, tempHome } from "./helpers.ts";
 
@@ -54,6 +55,20 @@ test("setup rejects malformed Kiro schema without changing the owned file", () =
 
   assert.throws(() => setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" }), /invalid setup configuration/u);
   assert.deepEqual(fs.readFileSync(setupPath), original);
+});
+
+test("setup rejects malformed Codex custom events without changing or backing up the file", () => {
+  const clientHome = tempHome("agent-lcm-codex-schema-");
+  const setupPath = path.join(clientHome, "hooks.json");
+  const original = Buffer.from('{"hooks":{"CustomEvent":"invalid"}}\n');
+  fs.writeFileSync(setupPath, original);
+
+  assert.throws(
+    () => setupHarness("codex", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" }),
+    /invalid setup configuration/u,
+  );
+  assert.deepEqual(fs.readFileSync(setupPath), original);
+  assert.deepEqual(fs.readdirSync(clientHome), ["hooks.json"]);
 });
 
 test("Copilot and VS Code converge on one lower-camel shared user hook configuration", () => {
@@ -237,6 +252,19 @@ test("setup never overwrites an existing timestamped backup", () => {
 
   assert.equal(fs.readFileSync(firstBackup, "utf8"), "existing backup");
   assert.equal(fs.readFileSync(nextBackup, "utf8"), original);
+});
+
+test("setup writes never follow a predictable temporary symlink", { skip: process.platform === "win32" }, () => {
+  const clientHome = tempHome("agent-lcm-temp-symlink-");
+  const setupPath = path.join(clientHome, "hooks.json");
+  const victim = path.join(clientHome, "victim.txt");
+  fs.writeFileSync(victim, "do not overwrite");
+  fs.symlinkSync(victim, `${setupPath}.${process.pid}.tmp`);
+
+  writeSetupConfiguration(setupPath, { hooks: {} });
+
+  assert.equal(fs.readFileSync(victim, "utf8"), "do not overwrite");
+  assert.deepEqual(JSON.parse(fs.readFileSync(setupPath, "utf8")), { hooks: {} });
 });
 
 test("Kiro setup updates its owned hooks after a binary move", () => {

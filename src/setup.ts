@@ -47,6 +47,7 @@ function mergeCodexConfiguration(
 ): Record<string, unknown> {
   const configuration = existing ? structuredClone(existing) : { hooks: {} };
   if (!isRecord(configuration.hooks)) throw invalidConfiguration(target);
+  if (!Object.values(configuration.hooks).every(isCodexSelectors)) throw invalidConfiguration(target);
 
   for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]) {
     const expectedCommand = captureCommand(command, "codex", event);
@@ -55,7 +56,7 @@ function mergeCodexConfiguration(
       configuration.hooks[event] = [{ hooks: [{ type: "command", command: expectedCommand }] }];
       continue;
     }
-    if (!Array.isArray(selectors) || !selectors.every(isRecord)) throw invalidConfiguration(target);
+    if (!isCodexSelectors(selectors)) throw invalidConfiguration(target);
     let found = false;
     for (const selector of selectors) {
       if (!Array.isArray(selector.hooks) || !selector.hooks.every(isRecord)) throw invalidConfiguration(target);
@@ -198,6 +199,12 @@ function readConfigurationForStatus(target: string): Record<string, unknown> | u
 
 function isExpectedCommandHook(value: unknown, harness: CaptureHarness | "auto", event: string): boolean {
   return isRecord(value) && (value.type === undefined || value.type === "command") && isCaptureCommand(value.command, harness, event);
+}
+
+function isCodexSelectors(value: unknown): value is Array<Record<string, unknown> & { hooks: Record<string, unknown>[] }> {
+  return Array.isArray(value) && value.every((selector) => isRecord(selector)
+    && Array.isArray(selector.hooks)
+    && selector.hooks.every(isRecord));
 }
 
 function isAgentLcmHook(value: Record<string, unknown>, event: string, harness: CaptureHarness): boolean {
