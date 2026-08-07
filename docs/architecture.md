@@ -8,7 +8,7 @@ The repository root is an Agent Plugins 1.0 package:
 plugin.json                   portable package manifest
 mcp.json                      portable MCP server configuration
 skills/lcm-recall/            portable recall skill
-hooks.json                    lower-camel portable hook shape where supported
+hooks.json                    shared lower-camel hook shape for client adapters
 .codex-plugin/plugin.json     Codex native compatibility manifest
 .cursor-plugin/plugin.json    Cursor native compatibility manifest
 hooks/                        harness-specific hook manifests
