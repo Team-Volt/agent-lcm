@@ -323,6 +323,35 @@ test("resumes legacy migration without duplicating events", () => {
   assert.deepEqual(Array.from(readAllRawEvents(config)).map((event) => event.event_id), events.map((event) => event.event_id));
 });
 
+test("legacy migration retains a segment whose newest timestamp is inside retention", () => {
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, ".env"), "AGENT_LCM_RETENTION_DAYS=30\n", { mode: 0o600 });
+  const config = loadConfig({ home });
+  const recent = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "legacy-recent", cwd: "/tmp/retention", prompt: "recent" }),
+    env: {},
+    now: () => new Date("2026-08-01T00:00:00.000Z"),
+  });
+  const old = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "legacy-old", cwd: "/tmp/retention", prompt: "old" }),
+    env: {},
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+  });
+  appendRawEvents(config.rawLogPath, [recent, old]);
+  const cutover = createStorage({ config });
+  cutover.close();
+
+  const report = runMaintenanceOnce(config, { now: () => new Date("2026-08-06T00:00:00.000Z") });
+
+  assert.equal(report.expired, 0);
+  const segment = readManifest(config.manifestPath).segments[0];
+  assert.equal(segment.first_timestamp, old.timestamp);
+  assert.equal(segment.last_timestamp, recent.timestamp);
+  assert.deepEqual(Array.from(readAllRawEvents(config)).map((event) => event.event_id), [recent.event_id, old.event_id]);
+});
+
 test("keeps earlier quarantine findings when a resumed migration reaches EOF", () => {
   const home = tempHome();
   const config = loadConfig({ home });
@@ -373,6 +402,36 @@ test("compresses a verified closed segment and keeps locator reads available", (
   assert.equal(record.compressed, true);
   assert.equal(fs.existsSync(path.join(home, record.path)), true);
   assert.deepEqual(readLocatedEvent(config, firstLocation), first);
+});
+
+test("checksum failure preserves the indexed payload copy", () => {
+  const home = tempHome();
+  const config = loadConfig({ home });
+  const archived = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "checksum-archive", cwd: "/tmp/checksum", prompt: "archive" }),
+    env: {},
+    now,
+  });
+  const storage = createStorage({ config });
+  storage.ingest(archived);
+  storage.close();
+  const active = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "checksum-active", cwd: "/tmp/checksum", prompt: "active" }),
+    env: {},
+    now,
+  });
+  appendSegmentedEvents(config, [active], { segmentCapBytes: fs.statSync(config.rawLogPath).size + 1 });
+  const segment = readManifest(config.manifestPath).segments[0];
+  fs.appendFileSync(path.join(home, segment.path), "corrupt");
+
+  const report = runMaintenanceOnce(config);
+
+  assert.match(report.errors.join("\n"), /checksum failed/u);
+  const db = new DatabaseSync(config.indexPath, { readOnly: true });
+  assert.notEqual(db.prepare("SELECT raw_json FROM events WHERE event_id = ?1").get(archived.event_id)?.raw_json, "");
+  db.close();
 });
 
 test("rebuilds a deleted index with locators that allow archived payload clearing", () => {
@@ -450,6 +509,40 @@ test("expires configured raw history while preserving session summaries", () => 
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sessions WHERE session_id = ?1").get(oldEvent.session_id)?.count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM session_summaries WHERE session_id = ?1").get(oldEvent.session_id)?.count, 1);
   db.close();
+});
+
+test("retention keeps an active segment whose newest timestamp is inside the window", () => {
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, ".env"), "AGENT_LCM_RETENTION_DAYS=30\n", { mode: 0o600 });
+  const config = loadConfig({ home });
+  const recent = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "segment-recent", cwd: "/tmp/retention", prompt: "recent" }),
+    env: {},
+    now: () => new Date("2026-08-01T00:00:00.000Z"),
+  });
+  const old = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "segment-old", cwd: "/tmp/retention", prompt: "old" }),
+    env: {},
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+  });
+  appendSegmentedEvents(config, [recent, old]);
+  const active = normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "segment-active", cwd: "/tmp/retention", prompt: "active" }),
+    env: {},
+    now: () => new Date("2026-08-06T00:00:00.000Z"),
+  });
+  appendSegmentedEvents(config, [active], { segmentCapBytes: fs.statSync(config.rawLogPath).size + 1 });
+
+  const report = runMaintenanceOnce(config, { now: () => new Date("2026-08-06T00:00:00.000Z") });
+
+  assert.equal(report.expired, 0);
+  const segment = readManifest(config.manifestPath).segments[0];
+  assert.equal(segment.first_timestamp, old.timestamp);
+  assert.equal(segment.last_timestamp, recent.timestamp);
+  assert.deepEqual(Array.from(readAllRawEvents(config)).map((event) => event.event_id), [recent.event_id, old.event_id, active.event_id]);
 });
 
 test("invalid retention configuration blocks source deletion", () => {

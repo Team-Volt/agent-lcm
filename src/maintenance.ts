@@ -8,7 +8,7 @@ import type { LcmConfig } from "./config.ts";
 import { parsePersistedEvent } from "./event-codec.ts";
 import type { NormalizedEvent } from "./events.ts";
 import { segmentedRawLogState, withRawLogLock } from "./raw-log.ts";
-import { emptySegmentManifest, readManifest, writeManifestAtomic, type SegmentRecord } from "./raw-segments.ts";
+import { emptySegmentManifest, readManifest, segmentTimestampBounds, writeManifestAtomic, type SegmentRecord } from "./raw-segments.ts";
 import {
   backfillLocatorMetadata,
   clearVerifiedRawJson,
@@ -227,14 +227,17 @@ function maintainSegments(config: LcmConfig, now: () => Date): MaintenanceReport
   }
   try {
     for (const record of readManifest(config.manifestPath).segments) {
-      if (db) cleared += clearVerifiedRawJson(db, record.id);
-      if (record.compressed) continue;
       try {
-        compressSegment(config, record);
-        compressed += 1;
+        if (record.compressed) verifyArchivedSegment(config, record);
+        else {
+          compressSegment(config, record);
+          compressed += 1;
+        }
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
+        continue;
       }
+      if (db) cleared += clearVerifiedRawJson(db, record.id);
     }
     const retention = expireSegments(config, db, now());
     errors.push(...retention.errors);
@@ -337,6 +340,10 @@ function compressSegment(config: LcmConfig, record: SegmentRecord): void {
     });
   });
   fs.unlinkSync(plainPath);
+}
+
+function verifyArchivedSegment(config: LcmConfig, record: SegmentRecord): void {
+  verifySegmentContent(gunzipSync(fs.readFileSync(path.join(config.home, record.path))), record);
 }
 
 function verifySegmentContent(content: Buffer, record: SegmentRecord): void {
@@ -446,14 +453,15 @@ function publishLegacySegment(
   const relativePath = `segments/${id}.jsonl`;
   const segmentPath = path.join(config.home, relativePath);
   const content = Buffer.concat(events.map((entry) => entry.serialized));
+  const timestamps = segmentTimestampBounds(events.map((entry) => entry.event.timestamp));
   const record: SegmentRecord = {
     id,
     path: relativePath,
     compressed: false,
     byte_count: content.length,
     event_count: events.length,
-    first_timestamp: events[0]?.event.timestamp ?? "1970-01-01T00:00:00.000Z",
-    last_timestamp: events.at(-1)?.event.timestamp ?? "1970-01-01T00:00:00.000Z",
+    first_timestamp: timestamps.firstTimestamp,
+    last_timestamp: timestamps.lastTimestamp,
     sha256: hashBuffer(content),
   };
   writeSegmentFile(segmentPath, content, record.sha256);

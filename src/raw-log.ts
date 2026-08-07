@@ -7,7 +7,7 @@ import { gunzipSync } from "node:zlib";
 import { loadConfig, type LcmConfig } from "./config.ts";
 import { parsePersistedEvent } from "./event-codec.ts";
 import type { NormalizedEvent } from "./events.ts";
-import { readManifest, segmentStoreState, writeManifestAtomic, type SegmentRecord } from "./raw-segments.ts";
+import { readManifest, segmentStoreState, segmentTimestampBounds, writeManifestAtomic, type SegmentRecord } from "./raw-segments.ts";
 
 export type RawLogReadResult = {
   readonly events: NormalizedEvent[];
@@ -412,13 +412,11 @@ function summarizeRawFile(rawLogPath: string): {
 } {
   const stat = fs.statSync(rawLogPath);
   const events = readRawLog(rawLogPath).events;
-  const first = events[0];
-  const last = events.at(-1);
+  const timestamps = segmentTimestampBounds(events.map((event) => event.timestamp));
   return {
     byteCount: stat.size,
     eventCount: events.length,
-    firstTimestamp: first?.timestamp ?? "1970-01-01T00:00:00.000Z",
-    lastTimestamp: last?.timestamp ?? "1970-01-01T00:00:00.000Z",
+    ...timestamps,
     sha256: hashRawFile(rawLogPath),
   };
 }

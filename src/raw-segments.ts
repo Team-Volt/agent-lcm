@@ -31,6 +31,21 @@ export type SegmentStorageHealth = {
   readonly config_error?: string;
 };
 
+const EPOCH_TIMESTAMP = "1970-01-01T00:00:00.000Z";
+
+export function segmentTimestampBounds(timestamps: readonly string[]): {
+  readonly firstTimestamp: string;
+  readonly lastTimestamp: string;
+} {
+  let firstTimestamp = timestamps[0] ?? EPOCH_TIMESTAMP;
+  let lastTimestamp = firstTimestamp;
+  for (const timestamp of timestamps) {
+    if (timestamp < firstTimestamp) firstTimestamp = timestamp;
+    if (timestamp > lastTimestamp) lastTimestamp = timestamp;
+  }
+  return { firstTimestamp, lastTimestamp };
+}
+
 export function emptySegmentManifest(): SegmentManifest {
   return { version: 1, segments: [] };
 }
