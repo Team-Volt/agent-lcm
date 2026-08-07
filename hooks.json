@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness auto" }],
+    "userPromptSubmitted": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness auto" }],
+    "postToolUse": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness auto" }],
+    "sessionEnd": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness auto" }]
+  }
+}

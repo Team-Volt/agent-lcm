@@ -1,7 +1,7 @@
 node_modules/
-.codex-lcm/
+dist/
+.agent-lcm/
 .omo/
-**/docs/superpowers/
 **/docs/*plan*.md
 *.sqlite
 *.sqlite-shm

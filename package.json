@@ -1,0 +1,61 @@
+{
+  "name": "@team-volt/agent-lcm",
+  "version": "0.0.1",
+  "description": "Shared local context memory for agent harnesses.",
+  "license": "MIT",
+  "author": "Team Volt",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Team-Volt/agent-lcm.git"
+  },
+  "homepage": "https://github.com/Team-Volt/agent-lcm#readme",
+  "bugs": {
+    "url": "https://github.com/Team-Volt/agent-lcm/issues"
+  },
+  "keywords": [
+    "agent-plugins",
+    "coding-agents",
+    "context-memory",
+    "mcp"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "bin": {
+    "agent-lcm": "bin/agent-lcm"
+  },
+  "files": [
+    ".agents/plugins/marketplace.json",
+    ".codex-plugin/",
+    ".cursor-plugin/",
+    "bin/",
+    "dist/",
+    "hooks/",
+    "skills/",
+    "hooks.json",
+    "mcp.json",
+    "plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "node --no-warnings --test tests/*.test.ts",
+    "benchmark:long-context": "node --no-warnings bin/agent-lcm benchmark long-context --json",
+    "benchmark:retrieval-quality": "node --no-warnings bin/agent-lcm benchmark retrieval-quality --json",
+    "presmoke": "npm run build",
+    "smoke": "node --no-warnings scripts/smoke-test.ts",
+    "release:check": "node --no-warnings scripts/release.ts check",
+    "release:version": "node --no-warnings scripts/release.ts set",
+    "prepare": "npm run build",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "typescript": "^7.0.2"
+  }
+}
