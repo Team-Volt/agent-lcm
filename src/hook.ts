@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { DEFAULT_LIMITS, loadConfig } from "./config.ts";
+import { ensureDaemon } from "./daemon-client.ts";
 import { normalizeHookEvent } from "./events.ts";
 import { resolveGitMetadata } from "./git.ts";
+import { mapHarnessEvent, type CaptureHarness } from "./harnesses.ts";
 import { publishInboxEvent } from "./inbox.ts";
 import { sha256 } from "./redact.ts";
 
@@ -52,6 +54,61 @@ export async function runHook(args: string[]): Promise<void> {
     payload: event.payload,
   });
   if (output.length > 0) process.stdout.write(output);
+}
+
+export async function runCapture(args: string[]): Promise<void> {
+  const { harness, nativeEvent } = captureArguments(args);
+  const config = loadConfig();
+  const rawInput = await readStdinWithLimit(config.limits.maxOverflowInputBytes);
+  const payloadCwd = extractStringField(rawInput, "cwd") ?? process.env.PWD ?? process.cwd();
+  const isToolEvent = nativeEvent === "PostToolUse" || nativeEvent === "postToolUse";
+  const repo = isToolEvent ? {} : resolveGitMetadata(payloadCwd);
+  let event = mapHarnessEvent(harness, nativeEvent, rawInput, { env: process.env, repo });
+  if (event.truncations.length > 0 || Buffer.byteLength(rawInput, "utf8") > config.limits.maxInputBytes) {
+    const fullEvent = mapHarnessEvent(harness, nativeEvent, rawInput, {
+      env: process.env,
+      repo,
+      limits: {
+        maxStringBytes: config.limits.maxOverflowInputBytes,
+        maxPayloadBytes: config.limits.maxOverflowInputBytes,
+      },
+    });
+    const content = JSON.stringify(fullEvent.payload);
+    const hash = sha256(content);
+    fs.mkdirSync(config.overflowDir, { recursive: true, mode: 0o700 });
+    const overflowPath = path.join(config.overflowDir, `${hash}.json`);
+    if (!fs.existsSync(overflowPath)) fs.writeFileSync(overflowPath, content, { mode: 0o600 });
+    event = {
+      ...event,
+      payload: {
+        ...event.payload,
+        overflow_ref: {
+          sha256: hash,
+          byte_count: Buffer.byteLength(rawInput, "utf8"),
+          sanitized_byte_count: Buffer.byteLength(content, "utf8"),
+          path: overflowPath,
+        },
+      },
+    };
+  }
+  publishInboxEvent(config, event);
+  try {
+    await ensureDaemon(config);
+  } catch {
+    process.stderr.write("agent-lcm: event queued; daemon start failed.\n");
+  }
+}
+
+function captureArguments(args: string[]): { harness: CaptureHarness | "auto"; nativeEvent?: string } {
+  const index = args.indexOf("--harness");
+  if (index < 0 || !args[index + 1]) throw new Error("Usage: agent-lcm capture --harness <harness> [event]");
+  const requested = args[index + 1];
+  if (requested !== "auto" && requested !== "codex" && requested !== "cursor" && requested !== "vscode" && requested !== "copilot" && requested !== "kiro") {
+    throw new Error(`Unknown capture harness: ${requested}`);
+  }
+  const remaining = args.filter((_, position) => position !== index && position !== index + 1);
+  if (remaining.some((value) => value.startsWith("--"))) throw new Error("Usage: agent-lcm capture --harness <harness> [event]");
+  return { harness: requested, nativeEvent: remaining[0] };
 }
 
 function postCompactRecoveryOutput(args: {

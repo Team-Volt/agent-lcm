@@ -63,7 +63,7 @@ test("doctor reports actionable recommendations for an unwired empty install", (
     configured: false,
     state: "not_configured",
     detail: "Not configured.",
-    setup_gap: "Cursor adapter files and setup are not available yet.",
+    setup_gap: "Run `agent-lcm setup cursor`, then restart Cursor.",
   });
   assert.equal(report.adapter_status.codex.configured, false);
   assert.equal(report.recommendations.some((text: string) => text.includes("Install the Agent LCM plugin")), true);

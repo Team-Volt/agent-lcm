@@ -18,13 +18,15 @@ const OWNERSHIP_FILE = "daemon.lock.sqlite";
 const START_TIMEOUT_MS = 5_000;
 const START_POLL_MS = 25;
 
+type DaemonStorage = { writer?: LcmStorage };
+
 export async function startDaemon(config: LcmConfig): Promise<void> {
   const token = readOrCreateToken(config);
   if (await daemonIsRunning(config, token)) return;
   const ownership = await acquireOwnership(config, token);
   if (!ownership) return;
   const server = net.createServer();
-  let storage: LcmStorage | undefined;
+  const storage: DaemonStorage = {};
   let ownsEndpoint = false;
   let orderly = false;
   try {
@@ -32,15 +34,14 @@ export async function startDaemon(config: LcmConfig): Promise<void> {
     if (!ownsEndpoint) return;
     writePrivate(path.join(config.runtimeDir, PID_FILE), `${JSON.stringify({ pid: process.pid })}\n`);
     writePrivate(path.join(config.runtimeDir, VERSION_FILE), `${daemonVersion()}\n`);
-    storage = createStorage({ config });
     drainStorageInbox(config, storage);
     await serve(config, server, storage, token, () => { orderly = true; });
   } finally {
     try {
-      if (orderly && storage) drainStorageInbox(config, storage);
+      if (orderly) drainStorageInbox(config, storage);
     } finally {
       try {
-        storage?.close();
+        storage.writer?.close();
       } finally {
         try {
           if (server.listening) await closeServer(server);
@@ -63,7 +64,7 @@ export async function startDaemon(config: LcmConfig): Promise<void> {
 async function serve(
   config: LcmConfig,
   server: net.Server,
-  storage: LcmStorage,
+  storage: DaemonStorage,
   token: string,
   markOrderly: () => void,
 ): Promise<void> {
@@ -162,7 +163,7 @@ async function serve(
   }
 }
 
-async function dispatchRequest(config: LcmConfig, storage: LcmStorage, request: DaemonRequest): Promise<unknown> {
+async function dispatchRequest(config: LcmConfig, storage: DaemonStorage, request: DaemonRequest): Promise<unknown> {
   switch (request.method) {
     case "health":
       return {
@@ -175,9 +176,9 @@ async function dispatchRequest(config: LcmConfig, storage: LcmStorage, request: 
     case "drain":
       return drainStorageInbox(config, storage);
     case "tool":
-      return callTool(storage, request.params);
+      return withReadableStorage(config, storage, (reader) => callTool(reader, request.params));
     case "cli":
-      return callCli(storage, request.params);
+      return callCli(config, storage, request.params);
     case "shutdown":
       return { stopping: true };
     case "replace":
@@ -185,7 +186,12 @@ async function dispatchRequest(config: LcmConfig, storage: LcmStorage, request: 
   }
 }
 
-async function callCli(storage: LcmStorage, params: Record<string, unknown>): Promise<unknown> {
+async function callCli(config: LcmConfig, daemonStorage: DaemonStorage, params: Record<string, unknown>): Promise<unknown> {
+  const write = params.command === "import-codex-sessions" || (params.command === "cleanup" && params.apply === true);
+  return withStorage(config, daemonStorage, write, (storage) => callCliWithStorage(storage, params));
+}
+
+function callCliWithStorage(storage: LcmStorage, params: Record<string, unknown>): unknown {
   switch (params.command) {
     case "health": return storage.health();
     case "stats": return storage.stats();
@@ -238,12 +244,42 @@ function booleanParam(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function drainStorageInbox(config: LcmConfig, storage: LcmStorage) {
+function drainStorageInbox(config: LcmConfig, storage: DaemonStorage) {
+  if (!hasInboxItems(config)) return { ingested: 0, duplicates: 0, quarantined: 0 };
+  const writer = writableStorage(config, storage);
   return drainInbox(config, (event) => {
-    if (storage.hasEvent(event.event_id)) return "duplicate";
-    storage.ingest(event);
+    if (writer.hasEvent(event.event_id)) return "duplicate";
+    writer.ingest(event);
     return "ingested";
   });
+}
+
+function withReadableStorage<T>(config: LcmConfig, storage: DaemonStorage, operation: (value: LcmStorage) => T): T {
+  return withStorage(config, storage, false, operation);
+}
+
+function withStorage<T>(
+  config: LcmConfig,
+  storage: DaemonStorage,
+  write: boolean,
+  operation: (value: LcmStorage) => T,
+): T {
+  if (write) return operation(writableStorage(config, storage));
+  if (storage.writer) return operation(storage.writer);
+  const reader = createStorage({ config, readOnly: true });
+  try {
+    return operation(reader);
+  } finally {
+    reader.close();
+  }
+}
+
+function writableStorage(config: LcmConfig, storage: DaemonStorage): LcmStorage {
+  return storage.writer ??= createStorage({ config });
+}
+
+function hasInboxItems(config: LcmConfig): boolean {
+  return countFiles(config.inboxDir, (name) => name.endsWith(".json")) > 0;
 }
 
 function parseRequest(line: string): DaemonRequest {

@@ -34,6 +34,32 @@ test("hook command publishes a synthetic projectless prompt without opening stor
   assert.equal(fs.existsSync(path.join(home, "index.sqlite")), false);
 });
 
+test("capture publishes a mapped harness event before starting the shared daemon", () => {
+  const home = tempHome("agent-lcm-capture-");
+  const env = { AGENT_LCM_HOME: home };
+  try {
+    const result = runCli(["capture", "--harness", "cursor", "UserPromptSubmit"], {
+      input: JSON.stringify({ session_id: "cursor-capture", cwd: "/tmp/cursor-capture", prompt: "capture through queue" }),
+      env,
+      timeout: 15_000,
+    });
+    assertCliOk(result);
+    const [event] = readJsonl(path.join(home, "events.jsonl")) as Array<{
+      harness: string;
+      native_event: string;
+      hook_event: string;
+      session_id: string;
+    }>;
+    assert.equal(event.harness, "cursor");
+    assert.equal(event.native_event, "UserPromptSubmit");
+    assert.equal(event.hook_event, "UserPromptSubmit");
+    assert.equal(event.session_id, "cursor:cursor-capture");
+  } finally {
+    const stopped = runCli(["daemon", "stop"], { env, timeout: 15_000 });
+    assertCliOk(stopped);
+  }
+});
+
 test("hook command reports inbox fsync failure and publishes on retry", () => {
   // Given: the real hook CLI loads a fault injector that fails inbox fsync.
   const home = tempHome();

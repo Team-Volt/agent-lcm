@@ -386,6 +386,17 @@ test("daemon tool requests use the daemon storage", async (t) => {
   assert.equal(readJsonl(config.rawLogPath).length, 1);
 });
 
+test("read requests do not create or rebuild the derived store before capture", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+
+  await daemonRequest(config, "cli", { command: "stats" });
+
+  assert.equal(fs.existsSync(config.indexPath), false);
+  assert.equal(fs.existsSync(config.rawLogPath), false);
+});
+
 async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!(await predicate())) {

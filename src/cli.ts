@@ -1,12 +1,16 @@
+import path from "node:path";
+
 import { loadConfig, pluginRoot } from "./config.ts";
 import { runLongContextBenchmark, runRetrievalQualityBenchmark } from "./benchmark.ts";
 import type { ImportCodexSessionsReport } from "./codex-import.ts";
 import { buildDoctorReport } from "./doctor.ts";
 import { daemonRequest, daemonStatus, ensureDaemon, stopDaemon } from "./daemon-client.ts";
 import { startDaemon } from "./daemon.ts";
-import { runHook } from "./hook.ts";
+import { runCapture, runHook } from "./hook.ts";
+import type { CaptureHarness } from "./harnesses.ts";
 import { readStatus } from "./installer.ts";
 import { startMcpServer } from "./mcp.ts";
+import { setupHarness, setupStatus } from "./setup.ts";
 
 type DaemonCliParams =
   | { command: "health" | "stats" }
@@ -59,6 +63,22 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (command === "hook") {
     await runHook(rest);
+    return;
+  }
+  if (command === "capture") {
+    await runCapture(rest);
+    return;
+  }
+  if (command === "setup") {
+    if (rest[0] === "status") {
+      printObjectOrText(setupStatus());
+      return;
+    }
+    const harness = captureHarness(rest[0]);
+    printObjectOrText(setupHarness(harness, {
+      home: optionValue(rest, "--home"),
+      command: path.resolve(process.argv[1] ?? path.join(pluginRoot(), "bin", "agent-lcm")),
+    }));
     return;
   }
   if (command === "daemon") {
@@ -199,6 +219,9 @@ Commands:
   agent-lcm daemon run|start|status|stop
   agent-lcm mcp
   agent-lcm hook <event>
+  agent-lcm capture --harness codex|cursor|vscode|copilot|kiro|auto [event]
+  agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]
+  agent-lcm setup status
   agent-lcm status [--codex-home PATH] [--json]
   agent-lcm doctor [--codex-home PATH] [--json]  Diagnose install, storage, and capture state
   agent-lcm health [--json]
@@ -211,6 +234,11 @@ Commands:
   agent-lcm benchmark retrieval-quality [--home PATH] [--json]
   agent-lcm import-codex-sessions [--from PATH] [--dry-run] [--progress] [--batch-size N] [--json]
 `);
+}
+
+function captureHarness(value: string | undefined): CaptureHarness {
+  if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro") return value;
+  throw new Error("Usage: agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]");
 }
 
 function optionValue(args: string[], flag: string): string | undefined {

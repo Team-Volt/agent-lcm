@@ -1,5 +1,6 @@
 import type { Health } from "./storage.ts";
 import type { DaemonStatus } from "./daemon-client.ts";
+import { setupStatus } from "./setup.ts";
 
 export type DoctorCheck = {
   id: string;
@@ -108,6 +109,7 @@ function adapterStatus(status: Record<string, unknown>): Record<string, AdapterS
   const codexConfigured = booleanValue(status.plugin_configured)
     && booleanValue(status.mcp_configured)
     && booleanValue(status.hooks_configured);
+  const setups = setupStatus();
   return {
     codex: {
       configured: codexConfigured,
@@ -115,15 +117,22 @@ function adapterStatus(status: Record<string, unknown>): Record<string, AdapterS
       detail: codexConfigured ? "Codex MCP and hooks are configured." : "Codex MCP or hooks are not configured.",
       ...(codexConfigured ? {} : { setup_gap: "Install the Agent LCM plugin and restart Codex." }),
     },
-    cursor: missingAdapter("Cursor adapter files and setup are not available yet."),
-    vscode: missingAdapter("VS Code adapter files and setup are not available yet."),
-    copilot: missingAdapter("GitHub Copilot adapter files and setup are not available yet."),
-    kiro: missingAdapter("Kiro adapter files and setup are not available yet."),
+    cursor: setupAdapter("cursor", setups.cursor.configured),
+    vscode: setupAdapter("vscode", setups.vscode.configured),
+    copilot: setupAdapter("copilot", setups.copilot.configured),
+    kiro: setupAdapter("kiro", setups.kiro.configured),
   };
 }
 
-function missingAdapter(setup_gap: string): AdapterStatus {
-  return { configured: false, state: "not_configured", detail: "Not configured.", setup_gap };
+function setupAdapter(harness: string, configured: boolean): AdapterStatus {
+  return configured
+    ? { configured: true, state: "configured", detail: `${harness} capture hooks are configured.` }
+    : {
+      configured: false,
+      state: "not_configured",
+      detail: "Not configured.",
+      setup_gap: `Run \`agent-lcm setup ${harness}\`, then restart ${harness === "vscode" ? "VS Code" : harness === "copilot" ? "Copilot" : harness[0].toUpperCase() + harness.slice(1)}.`,
+    };
 }
 
 function summaryIndexCheck(health: Health): DoctorCheck {

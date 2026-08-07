@@ -1,12 +1,8 @@
 {
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook SessionStart", "statusMessage": "agent-lcm: recording session start" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook UserPromptSubmit" }] }],
-    "PreToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook PreToolUse" }] }],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook PostToolUse" }] }],
-    "PreCompact": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook PreCompact" }] }],
-    "PostCompact": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook PostCompact" }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook SubagentStop" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook Stop" }] }]
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness codex SessionStart", "statusMessage": "agent-lcm: recording session start" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness codex UserPromptSubmit" }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness codex PostToolUse" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness codex Stop" }] }]
   }
 }

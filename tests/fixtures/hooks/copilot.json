@@ -1,0 +1,6 @@
+{
+  "hookEventName": "userPromptSubmitted",
+  "sessionId": "copilot-fixture",
+  "cwd": "/tmp/copilot-fixture",
+  "prompt": "copilot capture"
+}

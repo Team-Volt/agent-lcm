@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "sessionId": "kiro-fixture",
+  "cwd": "/tmp/kiro-fixture",
+  "prompt": "kiro capture"
+}
