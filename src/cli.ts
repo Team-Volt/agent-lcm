@@ -12,8 +12,7 @@ import { readStatus } from "./installer.ts";
 import { startMcpServer } from "./mcp.ts";
 import { packageVersion } from "./release.ts";
 import { setupHarness, setupStatus } from "./setup.ts";
-
-const SETUP_HARNESSES: CaptureHarness[] = ["codex", "cursor", "vscode", "copilot", "kiro"];
+import { detectedHarnesses } from "./setup-targets.ts";
 
 type DaemonCliParams =
   | { command: "health" | "stats" }
@@ -81,7 +80,7 @@ export async function main(argv: string[]): Promise<void> {
     const commandPath = path.resolve(process.argv[1] ?? path.join(pluginRoot(), "bin", "agent-lcm"));
     if (rest[0] === "all" || rest[0] === "--all") {
       if (optionValue(rest, "--home")) throw new Error("--home cannot be used with setup all.");
-      printObjectOrText(SETUP_HARNESSES.map((harness) => setupHarness(harness, { command: commandPath })));
+      printObjectOrText(detectedHarnesses().map((harness) => setupHarness(harness, { command: commandPath })));
       return;
     }
     const harness = captureHarness(rest[0]);

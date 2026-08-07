@@ -104,7 +104,7 @@ test("the Codex marketplace installs the repository-root plugin", () => {
   });
 });
 
-test("the packed CLI runs outside the checkout and sets up every harness", (t) => {
+test("the packed CLI runs outside the checkout and sets up detected harnesses", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-install-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const cache = path.join(root, "cache");
@@ -157,16 +157,14 @@ test("the packed CLI runs outside the checkout and sets up every harness", (t) =
   const imported = runInstalled(["import", "--harness", "codex", importRoot, "--dry-run", "--json"]);
   assert.equal(imported.status, 0, imported.stderr);
   assert.equal(JSON.parse(imported.stdout).events_imported, 0);
+  fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
   const setup = runInstalled(["setup", "all", "--json"]);
   assert.equal(setup.status, 0, setup.stderr);
-  assert.equal((JSON.parse(setup.stdout) as unknown[]).length, 5);
-  for (const relative of [
-    ".codex/hooks/agent-lcm.json",
-    ".cursor/hooks/agent-lcm.json",
-    ".copilot/hooks/agent-lcm.json",
-    ".kiro/hooks/agent-lcm.json",
-  ]) assert.equal(fs.existsSync(path.join(home, relative)), true, `missing ${relative}`);
-  const codexHooks = JSON.parse(fs.readFileSync(path.join(home, ".codex/hooks/agent-lcm.json"), "utf8"));
+  assert.equal((JSON.parse(setup.stdout) as unknown[]).length, 1);
+  assert.equal(fs.existsSync(path.join(home, ".cursor")), false);
+  assert.equal(fs.existsSync(path.join(home, ".copilot")), false);
+  assert.equal(fs.existsSync(path.join(home, ".kiro")), false);
+  const codexHooks = JSON.parse(fs.readFileSync(path.join(home, ".codex/hooks.json"), "utf8"));
   const capture = spawnSync(codexHooks.hooks.UserPromptSubmit[0].command, {
     cwd: root,
     encoding: "utf8",
@@ -176,16 +174,6 @@ test("the packed CLI runs outside the checkout and sets up every harness", (t) =
     timeout: 15_000,
   });
   assert.equal(capture.status, 0, capture.stderr);
-  const sharedHooks = JSON.parse(fs.readFileSync(path.join(home, ".copilot/hooks/agent-lcm.json"), "utf8"));
-  const vscodeCapture = spawnSync(sharedHooks.hooks.userPromptSubmitted[0].command, {
-    cwd: root,
-    encoding: "utf8",
-    env,
-    input: JSON.stringify({ session_id: "distribution-vscode-session", cwd: root, prompt: "capture from VS Code hook" }),
-    shell: true,
-    timeout: 15_000,
-  });
-  assert.equal(vscodeCapture.status, 0, vscodeCapture.stderr);
   const daemon = runInstalled(["daemon", "start", "--json"]);
   assert.equal(daemon.status, 0, daemon.stderr);
   assert.equal(JSON.parse(daemon.stdout).running, true);

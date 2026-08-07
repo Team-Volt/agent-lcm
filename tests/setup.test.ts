@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { setupHarness, setupStatus } from "../src/setup.ts";
-import { tempHome } from "./helpers.ts";
+import { assertCliOk, runCli, tempHome } from "./helpers.ts";
 
 test("Kiro setup uses the native array schema, is repeatable, and leaves sibling hooks unchanged", () => {
   const kiroHome = tempHome("agent-lcm-kiro-");
@@ -85,12 +85,14 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
   fs.mkdirSync(path.dirname(setupPath), { recursive: true });
   fs.writeFileSync(setupPath, JSON.stringify({
     version: 1,
+    owner: "user",
     hooks: {
       UserPromptSubmit: [
         { type: "command", command: "\"/old-location/bin/agent-lcm\" capture --harness vscode UserPromptSubmit" },
         { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
       ],
-      sessionStart: [{ type: "command", command: "other-hook" }],
+      sessionStart: [{ type: "command", command: "other-hook", timeout: 30 }],
+      customEvent: [{ type: "command", command: "custom-hook", custom: true }],
     },
   }));
 
@@ -100,23 +102,26 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
 
   assert.equal(first.changed, true);
   assert.equal(second.changed, false);
+  assert.equal(configuration.owner, "user");
   assert.deepEqual(configuration.hooks.UserPromptSubmit, [
     { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
   ]);
-  assert.equal(configuration.hooks.sessionStart[0].command, "other-hook");
+  assert.deepEqual(configuration.hooks.sessionStart[0], { type: "command", command: "other-hook", timeout: 30 });
   assert.equal(configuration.hooks.sessionStart[1].command, "node \"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
+  assert.deepEqual(configuration.hooks.customEvent, [{ type: "command", command: "custom-hook", custom: true }]);
 });
 
 test("Codex setup replaces its old Agent LCM commands and preserves unrelated hooks", () => {
   const clientHome = tempHome("agent-lcm-codex-legacy-");
-  const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");
+  const setupPath = path.join(clientHome, "hooks.json");
   fs.mkdirSync(path.dirname(setupPath), { recursive: true });
-  fs.writeFileSync(setupPath, JSON.stringify({ hooks: {
+  const original = JSON.stringify({ owner: "user", hooks: {
     SessionStart: [
       { type: "command", command: "\"/old/bin/agent-lcm\" capture --harness codex SessionStart" },
       { type: "command", command: "other-hook" },
     ],
-  } }));
+  } });
+  fs.writeFileSync(setupPath, original);
 
   const first = setupHarness("codex", { home: clientHome, command: "/new/bin/agent-lcm" });
   const second = setupHarness("codex", { home: clientHome, command: "/new/bin/agent-lcm" });
@@ -124,25 +129,84 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
 
   assert.equal(first.changed, true);
   assert.equal(second.changed, false);
+  assert.equal(configuration.owner, "user");
   assert.deepEqual(configuration.hooks.SessionStart, [
     { type: "command", command: "other-hook" },
     { type: "command", command: "node \"/new/bin/agent-lcm\" capture --harness codex SessionStart" },
   ]);
+  const backups = fs.readdirSync(clientHome).filter((name) => name.startsWith("hooks-pre-agent-lcm-"));
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(clientHome, backups[0] ?? ""), "utf8"), original);
+});
+
+test("Cursor setup writes the user hooks file in Cursor's native schema", () => {
+  const clientHome = tempHome("agent-lcm-cursor-");
+  const hooksPath = path.join(clientHome, "hooks.json");
+  fs.writeFileSync(hooksPath, JSON.stringify({ version: 1, owner: "user", hooks: {
+    stop: [{ command: "other-hook", timeout: 30 }],
+  } }));
+  const report = setupHarness("cursor", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+
+  assert.equal(report.path, path.join(clientHome, "hooks.json"));
+  assert.deepEqual(JSON.parse(fs.readFileSync(report.path, "utf8")), {
+    version: 1,
+    owner: "user",
+    hooks: {
+      sessionStart: [{ command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor SessionStart' }],
+      beforeSubmitPrompt: [{ command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor UserPromptSubmit' }],
+      postToolUse: [{ command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor PostToolUse' }],
+      stop: [
+        { command: "other-hook", timeout: 30 },
+        { command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor Stop' },
+      ],
+    },
+  });
+});
+
+test("setup all configures only harnesses already installed for the user", () => {
+  const userHome = tempHome("agent-lcm-detected-");
+  fs.mkdirSync(path.join(userHome, ".codex"));
+
+  const result = runCli(["setup", "all", "--json"], { env: { HOME: userHome, USERPROFILE: userHome } });
+  assertCliOk(result);
+  assert.deepEqual(JSON.parse(result.stdout), [{
+    harness: "codex",
+    path: path.join(userHome, ".codex", "hooks.json"),
+    changed: true,
+  }]);
+  assert.equal(fs.existsSync(path.join(userHome, ".cursor")), false);
+  assert.equal(fs.existsSync(path.join(userHome, ".copilot")), false);
+  assert.equal(fs.existsSync(path.join(userHome, ".kiro")), false);
 });
 
 test("Kiro setup updates its owned hooks after a binary move", () => {
   const clientHome = tempHome("agent-lcm-kiro-legacy-");
   const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");
   fs.mkdirSync(path.dirname(setupPath), { recursive: true });
-  fs.writeFileSync(setupPath, JSON.stringify({ version: "v1", hooks: [{
-    name: "agent-lcm-kiro-SessionStart",
-    trigger: "SessionStart",
-    action: { type: "command", command: "\"/old/bin/agent-lcm\" capture --harness kiro SessionStart" },
-  }] }));
+  fs.writeFileSync(setupPath, JSON.stringify({ version: "v1", owner: "user", hooks: [
+    {
+      name: "agent-lcm-kiro-SessionStart",
+      trigger: "SessionStart",
+      action: { type: "command", command: "\"/old/bin/agent-lcm\" capture --harness kiro SessionStart" },
+    },
+    {
+      name: "other-hook",
+      trigger: "Stop",
+      action: { type: "command", command: "other-command", timeout: 30 },
+      custom: true,
+    },
+  ] }));
 
   setupHarness("kiro", { home: clientHome, command: "/new/bin/agent-lcm" });
   const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
+  assert.equal(configuration.owner, "user");
   assert.equal(configuration.hooks[0].action.command, "node \"/new/bin/agent-lcm\" capture --harness kiro SessionStart");
+  assert.deepEqual(configuration.hooks[1], {
+    name: "other-hook",
+    trigger: "Stop",
+    action: { type: "command", command: "other-command", timeout: 30 },
+    custom: true,
+  });
 });
 
 test("setup rejects shell-sensitive binary paths before writing a hook file", () => {
