@@ -176,6 +176,16 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
     timeout: 15_000,
   });
   assert.equal(capture.status, 0, capture.stderr);
+  const postCompact = spawnSync(codexHooks.hooks.PostCompact[0].hooks[0].command, {
+    cwd: root,
+    encoding: "utf8",
+    env,
+    input: JSON.stringify({ session_id: "distribution-session", cwd: root, hook_event_name: "PostCompact" }),
+    shell: true,
+    timeout: 15_000,
+  });
+  assert.equal(postCompact.status, 0, postCompact.stderr);
+  assert.equal(fs.readdirSync(path.join(env.AGENT_LCM_HOME, "post-compact-recovery")).length, 1);
   const daemon = runInstalled(["daemon", "start", "--json"]);
   assert.equal(daemon.status, 0, daemon.stderr);
   assert.equal(JSON.parse(daemon.stdout).running, true);

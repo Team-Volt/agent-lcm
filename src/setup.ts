@@ -49,8 +49,10 @@ function mergeCodexConfiguration(
   if (!isRecord(configuration.hooks)) throw invalidConfiguration(target);
   if (!Object.values(configuration.hooks).every(isCodexSelectors)) throw invalidConfiguration(target);
 
-  for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]) {
-    const expectedCommand = captureCommand(command, "codex", event);
+  for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse", "PostCompact", "Stop"]) {
+    const expectedCommand = event === "PostCompact"
+      ? `node "${command}" hook PostCompact`
+      : captureCommand(command, "codex", event);
     const selectors = configuration.hooks[event];
     if (selectors === undefined) {
       configuration.hooks[event] = [{ hooks: [{ type: "command", command: expectedCommand }] }];
@@ -61,7 +63,7 @@ function mergeCodexConfiguration(
     for (const selector of selectors) {
       if (!Array.isArray(selector.hooks) || !selector.hooks.every(isRecord)) throw invalidConfiguration(target);
       for (const hook of selector.hooks) {
-        if (!isAgentLcmHook(hook, event, "codex")) continue;
+        if (!(event === "PostCompact" ? isAgentLcmPostCompactHook(hook) : isAgentLcmHook(hook, event, "codex"))) continue;
         hook.type = "command";
         hook.command = expectedCommand;
         found = true;
@@ -202,11 +204,13 @@ function configured(harness: CaptureHarness, target: string): boolean {
   if (harness !== "codex" && configuration.version !== 1) return false;
   const hooksByEvent = configuration.hooks;
   if (!isRecord(hooksByEvent)) return false;
-  if (harness === "codex") return eventsFor(harness).every((event) => {
+  if (harness === "codex") return ["SessionStart", "UserPromptSubmit", "PostToolUse", "PostCompact", "Stop"].every((event) => {
     const selectors = hooksByEvent[event];
     return Array.isArray(selectors) && selectors.some((selector) => isRecord(selector)
       && Array.isArray(selector.hooks)
-      && selector.hooks.some((hook) => isExpectedCommandHook(hook, harness, event)));
+      && selector.hooks.some((hook) => event === "PostCompact"
+        ? isAgentLcmPostCompactHook(hook)
+        : isExpectedCommandHook(hook, harness, event)));
   });
   if (isSharedHookHarness(harness) && hasSharedPascalRegistration(hooksByEvent)) return false;
   return setupEvents(harness).every(([event, captureEvent]) => {
@@ -244,6 +248,13 @@ function isAgentLcmHook(value: Record<string, unknown>, event: string, harness: 
   return isSharedHookHarness(harness)
     ? match[1] === "auto" || match[1] === "copilot" || match[1] === "vscode"
     : match[1] === harness;
+}
+
+function isAgentLcmPostCompactHook(value: unknown): boolean {
+  if (!isRecord(value) || (value.type !== undefined && value.type !== "command") || typeof value.command !== "string") {
+    return false;
+  }
+  return /^(?:node )?"(?:[^"\\/]*[\\/])*agent-lcm(?:\.(?:cmd|exe))?" hook PostCompact$/u.test(value.command);
 }
 
 function hasSharedPascalRegistration(hooksByEvent: Record<string, unknown>): boolean {
