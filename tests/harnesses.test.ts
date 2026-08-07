@@ -25,9 +25,9 @@ test("auto capture separates VS Code and Copilot payloads", () => {
   assert.equal(copilot.harness, "copilot");
 });
 
-test("auto capture accepts the Copilot hook spelling used by VS Code plugins", () => {
-  const event = mapHarnessEvent("auto", "userPromptSubmitted", {
-    conversationId: "vscode-copilot-format",
+test("auto capture uses the documented VS Code payload spelling", () => {
+  const event = mapHarnessEvent("auto", "UserPromptSubmit", {
+    session_id: "vscode-plugin-format",
     cwd: "/tmp/vscode-copilot-format",
   });
   assert.equal(event.harness, "vscode");
@@ -36,9 +36,32 @@ test("auto capture accepts the Copilot hook spelling used by VS Code plugins", (
 
 test("auto capture rejects input without an unambiguous client marker", () => {
   assert.throws(
-    () => mapHarnessEvent("auto", "UserPromptSubmit", { session_id: "ambiguous", cwd: "/tmp/ambiguous" }),
+    () => mapHarnessEvent("auto", "UserPromptSubmit", { conversationId: "ambiguous", cwd: "/tmp/ambiguous" }),
     /Unable to determine harness/u,
   );
+});
+
+test("auto capture rejects mixed harness markers and event casing", () => {
+  assert.throws(
+    () => mapHarnessEvent("auto", "UserPromptSubmit", { session_id: "vscode", sessionId: "copilot" }),
+    /Unable to determine harness/u,
+  );
+  assert.throws(
+    () => mapHarnessEvent("auto", "userPromptSubmitted", { session_id: "vscode" }),
+    /Unable to determine harness/u,
+  );
+  assert.throws(
+    () => mapHarnessEvent("auto", "UserPromptSubmit", { sessionId: "copilot" }),
+    /Unable to determine harness/u,
+  );
+});
+
+test("capture replaces a pre-existing harness namespace instead of nesting it", () => {
+  const event = mapHarnessEvent("vscode", "UserPromptSubmit", {
+    session_id: "copilot:shared-session",
+    cwd: "/tmp/namespaced",
+  });
+  assert.equal(event.session_id, "vscode:shared-session");
 });
 
 test("Kiro accepts the former lower-camel event aliases without changing its native event", () => {

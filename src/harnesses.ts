@@ -53,7 +53,7 @@ export function mapHarnessEvent(
     repo: options.repo,
     limits: options.limits,
   });
-  const nativeId = sessionIdFrom(payload) ?? stripHarnessPrefix(normalized.session_id);
+  const nativeId = stripHarnessPrefix(sessionIdFrom(payload) ?? normalized.session_id);
   const sessionId = harnessSessionId(harness, nativeId);
   return {
     ...normalized,
@@ -75,8 +75,11 @@ function mappedEvent(harness: CaptureHarness, nativeEvent: string | undefined): 
 }
 
 function detectHarness(payload: Record<string, unknown> | undefined, nativeEvent: string | undefined): CaptureHarness {
-  if (payload && typeof payload.conversationId === "string" && (startsUppercase(nativeEvent) || startsLowercase(nativeEvent))) return "vscode";
-  if (payload && typeof payload.sessionId === "string" && startsLowercase(nativeEvent)) return "copilot";
+  if (!payload) throw new Error("Unable to determine harness from capture input; pass --harness explicitly.");
+  const hasSnakeCaseSession = typeof payload.session_id === "string" && payload.session_id.trim().length > 0;
+  const hasCamelCaseSession = typeof payload.sessionId === "string" && payload.sessionId.trim().length > 0;
+  if (hasSnakeCaseSession && !hasCamelCaseSession && startsUppercase(nativeEvent)) return "vscode";
+  if (hasCamelCaseSession && !hasSnakeCaseSession && startsLowercase(nativeEvent)) return "copilot";
   throw new Error("Unable to determine harness from capture input; pass --harness explicitly.");
 }
 

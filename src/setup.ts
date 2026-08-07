@@ -6,6 +6,7 @@ import type { CaptureHarness } from "./harnesses.ts";
 
 export type SetupOptions = { home?: string; command: string };
 export type SetupReport = { harness: CaptureHarness; path: string; changed: boolean };
+export type SetupStatusOptions = { home?: string };
 
 export type HarnessSetupStatus = { configured: boolean; path: string };
 
@@ -14,7 +15,7 @@ const HARNESSES: CaptureHarness[] = ["codex", "cursor", "vscode", "copilot", "ki
 export function setupHarness(harness: CaptureHarness, options: SetupOptions): SetupReport {
   const target = setupPath(harness, options.home);
   const command = options.command.trim();
-  if (!command) throw new Error("setup command must not be empty");
+  assertSafeCommand(command);
   const existing = readConfiguration(target);
   const next = mergeConfiguration(existing, harness, command, target);
   if (existing && JSON.stringify(existing) === JSON.stringify(next)) return { harness, path: target, changed: false };
@@ -22,23 +23,20 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
   return { harness, path: target, changed: true };
 }
 
-export function setupStatus(): Record<CaptureHarness, HarnessSetupStatus> {
+export function setupStatus(options: SetupStatusOptions = {}): Record<CaptureHarness, HarnessSetupStatus> {
   return Object.fromEntries(HARNESSES.map((harness) => {
-    const target = setupPath(harness);
-    return [harness, { configured: configured(target), path: target }];
+    const target = setupPath(harness, options.home);
+    return [harness, { configured: configured(harness, target), path: target }];
   })) as Record<CaptureHarness, HarnessSetupStatus>;
 }
 
 function setupPath(harness: CaptureHarness, home?: string): string {
-  if (home) {
-    const root = path.resolve(home);
-    return harness === "vscode" ? path.join(root, "agent-lcm-hooks.json") : path.join(root, "hooks", "agent-lcm.json");
-  }
+  if (home) return path.join(path.resolve(home), "hooks", "agent-lcm.json");
   const userHome = os.homedir();
   switch (harness) {
     case "codex": return path.join(userHome, ".codex", "hooks", "agent-lcm.json");
     case "cursor": return path.join(userHome, ".cursor", "hooks", "agent-lcm.json");
-    case "vscode": return path.join(userHome, ".config", "Code", "User", "agent-lcm-hooks.json");
+    case "vscode":
     case "copilot": return path.join(userHome, ".copilot", "hooks", "agent-lcm.json");
     case "kiro": return path.join(userHome, ".kiro", "hooks", "agent-lcm.json");
   }
@@ -56,9 +54,9 @@ function readConfiguration(target: string): Record<string, unknown> | undefined 
   try {
     value = JSON.parse(text);
   } catch {
-    throw new Error(`Cannot update invalid setup configuration: ${target}`);
+    throw invalidConfiguration(target);
   }
-  if (!isRecord(value) || !isRecord(value.hooks)) throw new Error(`Cannot update invalid setup configuration: ${target}`);
+  if (!isRecord(value)) throw invalidConfiguration(target);
   return value;
 }
 
@@ -68,18 +66,48 @@ function mergeConfiguration(
   command: string,
   target: string,
 ): Record<string, unknown> {
-  const configuration = existing ? structuredClone(existing) : { ...(harness === "kiro" ? { version: "v1" } : {}), hooks: {} };
-  if (!isRecord(configuration.hooks)) throw new Error(`Cannot update invalid setup configuration: ${target}`);
+  return harness === "kiro"
+    ? mergeKiroConfiguration(existing, command, target)
+    : mergeHookConfiguration(existing, harness, command, target);
+}
+
+function mergeHookConfiguration(
+  existing: Record<string, unknown> | undefined,
+  harness: Exclude<CaptureHarness, "kiro">,
+  command: string,
+  target: string,
+): Record<string, unknown> {
+  const requiresVersion = harness === "copilot" || harness === "vscode";
+  const configuration = existing ? structuredClone(existing) : { ...(requiresVersion ? { version: 1 } : {}), hooks: {} };
+  if ((requiresVersion && configuration.version !== 1) || !isRecord(configuration.hooks)) throw invalidConfiguration(target);
+
   for (const event of eventsFor(harness)) {
     const hooks = configuration.hooks[event];
+    const expectedCommand = captureCommand(command, harness, event);
     if (hooks === undefined) {
-      configuration.hooks[event] = [{ command: captureCommand(command, harness, event) }];
+      configuration.hooks[event] = [{ type: "command", command: expectedCommand }];
       continue;
     }
-    if (!Array.isArray(hooks) || !hooks.every(isRecord)) throw new Error(`Cannot update invalid setup configuration: ${target}`);
-    if (!hooks.some((entry) => entry.command === captureCommand(command, harness, event))) {
-      hooks.push({ command: captureCommand(command, harness, event) });
+    if (!Array.isArray(hooks) || !hooks.every(isRecord)) throw invalidConfiguration(target);
+    if (!hooks.some((entry) => entry.type === "command" && entry.command === expectedCommand)) {
+      hooks.push({ type: "command", command: expectedCommand });
     }
+  }
+  return configuration;
+}
+
+function mergeKiroConfiguration(existing: Record<string, unknown> | undefined, command: string, target: string): Record<string, unknown> {
+  const configuration: Record<string, unknown> = existing ? structuredClone(existing) : { version: "v1", hooks: [] };
+  const hooks = configuration.hooks;
+  if (configuration.version !== "v1" || !Array.isArray(hooks) || !hooks.every(isKiroHook)) {
+    throw invalidConfiguration(target);
+  }
+  const kiroHooks = hooks as KiroHook[];
+  for (const event of eventsFor("kiro")) {
+    const expected = kiroHook(command, event);
+    const index = kiroHooks.findIndex((hook) => hook.name === expected.name);
+    if (index < 0) kiroHooks.push(expected);
+    else if (JSON.stringify(kiroHooks[index]) !== JSON.stringify(expected)) throw invalidConfiguration(target);
   }
   return configuration;
 }
@@ -90,8 +118,26 @@ function eventsFor(harness: CaptureHarness): string[] {
     : ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
 }
 
+function kiroHook(command: string, event: string): KiroHook {
+  return {
+    name: `agent-lcm-kiro-${event}`,
+    trigger: event,
+    action: { type: "command", command: captureCommand(command, "kiro", event) },
+  };
+}
+
 function captureCommand(command: string, harness: CaptureHarness, event: string): string {
-  return `\"${command}\" capture --harness ${harness} ${event}`;
+  return `"${command}" capture --harness ${harness} ${event}`;
+}
+
+function assertSafeCommand(command: string): void {
+  if (!command) throw new Error("setup command must not be empty");
+  if (!path.isAbsolute(command) && !/^[A-Za-z]:[\\/]/u.test(command)) {
+    throw new Error("setup command must be an absolute binary path");
+  }
+  if (/["'`$;&|<>\n\r%^]/u.test(command) || command.endsWith("\\")) {
+    throw new Error("setup command contains unsafe shell characters");
+  }
 }
 
 function writeConfiguration(target: string, configuration: Record<string, unknown>): void {
@@ -104,13 +150,72 @@ function writeConfiguration(target: string, configuration: Record<string, unknow
   fs.chmodSync(target, 0o600);
 }
 
-function configured(target: string): boolean {
-  try {
-    return /(?:^|[^A-Za-z])agent-lcm(?:[^A-Za-z]|$)/u.test(fs.readFileSync(target, "utf8"));
-  } catch (error) {
-    if (hasCode(error, "ENOENT")) return false;
-    throw error;
+function configured(harness: CaptureHarness, target: string): boolean {
+  const configuration = readConfigurationForStatus(target);
+  if (!configuration) return false;
+  if (harness === "kiro") {
+    const hooks = configuration.hooks;
+    if (configuration.version !== "v1" || !Array.isArray(hooks) || !hooks.every(isKiroHook)) return false;
+    const kiroHooks = hooks as KiroHook[];
+    return eventsFor(harness).every((event) => kiroHooks.some((hook) => isExpectedKiroHook(hook, event)));
   }
+  const requiresVersion = harness === "copilot" || harness === "vscode";
+  if (requiresVersion && configuration.version !== 1) return false;
+  const hooksByEvent = configuration.hooks;
+  if (!isRecord(hooksByEvent)) return false;
+  return eventsFor(harness).every((event) => {
+    const hooks = hooksByEvent[event];
+    return Array.isArray(hooks) && hooks.some((entry) => isExpectedCommandHook(entry, harness, event));
+  });
+}
+
+function readConfigurationForStatus(target: string): Record<string, unknown> | undefined {
+  try {
+    return readConfiguration(target);
+  } catch {
+    return undefined;
+  }
+}
+
+function isExpectedCommandHook(value: unknown, harness: CaptureHarness, event: string): boolean {
+  return isRecord(value) && value.type === "command" && isCaptureCommand(value.command, harness, event);
+}
+
+function isExpectedKiroHook(value: unknown, event: string): boolean {
+  return isKiroHook(value)
+    && value.name === `agent-lcm-kiro-${event}`
+    && value.trigger === event
+    && isCaptureCommand(value.action.command, "kiro", event);
+}
+
+type KiroHook = { name: string; trigger: string; action: { type: "command"; command: string } };
+
+function isKiroHook(value: unknown): value is KiroHook {
+  return isRecord(value)
+    && typeof value.name === "string"
+    && typeof value.trigger === "string"
+    && isRecord(value.action)
+    && value.action.type === "command"
+    && typeof value.action.command === "string";
+}
+
+function isCaptureCommand(value: unknown, harness: CaptureHarness, event: string): boolean {
+  if (typeof value !== "string") return false;
+  const suffix = ` capture --harness ${harness} ${event}`;
+  if (!value.startsWith("\"") || !value.endsWith(suffix)) return false;
+  const quoteEnd = value.length - suffix.length - 1;
+  if (value[quoteEnd] !== "\"") return false;
+  const command = value.slice(1, quoteEnd);
+  try {
+    assertSafeCommand(command);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function invalidConfiguration(target: string): Error {
+  return new Error(`Cannot update invalid setup configuration: ${target}`);
 }
 
 function hasCode(error: unknown, code: string): boolean {

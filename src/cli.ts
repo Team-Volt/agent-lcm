@@ -71,7 +71,7 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (command === "setup") {
     if (rest[0] === "status") {
-      printObjectOrText(setupStatus());
+      printObjectOrText(setupStatus({ home: optionValue(rest, "--home") }));
       return;
     }
     const harness = captureHarness(rest[0]);

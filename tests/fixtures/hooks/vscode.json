@@ -1,6 +1,6 @@
 {
   "hook_event_name": "UserPromptSubmit",
-  "conversationId": "vscode-fixture",
+  "session_id": "vscode-fixture",
   "cwd": "/tmp/vscode-fixture",
   "prompt": "vscode capture"
 }
