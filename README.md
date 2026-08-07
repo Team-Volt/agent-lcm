@@ -48,11 +48,20 @@ the component types each client currently loads.
 ## Requirements
 
 - Node.js 22.18 or newer
-- Access to the private `Team-Volt/agent-lcm` repository when installing the
-  native plugin from GitHub
+
+## Install the CLI
 
 ```sh
 npm install --global agent-lcm
+agent-lcm setup all
+```
+
+Making the GitHub repository public does not change the npm command. The npm
+registry and GitHub are separate release channels. Once the repository is
+public, you can install the same CLI from GitHub before the first npm release:
+
+```sh
+npm install --global github:Team-Volt/agent-lcm
 agent-lcm setup all
 ```
 
@@ -72,16 +81,14 @@ flow for each harness:
 | Codex | `codex plugin marketplace add Team-Volt/agent-lcm`, then `codex plugin add agent-lcm@agent-lcm` |
 | GitHub Copilot CLI | `copilot plugin install Team-Volt/agent-lcm` |
 | VS Code | Run `Chat: Install Plugin From Source` and enter `https://github.com/Team-Volt/agent-lcm`; VS Code also discovers the Copilot CLI install |
-| Cursor | Install Agent LCM from your organization's private Team Marketplace; admins add the repository in Cursor settings |
+| Cursor | Use `/add-plugin` after Agent LCM is listed in the Cursor Marketplace, or ask an admin to add the repository to your Team Marketplace |
 | Kiro IDE | Open Powers, choose the GitHub import option, and enter `https://github.com/Team-Volt/agent-lcm` |
 
 These flows follow the current [Codex plugin](https://help.openai.com/en/articles/20001256-plugins-in-codex/),
 [Copilot CLI plugin](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing),
 [VS Code agent plugin](https://code.visualstudio.com/docs/agent-customization/agent-plugins),
 [Cursor marketplace](https://cursor.com/blog/marketplace), and
-[Kiro Powers](https://kiro.dev/docs/powers/) documentation. Private repository
-access still depends on the GitHub account or organization policy used by the
-harness.
+[Kiro Powers](https://kiro.dev/docs/powers/) documentation.
 
 Compatible clients discover the same portable components:
 

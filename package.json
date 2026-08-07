@@ -29,6 +29,7 @@
     "benchmark:retrieval-quality": "node --no-warnings bin/agent-lcm benchmark retrieval-quality --json",
     "presmoke": "npm run build",
     "smoke": "node --no-warnings scripts/smoke-test.ts",
+    "prepare": "npm run build",
     "prepack": "npm run build"
   },
   "engines": {
