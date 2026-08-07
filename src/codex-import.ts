@@ -4,7 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 
 import { codexRecordToEvent, type ImportState, rolloutSessionIdFromFile } from "./codex-record.ts";
-import { type NormalizedEvent } from "./events.ts";
+import { harnessSessionId, type NormalizedEvent } from "./events.ts";
 export type CodexRecord = { file: string; line: number; event: NormalizedEvent };
 export type CodexReadReport = {
   files_scanned: number;
@@ -56,7 +56,7 @@ async function readCodexSessionFile(
         report.errors.push({ file, line: lineNumber, message: error instanceof Error ? error.message : String(error) });
         continue;
       }
-      if (!event || (rolloutSessionId && event.session_id !== rolloutSessionId)) {
+      if (!event || (rolloutSessionId && event.session_id !== harnessSessionId("codex", rolloutSessionId))) {
         report.records_skipped += 1;
         continue;
       }

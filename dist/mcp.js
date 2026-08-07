@@ -1,6 +1,8 @@
 import { DEFAULT_LIMITS } from "./config.js";
 import { loadConfig } from "./config.js";
 import { daemonRequest, ensureDaemon } from "./daemon-client.js";
+import { harnessSessionId } from "./events.js";
+import { hasPostCompactPending } from "./hook.js";
 import { TOOLS } from "./mcp-catalog.js";
 import { packageVersion } from "./release.js";
 const SERVER_NAME = "agent-lcm";
@@ -132,7 +134,7 @@ async function handleMessage(message, framing) {
         try {
             const config = loadConfig();
             await ensureDaemon(config);
-            sendResult(id, await daemonRequest(config, "tool", withClientContext(params)), framing);
+            sendResult(id, await daemonRequest(config, "tool", withClientContext(params, config.home)), framing);
         }
         catch (error) {
             sendError(id, -32602, error instanceof Error ? error.message : String(error), framing);
@@ -176,12 +178,16 @@ function isToolsCallParams(value) {
         return false;
     return !("arguments" in value && !isRecord(value.arguments));
 }
-function withClientContext(params) {
+function withClientContext(params, home) {
     const currentThreadId = process.env.CODEX_THREAD_ID?.trim();
     if (!currentThreadId || params.name !== "lcm_pack_context")
         return params;
     const argumentsValue = isRecord(params.arguments) ? params.arguments : {};
-    return { ...params, arguments: { ...argumentsValue, currentThreadId } };
+    const sessionId = harnessSessionId("codex", currentThreadId);
+    const recoveryScope = hasPostCompactPending(home, sessionId)
+        ? { sessionIds: [sessionId], harnesses: ["codex"] }
+        : {};
+    return { ...params, arguments: { ...argumentsValue, currentThreadId, ...recoveryScope } };
 }
 function isJsonRpcRequest(value) {
     if (!isRecord(value) || value.jsonrpc !== "2.0" || typeof value.method !== "string")

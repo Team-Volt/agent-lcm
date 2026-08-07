@@ -927,6 +927,50 @@ test("MCP pack context biases toward the active thread across cwd mismatches", (
   );
 });
 
+test("post-compaction MCP packing stays inside the originating harness and session", () => {
+  const home = tempHome();
+  const sessionId = "mcp-compact-current";
+  const env = { AGENT_LCM_HOME: home };
+  assert.equal(runCli(["hook", "UserPromptSubmit"], {
+    input: JSON.stringify({
+      session_id: sessionId,
+      cwd: "/tmp/compact-scope",
+      prompt: "compaction-scope-needle current Codex work",
+    }),
+    env,
+  }).status, 0);
+  assert.equal(runCli(["capture", "--harness", "vscode", "UserPromptSubmit"], {
+    input: JSON.stringify({
+      session_id: "mcp-compact-unrelated",
+      cwd: "/tmp/compact-scope",
+      prompt: "compaction-scope-needle unrelated VS Code work",
+    }),
+    env,
+  }).status, 0);
+  assert.equal(runCli(["hook", "PostCompact"], {
+    input: JSON.stringify({ session_id: sessionId, cwd: "/tmp/compact-scope", trigger: "auto" }),
+    env,
+  }).status, 0);
+
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "lcm_pack_context",
+        arguments: { query: "compaction-scope-needle", budgetTokens: 1_000 },
+      },
+    },
+  ], { ...env, CODEX_THREAD_ID: sessionId });
+
+  const packed = responses[1].result.structuredContent;
+  assert.deepEqual([...new Set(packed.sources.map((source: { session_id: string }) => source.session_id))], [`codex:${sessionId}`]);
+  assert.deepEqual([...new Set(packed.sources.map((source: { harness: string }) => source.harness))], ["codex"]);
+  assert.doesNotMatch(packed.markdown, /unrelated VS Code work/u);
+});
+
 test("MCP describe reports missing sessions instead of fabricating descriptions", () => {
   const home = tempHome();
   const responses = runMcp([

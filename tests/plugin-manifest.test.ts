@@ -22,6 +22,7 @@ test("client hook manifests invoke explicit or detected harness capture", () => 
   assert.equal(codex.hooks, "./hooks/codex.json");
   const codexHooks = JSON.stringify(readJson("hooks/codex.json"));
   assert.match(codexHooks, /capture --harness codex SessionStart/u);
+  assert.match(codexHooks, /hook PostCompact/u);
   assert.match(codexHooks, /capture --harness codex Stop/u);
 
   const cursor = readJson(".cursor-plugin/plugin.json");

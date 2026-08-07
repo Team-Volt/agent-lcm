@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-01T10:00:00.000Z","type":"session_meta","payload":{"id":"12345678-1234-4234-8234-123456789abc","cwd":"/tmp/codex-import"}}
+{"timestamp":"2026-08-01T10:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codex import request"}]}}

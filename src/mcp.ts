@@ -1,6 +1,8 @@
 import { DEFAULT_LIMITS } from "./config.ts";
 import { loadConfig } from "./config.ts";
 import { daemonRequest, ensureDaemon } from "./daemon-client.ts";
+import { harnessSessionId } from "./events.ts";
+import { hasPostCompactPending } from "./hook.ts";
 import { TOOLS } from "./mcp-catalog.ts";
 import { packageVersion } from "./release.ts";
 
@@ -147,7 +149,7 @@ async function handleMessage(message: JsonRpcRequest, framing: "line" | "header"
     try {
       const config = loadConfig();
       await ensureDaemon(config);
-      sendResult(id, await daemonRequest(config, "tool", withClientContext(params)), framing);
+      sendResult(id, await daemonRequest(config, "tool", withClientContext(params, config.home)), framing);
     } catch (error) {
       sendError(id, -32602, error instanceof Error ? error.message : String(error), framing);
     }
@@ -193,11 +195,15 @@ function isToolsCallParams(value: unknown): value is Record<string, unknown> & {
   return !("arguments" in value && !isRecord(value.arguments));
 }
 
-function withClientContext(params: Record<string, unknown>): Record<string, unknown> {
+function withClientContext(params: Record<string, unknown>, home: string): Record<string, unknown> {
   const currentThreadId = process.env.CODEX_THREAD_ID?.trim();
   if (!currentThreadId || params.name !== "lcm_pack_context") return params;
   const argumentsValue = isRecord(params.arguments) ? params.arguments : {};
-  return { ...params, arguments: { ...argumentsValue, currentThreadId } };
+  const sessionId = harnessSessionId("codex", currentThreadId);
+  const recoveryScope = hasPostCompactPending(home, sessionId)
+    ? { sessionIds: [sessionId], harnesses: ["codex"] }
+    : {};
+  return { ...params, arguments: { ...argumentsValue, currentThreadId, ...recoveryScope } };
 }
 
 function isJsonRpcRequest(value: unknown): value is JsonRpcRequest {

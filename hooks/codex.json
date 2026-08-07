@@ -3,6 +3,7 @@
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness codex SessionStart", "statusMessage": "agent-lcm: recording session start" }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness codex UserPromptSubmit" }] }],
     "PostToolUse": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness codex PostToolUse" }] }],
+    "PostCompact": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" hook PostCompact" }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/bin/agent-lcm\" capture --harness codex Stop" }] }]
   }
 }
