@@ -7,10 +7,12 @@ import test from "node:test";
 
 import { readJson } from "./helpers.ts";
 
+const npmExecutable = process.platform === "win32" ? "npm.cmd" : "npm";
+
 test("the npm package contains the complete plugin and no development files", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-pack-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const result = spawnSync("npm", ["pack", "--json", "--pack-destination", root], {
+  const result = spawnSync(npmExecutable, ["pack", "--json", "--pack-destination", root], {
     cwd: path.resolve("."),
     encoding: "utf8",
     env: { ...process.env, npm_config_cache: path.join(root, "cache") },
@@ -100,13 +102,13 @@ test("the packed CLI runs outside the checkout and sets up every harness", (t) =
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-install-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const cache = path.join(root, "cache");
-  const pack = spawnSync("npm", ["pack", "--json", "--pack-destination", root], {
+  const pack = spawnSync(npmExecutable, ["pack", "--json", "--pack-destination", root], {
     cwd: path.resolve("."), encoding: "utf8", env: { ...process.env, npm_config_cache: cache },
   });
   assert.equal(pack.status, 0, pack.stderr);
   const [{ filename }] = JSON.parse(pack.stdout) as [{ filename: string }];
   const prefix = path.join(root, "prefix");
-  const install = spawnSync("npm", ["install", "--global", "--prefix", prefix, "--ignore-scripts", "--no-audit", "--no-fund", path.join(root, filename)], {
+  const install = spawnSync(npmExecutable, ["install", "--global", "--prefix", prefix, "--ignore-scripts", "--no-audit", "--no-fund", path.join(root, filename)], {
     cwd: root, encoding: "utf8", env: { ...process.env, npm_config_cache: cache },
   });
   assert.equal(install.status, 0, install.stderr);
