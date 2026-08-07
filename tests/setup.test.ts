@@ -76,27 +76,32 @@ test("Copilot and VS Code converge on one lower-camel shared user hook configura
   assert.equal(setupStatus({ home: clientHome }).copilot.configured, false);
 });
 
-test("shared setup replaces older Agent LCM Pascal registrations without touching sibling hooks", () => {
+test("shared setup replaces older Agent LCM registrations after a binary move without touching sibling hooks", () => {
   const clientHome = tempHome("agent-lcm-copilot-legacy-");
   const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");
   fs.mkdirSync(path.dirname(setupPath), { recursive: true });
   fs.writeFileSync(setupPath, JSON.stringify({
     version: 1,
     hooks: {
-      UserPromptSubmit: [{ type: "command", command: "\"/opt/agent-lcm/bin/agent-lcm\" capture --harness vscode UserPromptSubmit" }],
+      UserPromptSubmit: [
+        { type: "command", command: "\"/old-location/bin/agent-lcm\" capture --harness vscode UserPromptSubmit" },
+        { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
+      ],
       sessionStart: [{ type: "command", command: "other-hook" }],
     },
   }));
 
-  const first = setupHarness("vscode", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
-  const second = setupHarness("copilot", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+  const first = setupHarness("vscode", { home: clientHome, command: "/new-location/bin/agent-lcm" });
+  const second = setupHarness("copilot", { home: clientHome, command: "/new-location/bin/agent-lcm" });
   const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
 
   assert.equal(first.changed, true);
   assert.equal(second.changed, false);
-  assert.equal(configuration.hooks.UserPromptSubmit, undefined);
+  assert.deepEqual(configuration.hooks.UserPromptSubmit, [
+    { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
+  ]);
   assert.equal(configuration.hooks.sessionStart[0].command, "other-hook");
-  assert.equal(configuration.hooks.sessionStart[1].command, "\"/opt/agent-lcm/bin/agent-lcm\" capture --harness auto sessionStart");
+  assert.equal(configuration.hooks.sessionStart[1].command, "\"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
 });
 
 test("setup rejects shell-sensitive binary paths before writing a hook file", () => {

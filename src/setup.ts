@@ -80,7 +80,7 @@ function mergeHookConfiguration(
   const requiresVersion = harness === "copilot" || harness === "vscode";
   const configuration = existing ? structuredClone(existing) : { ...(requiresVersion ? { version: 1 } : {}), hooks: {} };
   if ((requiresVersion && configuration.version !== 1) || !isRecord(configuration.hooks)) throw invalidConfiguration(target);
-  if (isSharedHookHarness(harness)) removeSharedAgentLcmHooks(configuration.hooks, command, target);
+  if (isSharedHookHarness(harness)) removeSharedAgentLcmHooks(configuration.hooks, target);
 
   for (const event of eventsFor(harness)) {
     const hooks = configuration.hooks[event];
@@ -127,10 +127,10 @@ function setupCaptureHarness(harness: CaptureHarness): CaptureHarness | "auto" {
   return isSharedHookHarness(harness) ? "auto" : harness;
 }
 
-function removeSharedAgentLcmHooks(hooksByEvent: Record<string, unknown>, command: string, target: string): void {
+function removeSharedAgentLcmHooks(hooksByEvent: Record<string, unknown>, target: string): void {
   for (const [event, hooks] of Object.entries(hooksByEvent)) {
     if (!Array.isArray(hooks) || !hooks.every(isRecord)) throw invalidConfiguration(target);
-    const kept = hooks.filter((hook) => !isSharedAgentLcmHook(hook, command, event));
+    const kept = hooks.filter((hook) => !isSharedAgentLcmHook(hook, event));
     if (kept.length === 0) delete hooksByEvent[event];
     else hooksByEvent[event] = kept;
   }
@@ -200,12 +200,11 @@ function isExpectedCommandHook(value: unknown, harness: CaptureHarness | "auto",
   return isRecord(value) && value.type === "command" && isCaptureCommand(value.command, harness, event);
 }
 
-function isSharedAgentLcmHook(value: Record<string, unknown>, command: string, event: string): boolean {
+function isSharedAgentLcmHook(value: Record<string, unknown>, event: string): boolean {
   if (value.type !== "command" || typeof value.command !== "string") return false;
-  const expectedPrefix = `"${command}" capture --harness `;
-  if (!value.command.startsWith(expectedPrefix)) return false;
-  return /^(?:auto|copilot|vscode) (?:sessionStart|userPromptSubmitted|postToolUse|sessionEnd|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
-    .test(value.command.slice(expectedPrefix.length));
+  const match = /^"(?:[^"\\/]*[\\/])*agent-lcm(?:\.exe)?" capture --harness (?:auto|copilot|vscode) (sessionStart|userPromptSubmitted|postToolUse|sessionEnd|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
+    .exec(value.command);
+  return match?.[1] === event;
 }
 
 function hasSharedPascalRegistration(hooksByEvent: Record<string, unknown>): boolean {
@@ -213,7 +212,7 @@ function hasSharedPascalRegistration(hooksByEvent: Record<string, unknown>): boo
     const hooks = hooksByEvent[event];
     return Array.isArray(hooks) && hooks.some((hook) => {
       if (!isRecord(hook) || hook.type !== "command" || typeof hook.command !== "string") return false;
-      return / capture --harness (?:auto|copilot|vscode) (?:SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u.test(hook.command);
+      return isSharedAgentLcmHook(hook, event);
     });
   });
 }
