@@ -106,13 +106,13 @@ function mergeKiroConfiguration(existing: Record<string, unknown> | undefined, c
   const kiroHooks = hooks as KiroHook[];
   for (const event of eventsFor("kiro")) {
     const expected = kiroHook(command, event);
-    const index = kiroHooks.findIndex((hook) => hook.name === expected.name
+    const owned = kiroHooks.filter((hook) => hook.name === expected.name
       && hook.trigger === event
       && isAgentLcmHook(hook.action, event, "kiro"));
-    if (index < 0) kiroHooks.push(expected);
-    else {
-      kiroHooks[index].action.type = "command";
-      kiroHooks[index].action.command = expected.action.command;
+    if (owned.length === 0) kiroHooks.push(expected);
+    for (const hook of owned) {
+      hook.action.type = "command";
+      hook.action.command = expected.action.command;
     }
   }
   return configuration;

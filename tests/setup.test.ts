@@ -317,6 +317,16 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
       action: { type: "command", command: "user-owned-command", timeout: 45 },
       metadata: { owner: "user" },
     },
+    {
+      name: "agent-lcm-kiro-SessionStart",
+      trigger: "SessionStart",
+      action: {
+        type: "command",
+        command: "\"/older/bin/agent-lcm\" capture --harness kiro SessionStart",
+        timeout: 60,
+      },
+      metadata: { keep: "duplicate" },
+    },
   ] }));
 
   setupHarness("kiro", { home: clientHome, command: "/new/bin/agent-lcm" });
@@ -337,6 +347,9 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
     action: { type: "command", command: "user-owned-command", timeout: 45 },
     metadata: { owner: "user" },
   });
+  assert.equal(configuration.hooks[3].action.command, "node \"/new/bin/agent-lcm\" capture --harness kiro SessionStart");
+  assert.equal(configuration.hooks[3].action.timeout, 60);
+  assert.deepEqual(configuration.hooks[3].metadata, { keep: "duplicate" });
 });
 
 test("setup rejects shell-sensitive binary paths before writing a hook file", () => {
