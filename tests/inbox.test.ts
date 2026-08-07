@@ -145,7 +145,7 @@ async function publishConcurrently(home: string, events: ReturnType<typeof sampl
 }
 
 async function publishWithVanishingOriginal(home: string, events: ReturnType<typeof sampleEvent>[]): Promise<void> {
-  const control = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
+  const control = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 3));
   const configUrl = new URL("../src/config.ts", import.meta.url).href;
   const inboxUrl = new URL("../src/inbox.ts", import.meta.url).href;
   const targetPath = path.join(home, "inbox", `${events[0]!.event_id}.json`);
@@ -167,20 +167,30 @@ async function publishWithVanishingOriginal(home: string, events: ReturnType<typ
             return result;
           }
           while (Atomics.load(control, 0) === 0) Atomics.wait(control, 0, 0);
+          try {
+            return originalLink(...args);
+          } finally {
+            Atomics.add(control, 1, 1);
+            Atomics.notify(control, 1);
+          }
         }
         return originalLink(...args);
       };
       fs.readFileSync = (...args) => {
-        if (workerData.role === "second" && args[0] === workerData.targetPath) {
-          while (Atomics.load(control, 1) === 0) Atomics.wait(control, 1, 0);
+        if (args[0] === workerData.targetPath) {
+          if (workerData.role === "first") {
+            while (Atomics.load(control, 1) < 2) Atomics.wait(control, 1, Atomics.load(control, 1));
+          } else if (workerData.role === "second") {
+            while (Atomics.load(control, 2) === 0) Atomics.wait(control, 2, 0);
+          }
         }
         return originalRead(...args);
       };
       fs.unlinkSync = (...args) => {
         const result = originalUnlink(...args);
         if (workerData.role === "first" && args[0] === workerData.targetPath) {
-          Atomics.store(control, 1, 1);
-          Atomics.notify(control, 1);
+          Atomics.store(control, 2, 1);
+          Atomics.notify(control, 2);
         }
         return result;
       };
