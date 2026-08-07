@@ -48,7 +48,6 @@
     "smoke": "node --no-warnings scripts/smoke-test.ts",
     "release:check": "node --no-warnings scripts/release.ts check",
     "release:version": "node --no-warnings scripts/release.ts set",
-    "prepare": "npm run build",
     "prepack": "npm run build"
   },
   "engines": {
