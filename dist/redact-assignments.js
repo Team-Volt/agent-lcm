@@ -1,0 +1,195 @@
+const PRIVATE_KEY_BLOCK_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu;
+const ASSIGNMENT_PREFIX_RE = /(?<![A-Za-z0-9_.-])(?:"[^"\n:=]+"|'[^'\n:=]+'|[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]/giu;
+const ASSIGNMENT_AT_START_RE = /^(?:"[^"\n:=]+"|'[^'\n:=]+'|[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]/iu;
+const SECRET_ASSIGNMENT_HINTS = [
+    "api",
+    "auth",
+    "authorization",
+    "bearer",
+    "cookie",
+    "credential",
+    "password",
+    "private",
+    "secret",
+    "token",
+    "database",
+];
+const BENIGN_TOKEN_METRIC_TERMS = [
+    "budget",
+    "count",
+    "estimated",
+    "limit",
+    "remaining",
+    "total",
+    "used",
+    "window",
+];
+export function redactSecretAssignments(value, path, redactions) {
+    const redactPrivateKeys = value.replace(PRIVATE_KEY_BLOCK_RE, () => {
+        redactions.push({ path, reason: "token-pattern" });
+        return "[REDACTED:secret]";
+    });
+    let output = "";
+    let start = 0;
+    while (start < redactPrivateKeys.length) {
+        const newlineIndex = redactPrivateKeys.indexOf("\n", start);
+        const lineEnd = newlineIndex === -1 ? redactPrivateKeys.length : newlineIndex;
+        const hasLineBreak = newlineIndex !== -1;
+        const lineBreakStart = lineEnd > start && redactPrivateKeys.charCodeAt(lineEnd - 1) === 13 ? lineEnd - 1 : lineEnd;
+        const line = redactPrivateKeys.slice(start, lineBreakStart);
+        output += redactSecretAssignmentLine(line, path, redactions);
+        if (hasLineBreak) {
+            output += redactPrivateKeys.slice(lineBreakStart, lineEnd + 1);
+        }
+        start = lineEnd + 1;
+    }
+    return output;
+}
+export function isBenignTokenMetric(key, value) {
+    if (!isTokenMetricKey(key))
+        return false;
+    return typeof value === "number" || typeof value === "boolean";
+}
+export function shouldRedactSecretKey(key, value) {
+    const parts = keyParts(key);
+    return isSecretAssignmentKey(key) &&
+        !isBenignTokenMetric(key, value) &&
+        !(typeof value === "boolean" && parts.length === 1 && parts[0] === "private");
+}
+function redactSecretAssignmentLine(value, path, redactions) {
+    if (!value.includes(":") && !value.includes("="))
+        return value;
+    let output = "";
+    let copiedUntil = 0;
+    const quoteContext = { plain: undefined, escaped: undefined, offset: 0 };
+    ASSIGNMENT_PREFIX_RE.lastIndex = 0;
+    for (let match = ASSIGNMENT_PREFIX_RE.exec(value); match; match = ASSIGNMENT_PREFIX_RE.exec(value)) {
+        advanceQuoteContext(value, match.index, quoteContext);
+        const key = assignmentKey(match[0]);
+        if (!isSecretAssignmentKey(key))
+            continue;
+        const wrapper = quoteContext.escaped
+            ? { quote: quoteContext.escaped, escaped: true }
+            : quoteContext.plain
+                ? { quote: quoteContext.plain, escaped: false }
+                : undefined;
+        const bounds = assignmentValueBounds(value, ASSIGNMENT_PREFIX_RE.lastIndex, wrapper);
+        const assignmentValue = value.slice(bounds.start, bounds.end);
+        if (assignmentValue.length === 0 ||
+            isBenignTokenMetricAssignment(key, assignmentValue) ||
+            assignmentValue.startsWith("[REDACTED:secret]")) {
+            continue;
+        }
+        output += value.slice(copiedUntil, bounds.start);
+        output += /^Bearer\s+/u.test(assignmentValue)
+            ? assignmentValue.replace(/^Bearer\s+[^\s"']+/u, "Bearer [REDACTED:token]")
+            : "[REDACTED:secret]";
+        copiedUntil = bounds.end;
+        ASSIGNMENT_PREFIX_RE.lastIndex = bounds.end;
+        redactions.push({ path, reason: "token-pattern" });
+    }
+    return output + value.slice(copiedUntil);
+}
+function assignmentValueBounds(value, start, wrapper) {
+    const firstNonWhitespace = value.slice(start).search(/\S/u);
+    if (firstNonWhitespace > 0 &&
+        !ASSIGNMENT_AT_START_RE.test(value.slice(start + firstNonWhitespace))) {
+        start += firstNonWhitespace;
+    }
+    const openingQuote = value[start];
+    if (openingQuote === "\"" || openingQuote === "'") {
+        return { start: start + 1, end: closingQuoteIndex(value, start + 1, openingQuote, false) };
+    }
+    if (openingQuote === "\\" && (value[start + 1] === "\"" || value[start + 1] === "'")) {
+        return { start: start + 2, end: closingQuoteIndex(value, start + 2, value[start + 1], true) };
+    }
+    const end = bareValueEnd(value, start, wrapper?.quote, wrapper?.escaped);
+    return { start, end };
+}
+function advanceQuoteContext(value, end, context) {
+    for (let index = context.offset; index < end; index += 1) {
+        const quote = value[index];
+        if (quote !== "\"" && quote !== "'")
+            continue;
+        if (hasOddBackslashPrefix(value, index)) {
+            context.escaped = context.escaped === quote ? undefined : context.escaped ?? quote;
+        }
+        else {
+            context.plain = context.plain === quote ? undefined : context.plain ?? quote;
+        }
+    }
+    context.offset = end;
+}
+function closingQuoteIndex(value, start, quote, escaped) {
+    for (let index = start; index < value.length; index += 1) {
+        if (value[index] !== quote)
+            continue;
+        if (escaped === hasOddBackslashPrefix(value, index)) {
+            return escaped ? index - 1 : index;
+        }
+    }
+    return value.length;
+}
+function bareValueEnd(value, start, wrapperQuote, escapedWrapper = false) {
+    const scheme = /^(?:Bearer|Basic|Digest|Token|OAuth)\s+/iu.exec(value.slice(start));
+    const scanStart = start + (scheme?.[0].length ?? 0);
+    for (let index = scanStart; index < value.length; index += 1) {
+        if (wrapperQuote && value[index] === wrapperQuote &&
+            escapedWrapper === hasOddBackslashPrefix(value, index)) {
+            return escapedWrapper ? index - 1 : index;
+        }
+        if (/[\s,;{}]/u.test(value[index]))
+            return index;
+    }
+    return value.length;
+}
+function hasOddBackslashPrefix(value, index) {
+    let count = 0;
+    while (index > count && value[index - count - 1] === "\\")
+        count += 1;
+    return count % 2 === 1;
+}
+function assignmentKey(assignmentPrefix) {
+    const colonIndex = assignmentPrefix.indexOf(":");
+    const equalsIndex = assignmentPrefix.indexOf("=");
+    const separatorIndex = colonIndex === -1 ? equalsIndex : equalsIndex === -1 ? colonIndex : Math.min(colonIndex, equalsIndex);
+    const key = separatorIndex === -1 ? assignmentPrefix : assignmentPrefix.slice(0, separatorIndex);
+    return stripWrappingQuotes(key.trim());
+}
+function isBenignTokenMetricAssignment(key, value) {
+    if (!isTokenMetricKey(key))
+        return false;
+    return /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?[.!?]?(?:\\?["'])*\s*$/u.test(value) ||
+        /^(?:true|false|null)[.!?]?(?:\\?["'])*\s*$/iu.test(value);
+}
+function isTokenMetricKey(key) {
+    const parts = keyParts(key);
+    return parts.some((part) => part === "token" || part === "tokens") &&
+        parts.some(isBenignTokenMetricTerm);
+}
+function isBenignTokenMetricTerm(part) {
+    return BENIGN_TOKEN_METRIC_TERMS.some((term) => term === part);
+}
+function isSecretAssignmentKey(key) {
+    const parts = keyParts(key);
+    const normalized = parts.join("");
+    return parts.some(isSecretAssignmentPart) ||
+        normalized.endsWith("token") ||
+        normalized.endsWith("tokens") ||
+        /^(?:api|private|secret)key$/u.test(normalized) ||
+        (parts.some((part) => part === "api") && parts.some((part) => part === "key")) ||
+        (parts.some((part) => part === "private") && parts.some((part) => part === "key"));
+}
+function isSecretAssignmentPart(part) {
+    return part === "tokens" || SECRET_ASSIGNMENT_HINTS.some((hint) => hint === part);
+}
+function keyParts(key) {
+    return stripWrappingQuotes(key)
+        .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/u)
+        .filter(Boolean);
+}
+function stripWrappingQuotes(value) {
+    return value.replace(/^(["'])(.*)\1$/u, "$2");
+}
