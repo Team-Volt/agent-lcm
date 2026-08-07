@@ -370,7 +370,7 @@ export function buildSessionMemorySummary(events: NormalizedEvent[]): SessionMem
     .slice(0, 8);
   const signalTexts = [...prompts, ...outcomes];
   const topics = extractTopics(signalTexts);
-  const title = titleFromText(prompts[0] || outcomes[0] || latest?.hook_event || "Codex session");
+  const title = titleFromText(prompts[0] || outcomes[0] || latest?.hook_event || "Agent session");
   const overview = overviewFromSignals(prompts, outcomes);
   const sourceEventIds = summaryEvents
     .map((event) => event.event_id);
@@ -603,7 +603,7 @@ function titleFromText(text: string): string {
   const compact = compactWhitespace(text)
     .replace(/^please\s+/iu, "")
     .replace(/^(can you|could you|do you|does this)\s+/iu, "");
-  return truncateText(compact, 88) || "Codex session";
+  return truncateText(compact, 88) || "Agent session";
 }
 
 function extractTopics(inputSignals: string[]): string[] {

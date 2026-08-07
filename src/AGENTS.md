@@ -3,7 +3,8 @@
 ## Ownership map
 
 - `storage.ts` is the public storage facade and the ingestion/reconciliation boundary.
-- `raw-log.ts` owns append-only JSONL I/O and the cross-process raw-log lock.
+- `raw-log.ts` and `raw-segments.ts` own segmented JSONL I/O, locators, and the cross-process raw-log lock.
+- `maintenance.ts` owns legacy cutover, segment compression, locator verification, and retention.
 - `storage-persistence.ts` owns SQLite schema maintenance, derived-index writes, and rebuild helpers.
 - `storage-context.ts`, `storage-search.ts`, `storage-sessions.ts`, and `storage-summaries.ts` own read/query and deterministic derived views.
 - `storage-graph.ts` derives bounded graph slices from indexed events and summary lineage; it does not persist a graph projection.
@@ -11,10 +12,11 @@
 
 ## Storage invariants
 
-- Sanitize and normalize input before any disk write. Append the sanitized event to `events.jsonl` under `withRawLogLock` before SQLite work.
-- `events.jsonl` is the authoritative append-only record. SQLite, FTS, session summaries, summary nodes, file references, and graph slices are derived and rebuildable.
+- Sanitize and normalize input before inbox publication. Only the daemon drains inbox files into storage.
+- Append the sanitized event to the active raw log under `withRawLogLock` before SQLite work.
+- The active log and manifest-listed segments are authoritative. SQLite, FTS, session summaries, summary nodes, file references, and graph slices are derived and rebuildable.
 - An indexing failure may surface as an index error, but must never discard an event that is already durable in the raw log. Retries must not duplicate raw event IDs.
-- Hold the raw-log lock only for the smallest snapshot, duplicate check, or append. Do not perform SQLite indexing, summaries, or graph work while it is held.
+- Hold the raw-log lock only for the smallest snapshot, duplicate check, append, rotation, or manifest publication. Do not perform SQLite indexing, summaries, or graph work while it is held.
 - Treat malformed raw JSONL as evidence loss: permit non-destructive reads and appends, but block destructive index reconciliation until repair.
 - Writable open may replay or reconcile derived state from raw JSONL. `readOnly: true` must neither create storage nor rebuild, backfill, compact, or mutate derived state.
 
@@ -22,7 +24,7 @@
 
 - Summaries are deterministic and extractive from sanitized source events. Keep stable ordering, bounded long-session sampling, and exact source event IDs.
 - Build graphs on demand from indexed event order and summary lineage. Keep slices bounded and never add a stored node/edge projection.
-- Read-only diagnostics and retrieval must fall back to raw JSONL when SQLite is absent or fails, without attempting repair.
+- Read-only diagnostics and retrieval must fall back to the segmented raw stream when SQLite is absent or fails, without attempting repair.
 
 ## Overflow and safety
 
@@ -32,7 +34,7 @@
 
 ## Source anti-patterns
 
-- Do not make SQLite the source of truth, repair an index by deleting raw events, or add a parallel persisted graph.
+- Do not make SQLite the source of truth, repair an index by deleting retained raw events, or add a parallel persisted graph.
 - Do not silently skip malformed lines during destructive reconciliation.
 - Do not let a derived-index transaction cover raw appends, or keep the raw-log lock during expensive work.
 - Do not turn a read path into an implicit migration or backfill.

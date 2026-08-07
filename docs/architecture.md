@@ -1,78 +1,112 @@
 # Architecture
 
-## Flow
+## Package surfaces
 
-1. Codex invokes a lifecycle hook command.
-2. `codex-lcm hook <event>` reads stdin as JSON.
-3. The payload is normalized into a stable event schema.
-4. Obvious secrets and oversized content are sanitized.
-5. The sanitized event is appended to `events.jsonl`.
-6. SQLite indexing is attempted. This builds session rows, FTS rows, extractive
-   summaries, file references, and a derived DAG. Index failure does not undo or block raw append.
-7. `codex-lcm mcp` serves health, stats, search, summary, retrieval, diagnostics, note, and context-packing tools over stdio JSON-RPC.
+The repository root is an Agent Plugins 1.0 package:
 
-## Plugin Packaging
+```text
+plugin.json                   portable package manifest
+mcp.json                      portable MCP server configuration
+skills/lcm-recall/            portable recall skill
+hooks.json                    lower-camel portable hook shape where supported
+.codex-plugin/plugin.json     Codex native compatibility manifest
+.cursor-plugin/plugin.json    Cursor native compatibility manifest
+hooks/                        harness-specific hook manifests
+```
 
-Codex LCM is packaged as a native Codex plugin. The manifest at
-`.codex-plugin/plugin.json` declares:
+Agent Plugins 1.0 standardizes skills and MCP servers. Hooks remain
+client-specific, so `agent-lcm setup <harness>` installs the matching capture
+configuration when a client does not load a bundled hook manifest.
 
-- `mcpServers`: points to `.mcp.json`, which starts `node ./bin/codex-lcm mcp`.
-- `hooks`: points to `hooks/hooks.codex.json`, which registers the lifecycle hooks.
-- `skills`: points to `skills/`, which exposes `lcm-recall`.
+## Capture and retrieval flow
 
-After `codex plugin add codex-lcm@codex-lcm`, these plugin-owned resources are
-the active install surface. No separate `codex-lcm` CLI install step is needed.
+1. A harness invokes `agent-lcm capture --harness ...` with a lifecycle event.
+2. The adapter maps the native event to the shared schema and adds harness
+   provenance to the session ID and event row.
+3. Redaction and size limits run before any durable write.
+4. The hook atomically publishes the sanitized event to `inbox/`. It never
+   opens the raw archive or SQLite.
+5. The hook ensures that one per-user daemon is running and returns.
+6. The daemon drains complete inbox files, appends new events to the raw
+   archive, and updates the derived SQLite index.
+7. MCP bridges and storage CLI commands authenticate over local IPC and use the
+   same daemon.
 
-## Event Schema
+The inbox separates fast harness hooks from database work. Atomic publication
+also gives the daemon a clear rule: a `.json` file is complete, while temporary
+files are not ready to consume.
 
-Every stored event includes:
+Daemon requests run through one promise chain. A SQLite ownership transaction
+prevents a second daemon from taking the same store, and an endpoint token
+authenticates local requests. The default endpoint is a Unix socket; Windows
+uses a named pipe. Long Unix home paths use a short private socket directory.
+
+## Event schema
+
+Every event includes:
 
 - `schema_version`
 - `event_id`
 - `timestamp`
+- `harness`
+- `native_event`
 - `hook_event`
-- `session_id`
+- a harness-prefixed `session_id`
 - `cwd`
-- optional `project`
-- optional `repo_root`
-- optional `git_branch`
-- optional `tool_name`
+- optional repository, branch, turn, tool, and agent metadata
 - sanitized `payload`
-- `redactions`
-- `truncations`
-- `raw_input_sha256`
-- byte counts
+- redaction and truncation records
+- source hash and byte counts
 
-Unknown payload fields are preserved inside `payload` after sanitization.
+Harness-prefixed session IDs prevent native ID collisions. Retrieval results
+also carry harness provenance. Search, listing, context packing, usage, and
+query expansion accept optional `harnesses` filters; no filter means all
+harnesses.
 
-## Storage
+## Shared storage
 
-Default home:
+The default home is `~/.agent-lcm`:
 
 ```text
-~/.codex-lcm/
-  events.jsonl                 # active append target, capped at 64 MiB
-  segments/
-    manifest.json
-    *.jsonl.gz                 # verified closed segments
-  index.sqlite
+events.jsonl                  active raw append target, capped at 64 MiB
+segments/
+  manifest.json
+  *.jsonl.gz                  verified closed segments
+index.sqlite                  derived search and summary data
+overflow/                     bounded sanitized large values
+inbox/                        durable capture queue
+quarantine/                   invalid inbox records
+runtime/                      daemon endpoint, token, and ownership data
 ```
 
-The active log and manifest-listed segments are the source of truth.
-`index.sqlite` is derived and can be deleted or rebuilt later. Closed segments
-use gzip level 1. SQLite keeps byte locators for archived events and drops its
-duplicate JSON after the segment checksum and event IDs pass verification.
+`AGENT_LCM_HOME` selects another store. One home maps to one daemon and one
+cross-harness database.
 
-Writable startup cuts an older single-file store over under the raw writer
-lock. The hook gets a fresh active log at once, while a one-shot worker migrates
-the renamed legacy file in bounded batches. The manifest records progress, so a
-stopped worker resumes at the last published byte offset.
+The active log and manifest-listed segments are authoritative. SQLite is
+derived and can be rebuilt. A raw append completes before index work, so an
+index failure does not discard the captured event.
 
-The default retention policy is unlimited. A positive
-`CODEX_LCM_RETENTION_DAYS` in `~/.codex-lcm/.env` expires closed raw segments,
-detailed event rows, and orphan overflow files. Session and summary rows remain.
+When the active log reaches its cap, the writer closes it as a manifest-listed
+segment and opens a fresh `events.jsonl`. Daemon maintenance then:
 
-SQLite tables:
+1. verifies the segment checksum and event locations;
+2. compresses the segment with gzip level 1;
+3. confirms that archived events can be read through their byte locators; and
+4. clears duplicate full event JSON from the corresponding SQLite rows.
+
+This keeps one compressed source copy plus the smaller derived data. A
+resumable migration handles an older single-file development store. Malformed
+legacy records go to a segment quarantine instead of being silently dropped.
+
+Raw retention is unlimited unless `AGENT_LCM_RETENTION_DAYS` is a positive
+integer. Retention applies only to closed source segments. It removes detailed
+event rows and orphaned overflow files for expired segments but preserves
+session and summary rows.
+
+## Derived index
+
+SQLite stores sessions, event metadata and locators, FTS rows, file references,
+session summaries, and multi-depth summary nodes. The main tables are:
 
 - `sessions`
 - `events`
@@ -83,138 +117,38 @@ SQLite tables:
 - `summary_node_fts`
 - `file_refs`
 
-Codex LCM creates the index opportunistically during ingestion. If indexing is unavailable, raw-log fallback scans keep health, session lookup, retrieval, and basic search usable.
+Full-text search indexes discovery signals such as prompts, outcomes, and
+compaction summaries. Large tool payloads remain in the raw archive or local
+overflow files instead of being copied into every search surface.
 
-`event_fts` indexes only discovery signals such as prompts, notes, outcomes,
-and compaction summaries. Tool inputs and outputs remain available in
-`events.raw_json` and the raw log, but duplicating them into full-text search
-adds substantial storage and does not improve session discovery. The legacy
-`events.text` column remains schema-compatible but new rows leave it empty.
+Session summaries are deterministic and extractive. D0 summary nodes cover
+bounded groups of high-signal events; deeper nodes summarize lower-depth nodes.
+Each node records its source IDs, so retrieval can return the compact summary
+first and expand only the matching lineage.
 
-`file_refs` records large path-backed outputs detected in sanitized event
-payloads. Each row stores the path, source event, byte count, SHA-256, MIME
-guess, and a compact exploration summary. It is metadata for inspection and
-search triage, not a second copy of the full file.
+The graph is derived on read. It contains session, turn, event, checkpoint, and
+summary nodes with `contains`, `next`, `tool_result`, `checkpoint`, and
+`summary_source` edges. Agent LCM does not persist a second graph projection.
 
-## Summary Index
+## Import flow
 
-Session summaries are deterministic and extractive. They are rebuilt from
-sanitized raw events whenever a session is indexed, so they can be deleted and
-recreated without changing the source data.
+Importers read source files without modifying them, normalize records through
+the same harness adapters, and publish durable batches to the inbox. The daemon
+reports ingested and duplicate event IDs for each requested batch.
 
-Each summary records:
+Codex, GitHub Copilot, and Kiro have default local search paths. Cursor accepts
+chat Markdown exports. VS Code accepts JSON conversation exports or OTLP JSON.
+Malformed JSONL records are rejected individually so later valid records still
+import.
 
-- title
-- overview
-- topics
-- key user prompts and notes
-- assistant outcomes from `Stop` plus compaction signals from `PreCompact` and `PostCompact`
-- source event IDs
+## MCP protocol
 
-`session_summary_fts` lets broad topic queries match these compact clues before
-the caller loads raw events. `lcm_describe` exposes a session summary directly;
-`lcm_get_session_summary` remains as a compatibility tool.
+The stdio server accepts newline-delimited JSON-RPC and Content-Length framed
+messages. It implements `initialize`, `ping`, `tools/list`, and `tools/call`.
+The bridge does not open storage directly; each tool request goes to the shared
+daemon.
 
-`summary_nodes` stores a multi-depth summary DAG. D0 nodes summarize bounded
-chunks of high-signal source events. D1 and deeper nodes summarize lower-depth
-summary nodes. Each node stores depth, source type, source IDs, source event IDs,
-topic terms, token estimates, and a deterministic node ID derived from its
-lineage. `summary_node_fts` indexes the node text and topics.
-
-The standard retrieval flow is deliberately small:
-
-1. `lcm_grep` finds likely sessions by searching summary nodes, session
-   summaries, and high-signal raw events.
-2. `lcm_describe` inspects a session or summary node without loading a full
-   transcript.
-3. `lcm_expand` expands one selected summary node into bounded source summary
-   nodes and source events.
-
-`lcm_expand_query` is the query-first expansion path. It searches matching
-summary nodes, recursively follows summary-node source lineage, and returns
-focused source events plus summary-node evidence under a caller-supplied token
-budget. By default it keeps direct query matches competitive; with
-`overview: true`, it favors higher-depth, source-rich summary nodes for broad
-lineage views. `sourceLimit` bounds source events or source summary nodes per
-matched node/source expansion, not total returned evidence.
-
-`lcm_pack_context` uses the same underlying summary-node lineage, but packages
-the result as model-ready Markdown. It searches summary nodes first, ranks
-direct lower-depth hits ahead of broad higher-depth hits, and expands only the
-selected source lineage. For tight budgets it uses a compact summary-node form
-so the matched source text is not crowded out by metadata. Raw events remain
-available through `lcm_get_session`.
-
-Summary rebuilds are bounded for long sessions. Storage reads early high-signal
-events, latest high-signal events, and a short recent tail, then deduplicates the
-sample before extracting topics and outcomes. The summary should capture the
-initial task, recent drift, and the latest result without scanning an entire
-giant transcript on every hook event.
-
-## Derived DAG
-
-Graph slices are derived on demand from indexed events and summary source IDs. No duplicate node/edge projection is persisted; raw JSONL remains the source of truth.
-
-Node kinds:
-
-- `session`: one per Codex session ID.
-- `turn`: one per session/turn ID when hook payloads include `turn_id`.
-- `event`: one per stored raw event.
-- `checkpoint`: structural checkpoint nodes created on `PreCompact` and every 50 indexed events.
-- `summary`: derived summary nodes at D0, D1, and deeper levels.
-
-Edge kinds:
-
-- `contains`: session to turn/event, turn to event.
-- `next`: previous event to next event within the same session.
-- `tool_result`: matching `PreToolUse` to `PostToolUse` with the same `tool_use_id`.
-- `checkpoint`: session to checkpoint.
-- `summary_source`: summary node to source event node or lower-depth summary node.
-
-All edge kinds are synthesized from append-only session order or summary-source lineage when graph slices are read.
-
-For very long sessions, callers should prefer bounded graph and event access:
-
-- `lcm_grep`, `lcm_describe`, and `lcm_expand` for discovery and source-backed expansion.
-- `lcm_expand_query` for focused recursive evidence expansion without manually choosing a node first.
-- `lcm_get_session` with `limit` and `cursor`.
-- `lcm_get_session_graph` with a bounded `limit`.
-- `lcm_context_plan` to decide whether summary-node packing is likely useful before continuing a long session.
-- `lcm_pack_context`, which searches summary nodes first and expands bounded source lineage.
-
-`codex-lcm benchmark long-context --json` is the local regression harness for
-this path. It creates temporary storage, imports a synthetic long session with
-an old marker event, and verifies packed context recovers that source evidence.
-
-Search uses strict SQLite FTS first against summary nodes, session summaries,
-and events. If a non-empty query has no strict hits, LCM builds a relaxed query
-from signal terms and retries. Summary-node matches receive extra weight because
-they represent extracted session substance rather than incidental raw text.
-Session search still ranks by query-term coverage before recency, so a newer
-shallow hit should not hide an older session with more of the requested
-substance. For context packing, cwd remains the first boundary, but an empty
-cwd-scoped query falls back to bounded global search before returning an empty
-or misleadingly narrow pack.
-
-## MCP Protocol
-
-The server accepts the local Codex plugin newline-delimited JSON-RPC pattern and Content-Length framed JSON-RPC messages over stdio. Responses use newline-delimited JSON by default and mirror Content-Length framing after a framed request.
-
-Implemented methods:
-
-- `initialize`
-- `ping`
-- `tools/list`
-- `tools/call`
-
-## Hook Compatibility
-
-The normalizer accepts both snake_case and camelCase fields observed in installed local hook scripts:
-
-- `session_id` / `sessionId`
-- `tool_name` / `toolName`
-- `tool_input` / `toolArgs`
-- `tool_output`, `tool_response`, `tool_result`, `toolResult`
-- `prompt` / `userPrompt`
-
-Malformed JSON is stored as a parse-error event with a redacted raw preview.
+The preferred retrieval path is `lcm_grep` to `lcm_describe` to `lcm_expand`.
+`lcm_expand_query` selects and expands matching lineage in one bounded request,
+while `lcm_pack_context` produces model-ready Markdown for recovery after
+compaction, interruption, or handoff.

@@ -1,241 +1,250 @@
-# Codex LCM
+# Agent LCM
 
-Codex LCM is a local context memory plugin for Codex. It captures Codex session
-events, stores sanitized raw history first, builds local search and graph indexes
-from that history, and exposes retrieval through MCP tools that Codex can call
-when prior work matters.
+Agent LCM gives coding agents one shared, local memory. It captures sessions from
+Codex, Cursor, VS Code, GitHub Copilot, and Kiro, then makes that history
+searchable from any of those harnesses through MCP.
 
-LCM stands for lossless context memory. The project is designed around a simple
-constraint: do not rely on a project, repository, summary, or embedding as the
-source of truth. A Codex session is the primary unit. Project path, git repo,
-and branch are metadata that make retrieval easier, but projectless sessions
-still work.
+LCM stands for lossless context memory. The sanitized event archive is the
+source of truth. Search indexes, summaries, and graphs are derived from it and
+can be rebuilt.
 
-## What It Does
+## Why use it
 
-- Records Codex lifecycle events from hooks such as session start, user prompt,
-  tool use, compaction, and stop.
-- Writes sanitized raw events to an append-only JSONL log before doing any
-  indexing work.
-- Builds a local SQLite index with FTS search and a derived DAG of sessions,
-  turns, events, tool results, checkpoints, and summary-source lineage.
-- Builds deterministic extractive session summaries with titles, topics, key
-  prompts, outcomes, tools, and source event IDs. These summaries are derived
-  from raw events and can be rebuilt.
-- Serves MCP tools for the standard LCM flow: grep for candidates, describe
-  sessions or summary nodes, expand source-backed evidence, pack model-ready
-  context, check health/stats, page long sessions, inspect graphs, and record
-  approved notes.
-- Provides a Codex skill that nudges the model to query LCM on resumes,
-  compaction recovery, long-running work, and questions about prior sessions.
+Coding agents lose useful context when a session ends, compacts, or moves to a
+different harness. Agent LCM keeps that work available without sending it to a
+hosted memory service.
 
-The current release stores data locally. It does not require external APIs,
-hosted services, or embeddings.
+- Resume earlier work with source-backed evidence instead of recollection.
+- Search Codex work from Cursor, Copilot work from Kiro, or any other supported
+  combination. Cross-harness search is the default.
+- Keep one private store per user and machine instead of one database per
+  harness or repository.
+- Import sessions that existed before Agent LCM was installed.
+- Rebuild the SQLite index from the raw archive if the derived data is damaged.
+- Run without embeddings, external APIs, or cloud storage.
 
-## How Codex Uses It
+## How it works
 
-Codex uses LCM through two surfaces:
+Capture hooks sanitize each event and publish it to a private on-disk inbox.
+One authenticated local daemon drains that inbox, appends the event to the raw
+archive, and updates SQLite. MCP and storage CLI requests use the same daemon,
+so harnesses do not compete as independent database writers.
 
-- Hooks capture session events automatically while Codex runs.
-- MCP tools let Codex retrieve relevant context later.
+Retrieval is global unless a caller passes a `harnesses` filter. The usual MCP
+flow is:
 
-A typical retrieval flow is:
+1. `lcm_grep` finds matching sessions across harnesses.
+2. `lcm_describe` inspects a session or summary node.
+3. `lcm_expand` follows its source lineage, or `lcm_pack_context` returns a
+   bounded context block ready for the agent.
 
-1. Locate the current or latest relevant session by cwd, repo root, or session ID.
-2. Use `lcm_grep` to search across summary nodes, session summaries, and
-   high-signal events. Search tries exact FTS first, then relaxes broad queries
-   so one missing word does not make retrieval look empty. When an exact error
-   or tool-output marker may have been truncated from the indexed event, set
-   `contentScope: "overflow"` or `"both"` to scan bounded sanitized overflow
-   payloads.
-3. Use `lcm_describe` on a promising session or summary node to inspect the
-   summary, depth, source IDs, and lineage before loading more. Overflow search
-   results use `overflow:<sha256>` file IDs and support byte-offset paging.
-4. Use `lcm_expand` on a chosen summary node, `lcm_expand_query` when the query
-   should pick and recursively expand matching nodes, or `lcm_pack_context` when
-   Codex needs a ready-to-use context block. Pass `overview: true` to
-   `lcm_expand_query` for broad, source-rich lineage views.
-5. Page through long sessions or request a bounded graph slice instead of loading
-   an entire raw history at once.
+Agent LCM targets [Agent Plugins 1.0](https://agent-plugins.org/specification).
+The portable package surface is `plugin.json`, `skills/`, and `mcp.json`.
+Agent Plugins 1.0 does not standardize lifecycle hooks, so this repository also
+ships harness-specific hook manifests and an idempotent setup command. See the
+[compatible client matrix](https://agent-plugins.org/compatible-clients) for
+the component types each client currently loads.
 
-This keeps Codex from guessing what happened before while avoiding giant context
-dumps.
+## Requirements
 
-## Architecture
+- Node.js 22.18 or newer
+- A local checkout of this private repository
 
-The plugin package lives in `plugins/codex-lcm/`.
+```sh
+git clone git@github.com:Team-Volt/agent-lcm.git
+cd agent-lcm
+npm ci
+```
+
+## Install the plugin
+
+Point your harness's local Agent Plugins install flow at this checkout. The
+standard leaves install commands and UI to each client, but compatible clients
+discover the same two portable components:
+
+- `skills/lcm-recall/SKILL.md`
+- the `agent-lcm` stdio server in `mcp.json`
+
+Codex and Cursor compatibility manifests are included for clients that still
+use their native plugin layout. If a client only supports manual MCP setup, add
+a stdio server with this command and arguments:
+
+```json
+{
+  "command": "node",
+  "args": ["/absolute/path/to/agent-lcm/bin/agent-lcm", "mcp"]
+}
+```
+
+Use an absolute path. Restart the harness after adding the plugin or MCP server.
+
+## Enable automatic capture
+
+If the plugin installer does not load the bundled hooks, run the setup command
+for that harness from the checkout:
+
+```sh
+node "$PWD/bin/agent-lcm" setup codex
+node "$PWD/bin/agent-lcm" setup cursor
+node "$PWD/bin/agent-lcm" setup vscode
+node "$PWD/bin/agent-lcm" setup copilot
+node "$PWD/bin/agent-lcm" setup kiro
+```
+
+Run only the commands for the harnesses you use. VS Code and GitHub Copilot
+share `~/.copilot/hooks/agent-lcm.json`; either setup command installs the same
+auto-detecting hooks. Setup preserves unrelated hook entries, is safe to run
+again, and writes private files containing the absolute Agent LCM command.
+
+The hook locations are:
+
+| Harness | Hook file |
+| --- | --- |
+| Codex | `~/.codex/hooks/agent-lcm.json` |
+| Cursor | `~/.cursor/hooks/agent-lcm.json` |
+| VS Code | `~/.copilot/hooks/agent-lcm.json` |
+| GitHub Copilot | `~/.copilot/hooks/agent-lcm.json` |
+| Kiro | `~/.kiro/hooks/agent-lcm.json` |
+
+Check the result, then restart each harness:
+
+```sh
+node bin/agent-lcm setup status
+node bin/agent-lcm doctor --json
+```
+
+Hooks start the daemon on demand. You can also manage it directly:
+
+```sh
+node bin/agent-lcm daemon start
+node bin/agent-lcm daemon status
+node bin/agent-lcm daemon stop
+```
+
+## Import existing sessions
+
+Start with a dry run. Import never changes the source files, and rerunning it
+skips event IDs already in the shared store.
+
+```sh
+node bin/agent-lcm import --harness codex --dry-run
+node bin/agent-lcm import --harness codex
+```
+
+Known default locations are available for Codex, GitHub Copilot, and Kiro:
+
+```sh
+node bin/agent-lcm import --harness copilot
+node bin/agent-lcm import --harness kiro
+```
+
+Cursor and VS Code need an exported file because their local session formats
+are not stable public import surfaces. Pass a Cursor chat Markdown export or a
+VS Code JSON/OTLP export:
+
+```sh
+node bin/agent-lcm import --harness cursor /path/to/chat.md --dry-run
+node bin/agent-lcm import --harness vscode /path/to/export.json --dry-run
+```
+
+To scan the known locations for every directly readable harness under a home
+directory:
+
+```sh
+node bin/agent-lcm import --all --dry-run
+node bin/agent-lcm import --all
+```
+
+The report lists scanned and imported sessions, imported and duplicate events,
+rejected records, failures, and harnesses that still need an export. The legacy
+Codex-only command remains available during initial migration work:
+
+```sh
+node bin/agent-lcm import-codex-sessions --dry-run --json
+```
+
+## Local storage
+
+The default store is `~/.agent-lcm`. Set `AGENT_LCM_HOME` to use another one.
 
 ```text
-plugins/codex-lcm/
-  .codex-plugin/plugin.json   Codex plugin manifest
-  .mcp.json                   MCP server registration
-  hooks/hooks.codex.json      Codex hook registration
-  skills/lcm-recall/          Codex skill for retrieval guidance
-  src/                        TypeScript implementation
-  tests/                      Node test suite
+~/.agent-lcm/
+  events.jsonl                 active raw append target
+  segments/
+    manifest.json              archive manifest and migration state
+    *.jsonl.gz                 verified compressed raw segments
+  index.sqlite                 derived FTS, summaries, and graph metadata
+  overflow/                    sanitized large-value spill files
+  inbox/                       durable capture queue
+  quarantine/                  malformed queue records
+  runtime/                     daemon socket, token, and ownership files
 ```
 
-Storage defaults to `~/.codex-lcm`:
+The active log rotates at 64 MiB. The daemon verifies and compresses closed
+segments with gzip level 1, stores byte locators in SQLite, and removes the
+duplicate full JSON from archived index rows. The index does not keep a second
+full copy of archived event payloads.
 
-```text
-~/.codex-lcm/
-  events.jsonl     append-only sanitized raw events
-  index.sqlite     derived SQLite FTS, summary, and DAG index
+Raw history is unlimited by default. To expire closed raw segments after a
+fixed number of days, set a positive integer in the process environment or in
+`~/.agent-lcm/.env`:
+
+```dotenv
+AGENT_LCM_RETENTION_DAYS=90
 ```
 
-`events.jsonl` is the source of truth. The SQLite database is rebuildable and is
-allowed to fail without losing raw events.
-
-## Privacy And Safety
-
-Codex LCM stores local session data, so it treats capture as a privacy-sensitive
-operation.
-
-- Obvious secret keys such as tokens, passwords, cookies, API keys, and private
-  keys are redacted before storage.
-- Common token strings such as bearer tokens, OpenAI keys, GitHub tokens, Slack
-  tokens, and AWS access key IDs are redacted.
-- Oversized strings and payloads are truncated with SHA-256 hash metadata.
-- Large file contents are not blindly treated as durable knowledge; hook payloads
-  are sanitized and size-limited before persistence.
-- Raw sanitized events are kept locally unless the user chooses to copy, export,
-  or publish them elsewhere.
-
-## Installation
-
-Install the latest tagged release from GitHub with Codex's native plugin flow:
+Finite retention removes exact old event sources but keeps session and summary
+records. Check `config_error` and migration fields with:
 
 ```sh
-codex plugin marketplace add Team-Volt/codex-lcm --ref v0.2.9
-codex plugin add codex-lcm@codex-lcm
+node bin/agent-lcm health --json
+node bin/agent-lcm maintain --once --json
 ```
 
-Or install from a local checkout:
+## Privacy and safety
+
+Agent LCM stores session content on the local machine. It redacts common secret
+fields and token formats before publication, strips credential URI passwords,
+and bounds large strings and payloads. Oversized sanitized values use local
+overflow files with hashes and byte counts.
+
+Redaction lowers risk but cannot prove that arbitrary tool output contains no
+sensitive data. Protect `~/.agent-lcm` as you would protect local source code
+and shell history. Agent LCM creates its store directories with mode `0700` and
+private files with mode `0600` on platforms that support POSIX permissions.
+
+## Useful commands
 
 ```sh
-codex plugin marketplace add /path/to/codex-lcm
-codex plugin add codex-lcm@codex-lcm
+node bin/agent-lcm --help
+node bin/agent-lcm doctor --json
+node bin/agent-lcm health --json
+node bin/agent-lcm stats --json
+node bin/agent-lcm sessions --include-summaries --json
+node bin/agent-lcm usage --json
+node bin/agent-lcm cleanup --json
 ```
 
-The native plugin manifest wires the MCP server, lifecycle hooks, and
-`lcm-recall` skill. No separate `codex-lcm` CLI install step is required.
-
-The first TUI session after install asks you to review and trust the lifecycle
-hooks. That is expected. Hooks capture the session data that LCM indexes.
-
-Upgrade an existing GitHub marketplace install to `v0.2.9`:
-
-```sh
-codex plugin marketplace remove codex-lcm
-codex plugin marketplace add Team-Volt/codex-lcm --ref v0.2.9
-codex plugin add codex-lcm@codex-lcm
-```
-
-Upgrade a local checkout install to `v0.2.9` by checking out the release tag,
-then asking Codex to refresh the installed plugin cache:
-
-```sh
-git -C /path/to/codex-lcm fetch --tags origin
-git -C /path/to/codex-lcm checkout v0.2.9
-codex plugin add codex-lcm@codex-lcm
-```
-
-To keep following the moving `main` branch instead of a release tag, use:
-
-```sh
-codex plugin marketplace add Team-Volt/codex-lcm --ref main
-codex plugin add codex-lcm@codex-lcm
-```
-
-If your `codex-lcm` marketplace is path-backed and you want to keep using that
-checkout, use the local-checkout command above instead. The cache directory may
-keep the same version suffix after a local refresh; use `codex plugin list`,
-`codex-lcm stats --json`, or the `lcm_stats` MCP tool after restart to verify
-the loaded code.
-
-Then restart Codex Desktop or open a new Codex CLI/TUI session so the refreshed
-plugin cache, MCP server, hooks, and skill are loaded. If a release changes hook
-commands, Codex may ask you to review and trust the updated hooks again.
-
-Remove it with:
-
-```sh
-codex plugin remove codex-lcm@codex-lcm
-```
-
-## Release Status
-
-Current release: `v0.2.9`.
-
-Codex LCM is a local-first Codex memory plugin with native plugin installation,
-hook ingestion, sanitized raw event storage, SQLite FTS, DAG-backed retrieval,
-deterministic summaries, recursive summary-node expansion, context packing,
-health/stats diagnostics, post-compaction capture, and Codex session import
-tools. The `lcm-recall` skill gives Codex a repeatable retrieval workflow for
-resumes, compaction recovery, long-running work, and questions about prior
-sessions.
-
-### v0.2.9 notes
-
-This release hardens raw event durability, fixes post-compaction recovery so it
-packs context once without exposing internal recovery work, expands secret
-redaction, and improves paraphrase recall guidance and measurement.
-
-- Keeps raw events durable and recoverable across concurrent writers, lock
-  failures, SQLite failures, and interrupted indexing.
-- Requires one successful `lcm_pack_context` result after compaction, then
-  resumes the task without announcing the recovery step.
-- Redacts credential URI passwords and secret assignments nested inside JSON or
-  shell strings while preserving benign token metrics.
-- Expands the retrieval benchmark to 39 sessions and 38 queries, with separate
-  development and holdout results for paraphrase recall.
-
-Use the [Installation](#installation) section for install and upgrade commands.
+`cleanup` compacts the derived search index; it does not delete retained raw
+events. Use `cleanup --apply` only after reviewing the preview.
 
 ## Development
 
-Run commands from the plugin package:
-
 ```sh
-cd plugins/codex-lcm
+npm run typecheck
 npm test
 npm run smoke
+npm pack --dry-run
 ```
 
-The smoke test uses a temporary `CODEX_LCM_HOME`, sends synthetic hook events,
-starts the MCP server over stdio, calls search, graph, and context-packing
-tools, and cleans up after itself.
+The smoke test uses a temporary `AGENT_LCM_HOME`, captures events through the
+real CLI, starts the daemon and MCP server, searches the shared store, and
+cleans up its processes.
 
-Useful local commands:
-
-```sh
-node bin/codex-lcm --help
-node bin/codex-lcm doctor --json
-node bin/codex-lcm health --json
-node bin/codex-lcm stats --json
-node bin/codex-lcm status --json
-node bin/codex-lcm sessions --since 2026-07-13T00:00:00Z --json
-node bin/codex-lcm usage --since 2026-07-13T00:00:00Z --json
-node bin/codex-lcm import-codex-sessions --dry-run --json
-```
-
-`doctor --json` combines plugin wiring status, storage health, event capture,
-summary indexing, and concrete recommendations. `import-codex-sessions` scans
-existing Codex JSONL transcripts, defaulting to `~/.codex/sessions`, and ingests
-them into LCM without modifying the source files. Use `--dry-run` first to see
-how many records are importable; repeated imports skip duplicate event IDs.
-Re-run the import after upgrading to backfill session lineage, runtime metadata,
-and cumulative token usage from existing transcripts.
-
-`stats --json` includes `hook_event_counts`, so `PreCompact` capture can be
-checked without opening raw logs or SQLite.
-
-For deeper implementation notes, see:
-
-- `plugins/codex-lcm/README.md`
-- `plugins/codex-lcm/docs/architecture.md`
-- `plugins/codex-lcm/docs/troubleshooting.md`
+See [Architecture](docs/architecture.md) and
+[Troubleshooting](docs/troubleshooting.md) for implementation and recovery
+details.
 
 ## License
 
-Codex LCM is released under the MIT License. See `LICENSE` for the full text.
+Agent LCM uses the MIT License. See [LICENSE](LICENSE).

@@ -1,163 +1,162 @@
 # Troubleshooting
 
-## Check Local Status
+## Start with doctor
 
 ```sh
-node bin/codex-lcm status --json
+node bin/agent-lcm doctor --json
+node bin/agent-lcm setup status
+node bin/agent-lcm daemon status
 ```
 
-This reads Codex config and hooks from `~/.codex` by default. Use `--codex-home <path>` for tests.
+`doctor` checks Codex plugin wiring, the recall skill, the shared daemon, the
+capture queue, quarantine, SQLite, and summary indexing. `setup status` reports
+the harness hook files separately.
 
-## MCP Does Not Appear In Codex
+## The MCP server is missing
 
-For plugin installs, first check the marketplace and plugin entry:
+An Agent Plugins client should discover `mcp.json` at the plugin root. Restart
+the harness after installing or refreshing the checkout.
 
-```sh
-codex plugin marketplace list
-codex plugin list
-```
-
-Native plugin install should expose the MCP server through `.mcp.json`. The
-status command reports whether the plugin manifest and MCP manifest are present:
-
-```sh
-node bin/codex-lcm status --json
-```
-
-If you already have an MCP server named `lcm`, it can coexist with this plugin because this server is named `codex-lcm`.
-
-## Hooks Are Not Capturing
-
-After plugin install, the Codex TUI asks you to review and trust hooks. Choose review, confirm the `codex-lcm` hook commands, then trust them. If you continue without trusting, hooks will not run for that session.
-
-For native plugin installs, Codex discovers hooks through `.codex-plugin/plugin.json`:
+For manual MCP configuration, use a stdio server with an absolute path:
 
 ```json
-"hooks": "./hooks/hooks.codex.json"
+{
+  "command": "node",
+  "args": ["/absolute/path/to/agent-lcm/bin/agent-lcm", "mcp"]
+}
 ```
 
-The hook manifest registers `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
-`PostToolUse`, `PreCompact`, `PostCompact`, `SubagentStop`, and `Stop`.
+Run `node bin/agent-lcm --help` with the same Node installation if the server
+fails to start. Agent LCM requires Node 22.18 or newer.
 
-Some plugin validation tools may lag the live Codex plugin schema and complain
-about the `hooks` field. The live Codex CLI/TUI uses this field for plugin-owned
-hook discovery. If hooks do not prompt for review after install, verify that the
-field is still present.
+## Hooks are not capturing
 
-## Skill Does Not Appear
-
-Native plugin installation loads skills from:
-
-```json
-"skills": "./skills/"
-```
-
-The installed skill is `lcm-recall`.
-
-## Marketplace Upgrade Says It Is Not A Git Marketplace
-
-`codex plugin marketplace upgrade` refreshes configured Git marketplace
-snapshots. If your marketplace was added from a local checkout, for example:
+Install or repair the harness hook file, then restart the harness:
 
 ```sh
-codex plugin marketplace add /path/to/codex-lcm
+node "$PWD/bin/agent-lcm" setup codex
+node "$PWD/bin/agent-lcm" setup cursor
+node "$PWD/bin/agent-lcm" setup vscode
+node "$PWD/bin/agent-lcm" setup copilot
+node "$PWD/bin/agent-lcm" setup kiro
 ```
 
-then update the checkout yourself and refresh the installed plugin cache:
+Use only the harnesses you need. VS Code and GitHub Copilot share
+`~/.copilot/hooks/agent-lcm.json`, and the generated hook detects which one sent
+the event. Setup refuses malformed existing JSON instead of overwriting it.
+
+Codex and Cursor may ask you to review or trust plugin-owned commands. Capture
+will not run until the harness allows those hooks.
+
+Check whether events reach the queue and daemon:
 
 ```sh
-git -C /path/to/codex-lcm pull --ff-only
-codex plugin add codex-lcm@codex-lcm
+node bin/agent-lcm daemon start
+node bin/agent-lcm daemon status
+node bin/agent-lcm health --json
 ```
 
-After that, restart Codex Desktop or start a fresh Codex CLI/TUI session. The
-installed cache path may still contain the same version suffix after a local
-refresh, so verify behavior with `codex plugin list`, `codex-lcm stats --json`,
-or the `lcm_stats` MCP tool instead of reading the cache directory name.
+A nonzero `queue_depth` means capture succeeded but the daemon has not drained
+the inbox. A nonzero `quarantine_count` means the daemon rejected one or more
+queue records; inspect `~/.agent-lcm/quarantine/` before removing them.
 
-## Storage Problems
+## Isolate a storage problem
 
-Use a temporary home to isolate issues:
+Use a temporary home so tests do not touch your normal store:
 
 ```sh
-CODEX_LCM_HOME=/private/tmp/codex-lcm-check node bin/codex-lcm hook UserPromptSubmit
-CODEX_LCM_HOME=/private/tmp/codex-lcm-check node bin/codex-lcm health --json
-CODEX_LCM_HOME=/private/tmp/codex-lcm-check node bin/codex-lcm stats --json
+AGENT_LCM_HOME=/private/tmp/agent-lcm-check node bin/agent-lcm daemon start
+AGENT_LCM_HOME=/private/tmp/agent-lcm-check node bin/agent-lcm health --json
+AGENT_LCM_HOME=/private/tmp/agent-lcm-check node bin/agent-lcm daemon stop
 ```
 
-If SQLite cannot open `index.sqlite`, Codex LCM still appends `events.jsonl` and
-falls back to scanning the active log and archived segments.
-Use `stats --json` when you need aggregate hook-event, summary-depth,
-graph-count, and freshness checks without opening the SQLite database directly.
-For compaction hook verification, check `hook_event_counts.PreCompact` and
-`hook_event_counts.PostCompact`.
-`health` and `stats` open the index read-only. If derived summaries need to be
-rebuilt after an upgrade, the next normal hook ingestion or `lcm_record_note`
-write will run maintenance.
+`events.jsonl` and manifest-listed segments are the source of truth. If SQLite
+cannot open, captured queue files remain durable and raw events already appended
+remain available for a rebuild.
 
-## The SQLite Index Is Much Larger Than The Raw Log
+## The daemon is duplicated or stuck
 
-Preview the built-in cleanup before changing anything:
+Agent LCM uses an authenticated local endpoint plus a SQLite ownership lock.
+Independent starters should converge on one process.
 
 ```sh
-node bin/codex-lcm cleanup --json
+node bin/agent-lcm daemon status
+node bin/agent-lcm daemon stop
+node bin/agent-lcm daemon start
 ```
 
-The preview reports the current index size, retained search rows, duplicated
-event-text bytes, and the projected high-signal search-row count. It does not
-write to SQLite.
+Do not delete runtime or lock files while `daemon status` reports a responsive
+process. If the process was killed, the next start validates the endpoint and
+recovers stale metadata.
 
-The active log and archived segments remain the source of truth, so cleanup
-never deletes retained transcript events. If you also want a point-in-time copy of the derived index, make an
-online SQLite backup first:
+## Import finds no sessions
+
+Use a source path when the harness has no stable default export location:
 
 ```sh
-sqlite3 ~/.codex-lcm/index.sqlite ".backup '/path/to/index-backup.sqlite'"
+node bin/agent-lcm import --harness cursor /path/to/chat.md --dry-run
+node bin/agent-lcm import --harness vscode /path/to/export.json --dry-run
 ```
 
-Then apply the cleanup:
+Codex defaults to `~/.codex/sessions`, GitHub Copilot to
+`~/.copilot/session-state`, and Kiro to `~/.kiro/sessions/cli`. `CODEX_HOME`
+changes the Codex root. The JSON report separates missing files, rejected
+records, duplicates, and harnesses that need an export.
+
+Imports do not edit source files. Repeating a successful import is safe.
+
+## Storage keeps growing
+
+The active raw log rotates at 64 MiB. Closed segments should move from
+`plain_segment_count` to `compressed_segment_count`, and archived SQLite rows
+should keep locators instead of full duplicate JSON.
 
 ```sh
-node bin/codex-lcm cleanup --apply --json
+node bin/agent-lcm health --json
+node bin/agent-lcm maintain --once --json
 ```
 
-The apply step rebuilds full-text search from user prompts, notes, outcomes,
-compaction summaries, and explicit suggestion-audit events. It clears the old
-duplicate event-text column, refreshes deterministic summaries, and runs
-`VACUUM` so SQLite can return unused pages to disk. Close other Codex sessions
-first if SQLite reports that the database is busy. Set `CODEX_LCM_HOME` when
-cleaning a non-default LCM home.
+`migration_state`, `active_bytes`, `archive_bytes`, and the segment counts show
+maintenance progress. Do not remove `segments/legacy.jsonl` when migration
+reports an error; it remains the source for any quarantined record.
 
-## Retention and automatic migration
-
-Codex LCM keeps raw history forever by default. To set a limit, create
-`~/.codex-lcm/.env` with one positive whole number:
+Raw history is unlimited by default. To expire closed source segments, create
+`~/.agent-lcm/.env`:
 
 ```dotenv
-CODEX_LCM_RETENTION_DAYS=90
+AGENT_LCM_RETENTION_DAYS=90
 ```
 
-A process-level value overrides the file. Check `config_error` in `health
---json` if deletion does not run. Finite retention removes exact old event
-sources after the cutoff, but keeps session and summary records.
+A process environment value overrides the file. Invalid values appear as
+`config_error` and block deletion.
 
-An upgraded store migrates without a manual command. `migration_state` reports
-`pending`, `complete`, or `error`; `plain_segment_count`,
-`compressed_segment_count`, and `archive_bytes` show its progress. Do not remove
-`segments/legacy.jsonl` when migration reports an error because it remains the
-forensic source for any quarantined record.
+## The SQLite index is much larger than expected
 
-## Node Warnings
-
-The implementation uses Node 22's `node:sqlite`. Test and smoke scripts run with `--no-warnings` so experimental runtime warnings do not interfere with MCP stdout parsing.
-
-## Plugin Validation And Tests
-
-The plugin-creator validator may require Python dependencies such as PyYAML. If
-it is unavailable, validate the JSON files directly and run:
+Preview derived-index cleanup:
 
 ```sh
+node bin/agent-lcm cleanup --json
+```
+
+If the preview is sound, apply it:
+
+```sh
+node bin/agent-lcm cleanup --apply --json
+```
+
+Cleanup rebuilds high-signal FTS rows, clears old duplicate event text, refreshes
+summaries, and vacuums SQLite. It preserves retained raw sources. Stop other
+work against the store if SQLite reports that the database is busy.
+
+## Development checks
+
+```sh
+npm run typecheck
 npm test
 npm run smoke
-npm --cache /tmp/codex-lcm-npm-cache pack --dry-run
+npm pack --dry-run
 ```
+
+Node's built-in SQLite module may emit an experimental warning on supported Node
+22 releases. Project commands use `--no-warnings` where that warning could
+interfere with MCP stdout.

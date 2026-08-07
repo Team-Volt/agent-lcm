@@ -46,7 +46,7 @@ export function buildDoctorReport(args: {
       booleanValue(args.status.recall_skill_available),
       "The lcm-recall skill is available.",
       "The lcm-recall skill is missing from the plugin root.",
-      "Reinstall the plugin with `codex plugin add agent-lcm@agent-lcm`.",
+      "Reinstall the Agent LCM plugin through this harness, then restart it.",
     ),
     check(
       "storage-index",
@@ -63,7 +63,7 @@ export function buildDoctorReport(args: {
       args.health.event_count > 0,
       `${args.health.event_count} events are indexed.`,
       "No LCM events are indexed yet.",
-      "Start a new harness session after installing hooks, or run `agent-lcm import-codex-sessions` to backfill existing sessions.",
+      "Start a new harness session after installing hooks, or run `agent-lcm import --all` to backfill existing sessions.",
     ),
     check(
       "daemon",
