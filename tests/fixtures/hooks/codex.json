@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "codex-fixture",
+  "cwd": "/tmp/codex-fixture",
+  "prompt": "codex capture"
+}

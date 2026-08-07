@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "cursor-fixture",
+  "cwd": "/tmp/cursor-fixture",
+  "prompt": "cursor capture"
+}

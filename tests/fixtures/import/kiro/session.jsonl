@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"kiro-import","update":{"sessionUpdate":"AgentMessageChunk","content":{"type":"text","text":"kiro import response"}}}}
+{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"kiro-import","update":{"sessionUpdate":"ToolCall","toolCallId":"tool-1","title":"readFile","rawInput":{"path":"/tmp/kiro-import"}}}}
+{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"kiro-import","update":{"sessionUpdate":"TurnEnd"}}}
