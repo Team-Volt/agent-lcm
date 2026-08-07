@@ -84,12 +84,15 @@ function mergeFlatConfiguration(
     throw invalidConfiguration(target);
   }
   for (const [event, captureEvent] of setupEvents(harness)) {
-    const expected = takeAgentLcmHook(configuration.hooks, harness, event) ?? {};
-    if (harness !== "cursor") expected.type = "command";
-    expected.command = captureCommand(command, setupCaptureHarness(harness), captureEvent);
+    const expectedHooks = takeAgentLcmHooks(configuration.hooks, harness, event);
+    if (expectedHooks.length === 0) expectedHooks.push({});
+    for (const expected of expectedHooks) {
+      if (harness !== "cursor") expected.type = "command";
+      expected.command = captureCommand(command, setupCaptureHarness(harness), captureEvent);
+    }
     const hooks = configuration.hooks[event] as Record<string, unknown>[] | undefined;
-    if (hooks === undefined) configuration.hooks[event] = [expected];
-    else hooks.push(expected);
+    if (hooks === undefined) configuration.hooks[event] = expectedHooks;
+    else hooks.push(...expectedHooks);
   }
   return configuration;
 }
@@ -135,19 +138,19 @@ function setupCaptureHarness(harness: CaptureHarness): CaptureHarness | "auto" {
   return isSharedHookHarness(harness) ? "auto" : harness;
 }
 
-function takeAgentLcmHook(
+function takeAgentLcmHooks(
   hooksByEvent: Record<string, unknown>,
   harness: "cursor" | "vscode" | "copilot",
   event: string,
-): Record<string, unknown> | undefined {
-  let found: Record<string, unknown> | undefined;
+): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = [];
   const candidates = isSharedHookHarness(harness) ? [event, sharedLegacyEvent(event)] : [event];
   for (const candidate of candidates) {
     const hooks = hooksByEvent[candidate];
     if (!Array.isArray(hooks)) continue;
     const kept = hooks.filter((hook) => {
       if (!isRecord(hook) || !isAgentLcmHook(hook, candidate, harness)) return true;
-      found ??= hook;
+      found.push(hook);
       return false;
     });
     if (kept.length === 0) delete hooksByEvent[candidate];

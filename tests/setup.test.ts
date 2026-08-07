@@ -109,6 +109,12 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
           timeout: 45,
           metadata: { keep: true },
         },
+        {
+          type: "command",
+          command: "\"/older-location/bin/agent-lcm\" capture --harness copilot UserPromptSubmit",
+          timeout: 60,
+          metadata: { keep: "duplicate" },
+        },
         { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
       ],
       sessionStart: [{ type: "command", command: "other-hook", timeout: 30 }],
@@ -138,6 +144,12 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
     command: 'node "/new-location/bin/agent-lcm" capture --harness auto userPromptSubmitted',
     timeout: 45,
     metadata: { keep: true },
+  });
+  assert.deepEqual(configuration.hooks.userPromptSubmitted[1], {
+    type: "command",
+    command: 'node "/new-location/bin/agent-lcm" capture --harness auto userPromptSubmitted',
+    timeout: 60,
+    metadata: { keep: "duplicate" },
   });
   assert.deepEqual(configuration.hooks.customEvent, [{ type: "command", command: "custom-hook", custom: true }]);
   assert.deepEqual(configuration.hooks.customCaptureEvent, [{

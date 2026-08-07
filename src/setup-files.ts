@@ -33,7 +33,6 @@ export function writeSetupConfiguration(target: string, configuration: Record<st
     fs.closeSync(descriptor);
   }
   fs.renameSync(temporary, target);
-  fs.chmodSync(target, 0o600);
 }
 
 export function backupSetupConfiguration(target: string): void {
