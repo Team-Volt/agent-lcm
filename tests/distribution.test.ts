@@ -127,7 +127,22 @@ test("the packed CLI runs outside the checkout and sets up every harness", (t) =
   const version = runInstalled(["--version"]);
   assert.equal(version.status, 0, version.stderr);
   assert.equal(version.stdout.trim(), readJson("package.json").version);
-  const mcp = runInstalled(["mcp"], `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })}\n`);
+  const packageRoot = path.join(
+    prefix,
+    ...(process.platform === "win32" ? [] : ["lib"]),
+    "node_modules",
+    "@team-volt",
+    "agent-lcm",
+  );
+  const mcpConfiguration = JSON.parse(fs.readFileSync(path.join(packageRoot, "mcp.json"), "utf8"))
+    .mcpServers["agent-lcm"] as { command: string; args: string[] };
+  const mcp = spawnSync(mcpConfiguration.command, mcpConfiguration.args.map((arg) => arg.replaceAll("${PLUGIN_ROOT}", packageRoot)), {
+    cwd: packageRoot,
+    encoding: "utf8",
+    env,
+    input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })}\n`,
+    timeout: 15_000,
+  });
   assert.equal(mcp.status, 0, mcp.stderr);
   assert.equal(JSON.parse(mcp.stdout).result.serverInfo.version, readJson("package.json").version);
   const importRoot = path.join(root, "empty-codex-sessions");
@@ -144,6 +159,16 @@ test("the packed CLI runs outside the checkout and sets up every harness", (t) =
     ".copilot/hooks/agent-lcm.json",
     ".kiro/hooks/agent-lcm.json",
   ]) assert.equal(fs.existsSync(path.join(home, relative)), true, `missing ${relative}`);
+  const codexHooks = JSON.parse(fs.readFileSync(path.join(home, ".codex/hooks/agent-lcm.json"), "utf8"));
+  const capture = spawnSync(codexHooks.hooks.UserPromptSubmit[0].command, {
+    cwd: root,
+    encoding: "utf8",
+    env,
+    input: JSON.stringify({ session_id: "distribution-session", cwd: root, prompt: "capture from installed hook" }),
+    shell: true,
+    timeout: 15_000,
+  });
+  assert.equal(capture.status, 0, capture.stderr);
   const daemon = runInstalled(["daemon", "start", "--json"]);
   assert.equal(daemon.status, 0, daemon.stderr);
   assert.equal(JSON.parse(daemon.stdout).running, true);

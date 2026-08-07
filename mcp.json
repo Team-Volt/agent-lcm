@@ -3,8 +3,8 @@
   "mcpServers": {
     "agent-lcm": {
       "type": "stdio",
-      "command": "./bin/agent-lcm",
-      "args": ["mcp"]
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"]
     }
   }
 }

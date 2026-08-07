@@ -27,7 +27,7 @@ test("Kiro setup uses the native array schema, is repeatable, and leaves sibling
   assert.deepEqual(configuration.hooks[0], {
     name: "agent-lcm-kiro-SessionStart",
     trigger: "SessionStart",
-    action: { type: "command", command: "\"/opt/agent-lcm/bin/agent-lcm\" capture --harness kiro SessionStart" },
+    action: { type: "command", command: "node \"/opt/agent-lcm/bin/agent-lcm\" capture --harness kiro SessionStart" },
   });
 });
 
@@ -67,7 +67,10 @@ test("Copilot and VS Code converge on one lower-camel shared user hook configura
   const configuration = JSON.parse(fs.readFileSync(copilot.path, "utf8"));
   assert.equal(configuration.version, 1);
   assert.equal(configuration.hooks.userPromptSubmitted[0].type, "command");
-  assert.match(configuration.hooks.userPromptSubmitted[0].command, /--harness auto userPromptSubmitted$/u);
+  assert.equal(
+    configuration.hooks.userPromptSubmitted[0].command,
+    'node "/opt/agent-lcm/bin/agent-lcm" capture --harness auto userPromptSubmitted',
+  );
   assert.deepEqual(Object.keys(configuration.hooks).sort(), ["postToolUse", "sessionEnd", "sessionStart", "userPromptSubmitted"]);
   assert.equal(setupStatus({ home: clientHome }).copilot.configured, true);
   assert.equal(setupStatus({ home: clientHome }).vscode.configured, true);
@@ -101,7 +104,7 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
     { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
   ]);
   assert.equal(configuration.hooks.sessionStart[0].command, "other-hook");
-  assert.equal(configuration.hooks.sessionStart[1].command, "\"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
+  assert.equal(configuration.hooks.sessionStart[1].command, "node \"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
 });
 
 test("Codex setup replaces its old Agent LCM commands and preserves unrelated hooks", () => {
@@ -123,7 +126,7 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
   assert.equal(second.changed, false);
   assert.deepEqual(configuration.hooks.SessionStart, [
     { type: "command", command: "other-hook" },
-    { type: "command", command: "\"/new/bin/agent-lcm\" capture --harness codex SessionStart" },
+    { type: "command", command: "node \"/new/bin/agent-lcm\" capture --harness codex SessionStart" },
   ]);
 });
 
@@ -139,7 +142,7 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
 
   setupHarness("kiro", { home: clientHome, command: "/new/bin/agent-lcm" });
   const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
-  assert.equal(configuration.hooks[0].action.command, "\"/new/bin/agent-lcm\" capture --harness kiro SessionStart");
+  assert.equal(configuration.hooks[0].action.command, "node \"/new/bin/agent-lcm\" capture --harness kiro SessionStart");
 });
 
 test("setup rejects shell-sensitive binary paths before writing a hook file", () => {

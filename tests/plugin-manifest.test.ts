@@ -12,8 +12,8 @@ test("root is an Agent Plugins 1.0 package", () => {
   assert.equal(mcp.$schema, "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json");
   assert.deepEqual(mcp.mcpServers["agent-lcm"], {
     type: "stdio",
-    command: "./bin/agent-lcm",
-    args: ["mcp"],
+    command: "node",
+    args: ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
   });
 });
 

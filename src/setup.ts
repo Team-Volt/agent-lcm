@@ -149,7 +149,7 @@ function kiroHook(command: string, event: string): KiroHook {
 }
 
 function captureCommand(command: string, harness: CaptureHarness | "auto", event: string): string {
-  return `"${command}" capture --harness ${harness} ${event}`;
+  return `node "${command}" capture --harness ${harness} ${event}`;
 }
 
 function assertSafeCommand(command: string): void {
@@ -206,7 +206,7 @@ function isExpectedCommandHook(value: unknown, harness: CaptureHarness | "auto",
 
 function isAgentLcmHook(value: Record<string, unknown>, event: string, harness: Exclude<CaptureHarness, "kiro">): boolean {
   if (value.type !== "command" || typeof value.command !== "string") return false;
-  const match = /^"(?:[^"\\/]*[\\/])*agent-lcm(?:\.exe)?" capture --harness (auto|codex|cursor|copilot|vscode) (sessionStart|userPromptSubmitted|postToolUse|sessionEnd|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
+  const match = /^(?:node )?"(?:[^"\\/]*[\\/])*agent-lcm(?:\.(?:cmd|exe))?" capture --harness (auto|codex|cursor|copilot|vscode) (sessionStart|userPromptSubmitted|postToolUse|sessionEnd|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
     .exec(value.command);
   if (match?.[2] !== event) return false;
   return isSharedHookHarness(harness)
@@ -244,11 +244,12 @@ function isKiroHook(value: unknown): value is KiroHook {
 
 function isCaptureCommand(value: unknown, harness: CaptureHarness | "auto", event: string): boolean {
   if (typeof value !== "string") return false;
+  const prefix = 'node "';
   const suffix = ` capture --harness ${harness} ${event}`;
-  if (!value.startsWith("\"") || !value.endsWith(suffix)) return false;
+  if (!value.startsWith(prefix) || !value.endsWith(suffix)) return false;
   const quoteEnd = value.length - suffix.length - 1;
   if (value[quoteEnd] !== "\"") return false;
-  const command = value.slice(1, quoteEnd);
+  const command = value.slice(prefix.length, quoteEnd);
   try {
     assertSafeCommand(command);
     return true;
