@@ -33,7 +33,6 @@ test("the npm package contains the complete plugin and no development files", (t
     "plugin.json",
     "skills/lcm-recall/SKILL.md",
     "dist/cli.js",
-    "src/cli.ts",
   ]) assert.ok(names.includes(required), `missing ${required}`);
   assert.equal(names.some((name) => /^(?:\.github|docs|scripts|tests)\//u.test(name)), false);
   assert.equal(fs.existsSync(path.join(root, filename)), true);

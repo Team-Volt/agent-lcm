@@ -1,0 +1,432 @@
+import { decodePersistedEvent } from "./event-codec.js";
+import { overflowReferenceFromEvent, searchOverflowContent } from "./overflow.js";
+import { readRawEvents } from "./raw-log.js";
+import { parseStringArray, recordValue, rowToSessionSummary } from "./storage-rows.js";
+import { STORED_EVENT_JSON_SQL } from "./stored-event.js";
+import { getCurrentStoredSession, summarizeSessions } from "./storage-sessions.js";
+export { searchSummaryNodes } from "./storage-summaries.js";
+import { harnessSet, harnessSqlFragment, matchesHarness } from "./storage-types.js";
+import { eventSignalText, isGeneratedSuggestionEvent, isSummarySourceEvent, matchesQueryText, queryTermHitCount, toFtsQueries } from "./summary.js";
+const MAX_OVERFLOW_SEARCH_BYTES = 64 * 1024 * 1024;
+const MAX_OVERFLOW_SEARCH_REFERENCES = 4_096;
+function rankSessionRows(rows, query) {
+    const evidenceRows = strongestSessionEvidenceRows(rows, query);
+    const sessions = new Map();
+    evidenceRows.forEach((row, order) => {
+        const record = recordValue(row);
+        const sessionId = String(record.session_id);
+        const matchAt = String(record.match_timestamp ?? record.last_seen ?? "");
+        const matchText = typeof record.match_text === "string" ? record.match_text : "";
+        const weight = typeof record.match_weight === "number" ? record.match_weight : 1;
+        const rowScore = queryTermHitCount(matchText, query) * weight;
+        const bestMatch = rowToSessionSearchMatch(record, query, rowScore);
+        const existing = sessions.get(sessionId);
+        if (!existing) {
+            sessions.set(sessionId, {
+                summary: rowToSessionSummary(row),
+                score: rowScore,
+                matchCount: 1,
+                lastMatchAt: matchAt,
+                firstOrder: order,
+                bestMatch,
+            });
+            return;
+        }
+        existing.score += rowScore;
+        existing.matchCount += 1;
+        if (matchAt > existing.lastMatchAt)
+            existing.lastMatchAt = matchAt;
+        if (bestMatch && (!existing.bestMatch || compareSearchMatches(bestMatch, existing.bestMatch) < 0)) {
+            existing.bestMatch = bestMatch;
+        }
+    });
+    return [...sessions.values()]
+        .map((entry) => ({
+        ...entry,
+        discovery: sessionDiscovery(entry, query),
+    }))
+        .sort((a, b) => b.discovery.score - a.discovery.score ||
+        b.score - a.score ||
+        (b.bestMatch?.score ?? 0) - (a.bestMatch?.score ?? 0) ||
+        b.matchCount - a.matchCount ||
+        b.lastMatchAt.localeCompare(a.lastMatchAt) ||
+        a.firstOrder - b.firstOrder)
+        .map((entry) => ({
+        ...entry.summary,
+        match_count: entry.matchCount,
+        ...(entry.bestMatch ? { best_match: entry.bestMatch } : {}),
+        discovery: entry.discovery,
+    }));
+}
+function strongestSessionEvidenceRows(rows, query) {
+    const scores = new Map();
+    for (const row of rows) {
+        const record = recordValue(row);
+        const kind = searchMatchKind(record.match_kind);
+        if (!kind)
+            continue;
+        const sessionId = String(record.session_id);
+        const sessionScores = scores.get(sessionId) ?? new Map();
+        const evidence = sessionScores.get(kind) ?? { score: 0, matchCount: 0 };
+        const matchText = typeof record.match_text === "string" ? record.match_text : "";
+        const weight = typeof record.match_weight === "number" ? record.match_weight : 1;
+        evidence.score += queryTermHitCount(matchText, query) * weight;
+        evidence.matchCount += 1;
+        sessionScores.set(kind, evidence);
+        scores.set(sessionId, sessionScores);
+    }
+    const selectedKinds = new Map();
+    for (const [sessionId, sessionScores] of scores) {
+        const selected = [...sessionScores.entries()].sort((left, right) => right[1].score - left[1].score ||
+            right[1].matchCount - left[1].matchCount ||
+            searchMatchKindWeight(right[0]) - searchMatchKindWeight(left[0]))[0];
+        if (selected)
+            selectedKinds.set(sessionId, selected[0]);
+    }
+    return rows.filter((row) => {
+        const record = recordValue(row);
+        return selectedKinds.get(String(record.session_id)) === searchMatchKind(record.match_kind);
+    });
+}
+function sessionDiscovery(entry, query) {
+    let score = entry.score;
+    const reasons = [];
+    const match = entry.bestMatch;
+    if (match?.kind === "summary_node") {
+        score += 10;
+        reasons.push("summary-node match");
+    }
+    else if (match?.kind === "session_summary") {
+        score += 6;
+        reasons.push("session-summary match");
+    }
+    else if (match?.kind === "event") {
+        reasons.push("raw-event match");
+    }
+    const sourceEventCount = match?.source_event_count ?? 0;
+    if (sourceEventCount >= 4) {
+        score += 12;
+        reasons.push("source-rich summary");
+    }
+    else if (sourceEventCount >= 2) {
+        score += 6;
+        reasons.push("multiple source events");
+    }
+    const sourceTokenCount = match?.source_token_count ?? 0;
+    if (sourceTokenCount >= 600) {
+        score += 8;
+        reasons.push("substantive source text");
+    }
+    else if (sourceTokenCount >= 160) {
+        score += 4;
+        reasons.push("nontrivial source text");
+    }
+    if (entry.summary.event_count >= 8) {
+        score += 8;
+        reasons.push("longer session");
+    }
+    else if (entry.summary.event_count >= 3) {
+        score += 4;
+        reasons.push("multi-event session");
+    }
+    else if (entry.summary.event_count >= 2) {
+        score += 2;
+        reasons.push("prompt-outcome session");
+    }
+    if (entry.matchCount >= 2) {
+        score += Math.min(entry.matchCount, 4) * 2;
+        reasons.push("multiple matches");
+    }
+    if (isBroadDiscoveryQuery(query) && entry.summary.event_count <= 1) {
+        score -= 24;
+        reasons.push("tiny session penalty");
+    }
+    const confidence = score >= 34 ? "high" : score >= 18 ? "medium" : "low";
+    return {
+        confidence,
+        score,
+        reasons,
+    };
+}
+function isSearchDiscoveryRow(row, query) {
+    const record = recordValue(row);
+    if (searchMatchKind(record.match_kind) !== "event")
+        return true;
+    if (typeof record.match_text !== "string")
+        return true;
+    try {
+        return isSearchDiscoveryEvent(decodePersistedEvent(record.match_text), query);
+    }
+    catch {
+        return true;
+    }
+}
+function isSearchDiscoveryEvent(event, query) {
+    if (isGeneratedSuggestionEvent(event))
+        return isExplicitSuggestionQuery(query);
+    return isSummarySourceEvent(event);
+}
+function isExplicitSuggestionQuery(query) {
+    return /\b(hyperpersonalized|suggestion|suggestions)\b/iu.test(query);
+}
+function isBroadDiscoveryQuery(query) {
+    return discoveryQueryTermCount(query) >= 4;
+}
+function discoveryQueryTermCount(query) {
+    const terms = new Set();
+    for (const term of query.toLowerCase().split(/[^\p{L}\p{N}_-]+/u)) {
+        const normalized = term.replace(/^-+|-+$/gu, "");
+        if (normalized.length >= 3 || /[-_]/u.test(normalized) || /\d/u.test(normalized)) {
+            terms.add(normalized);
+        }
+    }
+    return terms.size;
+}
+function rowToSessionSearchMatch(record, query, score) {
+    const kind = searchMatchKind(record.match_kind);
+    if (!kind)
+        return undefined;
+    const text = searchMatchText(kind, record.match_text);
+    const snippet = bestMatchSnippet(text, query);
+    if (snippet.length === 0)
+        return undefined;
+    const topics = parseStringArray(record.match_topics_json);
+    const sourceEventCount = parseStringArray(record.match_source_event_ids_json).length;
+    const sourceTokenCount = Number(record.match_source_token_count ?? 0);
+    return {
+        kind,
+        snippet,
+        timestamp: String(record.match_timestamp ?? ""),
+        score,
+        ...(typeof record.match_node_id === "string" && record.match_node_id.length > 0 ? { node_id: record.match_node_id } : {}),
+        ...(typeof record.match_event_id === "string" && record.match_event_id.length > 0 ? { event_id: record.match_event_id } : {}),
+        ...(record.match_depth !== undefined ? { depth: Number(record.match_depth) } : {}),
+        ...(topics.length > 0 ? { topics: topics.slice(0, 12) } : {}),
+        ...(sourceEventCount > 0 ? { source_event_count: sourceEventCount } : {}),
+        ...(sourceTokenCount > 0 ? { source_token_count: sourceTokenCount } : {}),
+    };
+}
+function searchMatchKind(value) {
+    if (value === "summary_node" || value === "session_summary" || value === "event")
+        return value;
+    return undefined;
+}
+function searchMatchText(kind, value) {
+    if (typeof value !== "string")
+        return "";
+    if (kind !== "event")
+        return value;
+    try {
+        const event = decodePersistedEvent(value);
+        return eventSignalText(event) || `${event.hook_event}: ${JSON.stringify(event.payload)}`;
+    }
+    catch {
+        return value;
+    }
+}
+function compareSearchMatches(a, b) {
+    return b.score - a.score ||
+        searchMatchKindWeight(b.kind) - searchMatchKindWeight(a.kind) ||
+        b.timestamp.localeCompare(a.timestamp);
+}
+function searchMatchKindWeight(kind) {
+    if (kind === "summary_node")
+        return 3;
+    if (kind === "session_summary")
+        return 2;
+    return 1;
+}
+export function bestMatchSnippet(text, query, maxChars = 220) {
+    const compactText = compactWhitespace(text);
+    if (compactText.length === 0)
+        return "";
+    const scoredLines = text.split(/\r?\n/u)
+        .map(compactWhitespace)
+        .filter((line) => line.length > 0)
+        .map((line, index) => ({ line, index, hits: queryTermHitCount(line, query) }));
+    const candidates = scoredLines.some((line) => line.hits > 0 && !line.line.startsWith("Topics:"))
+        ? scoredLines.filter((line) => line.hits > 0 && !line.line.startsWith("Topics:"))
+        : scoredLines;
+    const bestLine = candidates
+        .sort((a, b) => b.hits - a.hits || a.index - b.index)[0]?.line ?? compactText;
+    return queryFocusedSnippet(bestLine, query, maxChars);
+}
+function queryFocusedSnippet(text, query, maxChars) {
+    const compact = compactWhitespace(text);
+    if (compact.length <= maxChars)
+        return compact;
+    const phrase = compactWhitespace(query).toLowerCase();
+    const matchIndex = compact.toLowerCase().indexOf(phrase);
+    if (matchIndex < 0 || maxChars < 10)
+        return truncateSnippet(compact, maxChars);
+    const contentLength = maxChars - 6;
+    const start = Math.max(0, Math.min(matchIndex - Math.floor(contentLength / 3), compact.length - contentLength));
+    const end = Math.min(compact.length, start + contentLength);
+    return `${start > 0 ? "..." : ""}${compact.slice(start, end)}${end < compact.length ? "..." : ""}`;
+}
+export function truncateSnippet(text, maxChars) {
+    const compact = compactWhitespace(text);
+    if (compact.length <= maxChars)
+        return compact;
+    return `${compact.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+export function compactWhitespace(text) {
+    return text.replace(/\s+/gu, " ").trim();
+}
+export function clampLimit(limit, fallback, max = 200) {
+    return Math.min(Math.max(Number(limit ?? fallback), 1), max);
+}
+export function positiveInteger(value, fallback) {
+    const parsed = Number(value ?? fallback);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+export function searchStoredSessions(db, rawLogPath, args) {
+    const limit = clampLimit(args.limit, 10);
+    const excludedSessionIds = excludedSearchSessionIds(db, rawLogPath, args);
+    if (!db) {
+        const query = args.query?.trim() ?? "";
+        const selectedHarnesses = harnessSet(args.harnesses);
+        return summarizeSessions(readRawEvents(rawLogPath)
+            .filter((event) => !args.cwd || event.cwd === args.cwd)
+            .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
+            .filter((event) => matchesHarness(event, selectedHarnesses))
+            .filter((event) => !excludedSessionIds.has(event.session_id))
+            .filter((event) => isSearchDiscoveryEvent(event, query))
+            .filter((event) => matchesQueryText(JSON.stringify(event), query)))
+            .slice(0, limit);
+    }
+    const query = args.query?.trim() ?? "";
+    if (query.length === 0) {
+        const searchLimit = excludedSessionIds.size > 0 ? Math.max(limit * 4, 20) : limit;
+        const harnessFilter = harnessSqlFragment("harness", args.harnesses, 4);
+        return db.prepare(`
+      SELECT *
+      FROM sessions
+      WHERE (?1 IS NULL OR cwd = ?1)
+        AND (?2 IS NULL OR repo_root = ?2)
+        ${harnessFilter.sql}
+      ORDER BY last_seen DESC
+      LIMIT ?3
+    `).all(args.cwd ?? null, args.repoRoot ?? null, searchLimit, ...harnessFilter.values)
+            .map(rowToSessionSummary)
+            .filter((session) => !excludedSessionIds.has(session.session_id))
+            .slice(0, limit);
+    }
+    let rows = [];
+    const harnessFilter = harnessSqlFragment("s.harness", args.harnesses, 5);
+    const eventStatement = db.prepare(`
+    SELECT s.*,
+           lcm_raw_json(e.raw_json, e.segment_id, e.raw_offset, e.raw_length) AS match_text,
+           e.timestamp AS match_timestamp, 1 AS match_weight,
+           'event' AS match_kind, e.event_id AS match_event_id
+    FROM event_fts f
+    JOIN events e ON e.event_id = f.event_id
+    JOIN sessions s ON s.session_id = e.session_id
+    WHERE event_fts MATCH ?1
+      AND (?2 IS NULL OR s.cwd = ?2)
+      AND (?3 IS NULL OR s.repo_root = ?3)
+      AND e.hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')
+      ${harnessFilter.sql}
+    ORDER BY bm25(event_fts) ASC, e.timestamp DESC
+    LIMIT ?4
+  `);
+    const summaryStatement = db.prepare(`
+    SELECT s.*,
+           ss.summary_text AS match_text, ss.updated_at AS match_timestamp, 3 AS match_weight,
+           'session_summary' AS match_kind, ss.topics_json AS match_topics_json,
+           ss.source_event_ids_json AS match_source_event_ids_json
+    FROM session_summary_fts f
+    JOIN session_summaries ss ON ss.session_id = f.session_id
+    JOIN sessions s ON s.session_id = ss.session_id
+    WHERE session_summary_fts MATCH ?1
+      AND (?2 IS NULL OR s.cwd = ?2)
+      AND (?3 IS NULL OR s.repo_root = ?3)
+      ${harnessFilter.sql}
+    ORDER BY bm25(session_summary_fts) ASC, ss.updated_at DESC
+    LIMIT ?4
+  `);
+    const summaryNodeStatement = db.prepare(`
+    SELECT s.*,
+           n.summary_text AS match_text, n.latest_at AS match_timestamp, 4 AS match_weight,
+           'summary_node' AS match_kind, n.node_id AS match_node_id, n.depth AS match_depth,
+           n.topics_json AS match_topics_json,
+           n.source_event_ids_json AS match_source_event_ids_json,
+           n.source_token_count AS match_source_token_count
+    FROM summary_node_fts f
+    JOIN summary_nodes n ON n.node_id = f.node_id
+    JOIN sessions s ON s.session_id = n.session_id
+    WHERE summary_node_fts MATCH ?1
+      AND (?2 IS NULL OR s.cwd = ?2)
+      AND (?3 IS NULL OR s.repo_root = ?3)
+      ${harnessFilter.sql}
+    ORDER BY bm25(summary_node_fts) ASC, n.depth DESC, n.latest_at DESC
+    LIMIT ?4
+  `);
+    for (const ftsQuery of toFtsQueries(query)) {
+        const candidateRows = [summaryNodeStatement, summaryStatement, eventStatement]
+            .flatMap((statement) => statement.all(ftsQuery, args.cwd ?? null, args.repoRoot ?? null, Math.max(limit * 20, 50), ...harnessFilter.values));
+        rows = candidateRows
+            .filter((row) => !excludedSessionIds.has(String(recordValue(row).session_id)))
+            .filter((row) => isSearchDiscoveryRow(row, query));
+        if (rows.length > 0)
+            break;
+    }
+    return rankSessionRows(rows, query).slice(0, limit);
+}
+export function searchStoredOverflow(db, rawLogPath, overflowDir, args) {
+    const limit = clampLimit(args.limit, 10, 50);
+    const selectedHarnesses = harnessSet(args.harnesses);
+    const events = db
+        ? db.prepare(`
+        SELECT ${STORED_EVENT_JSON_SQL} AS raw_json
+        FROM events
+        WHERE overflow_sha256 IS NOT NULL
+          AND (?1 IS NULL OR cwd = ?1)
+          AND (?2 IS NULL OR repo_root = ?2)
+          ${harnessSqlFragment("harness", args.harnesses, 4).sql}
+        ORDER BY timestamp DESC, rowid DESC
+        LIMIT ?3
+      `).all(args.cwd ?? null, args.repoRoot ?? null, MAX_OVERFLOW_SEARCH_REFERENCES, ...harnessSqlFragment("harness", args.harnesses, 4).values)
+            .map((row) => decodePersistedEvent(String(recordValue(row).raw_json)))
+        : readRawEvents(rawLogPath)
+            .filter((event) => !args.cwd || event.cwd === args.cwd)
+            .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
+            .filter((event) => matchesHarness(event, selectedHarnesses))
+            .reverse()
+            .slice(0, MAX_OVERFLOW_SEARCH_REFERENCES);
+    const matches = [];
+    let scannedBytes = 0;
+    for (const event of events) {
+        const reference = overflowReferenceFromEvent(event);
+        if (!reference)
+            continue;
+        if (scannedBytes >= MAX_OVERFLOW_SEARCH_BYTES)
+            break;
+        try {
+            const match = searchOverflowContent({
+                overflowDir,
+                reference,
+                query: args.query,
+                maxScanBytes: MAX_OVERFLOW_SEARCH_BYTES - scannedBytes,
+                onRead: (bytes) => { scannedBytes += bytes; },
+            });
+            if (match)
+                matches.push({ ...match, harness: event.harness });
+        }
+        catch {
+            continue;
+        }
+        if (matches.length >= limit)
+            break;
+    }
+    return matches;
+}
+function excludedSearchSessionIds(db, rawLogPath, args) {
+    const excluded = new Set(args.excludeSessionIds?.filter((sessionId) => sessionId.trim().length > 0) ?? []);
+    if (args.excludeCurrentSession) {
+        const currentSession = getCurrentStoredSession(db, rawLogPath, { cwd: args.cwd, repoRoot: args.repoRoot });
+        if (currentSession)
+            excluded.add(currentSession.session_id);
+    }
+    return excluded;
+}
