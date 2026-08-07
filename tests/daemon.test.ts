@@ -77,6 +77,31 @@ test("reuses one daemon and rejects authentication without touching queued or st
   assert.equal((await daemonStatus(config)).running, false);
 });
 
+test("stop waits until the daemon releases storage", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  const closeReady = path.join(config.home, "storage-close.ready");
+  const closeRelease = path.join(config.home, "storage-close.release");
+  const daemon = spawnFinalizeDaemon(config, { closeReady, closeRelease });
+  t.after(async () => {
+    touch(closeRelease);
+    if (daemon.exitCode === null) daemon.kill("SIGKILL");
+    await stopDaemon(config);
+  });
+  await waitUntil(async () => (await daemonStatus(config)).running);
+  publishInboxEvent(config, sampleEvent("stop owns storage until close"));
+  await daemonRequest(config, "drain", {});
+
+  let stopped = false;
+  const stopping = stopDaemon(config).then(() => { stopped = true; });
+  await waitUntil(async () => fs.existsSync(closeReady));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+
+  touch(closeRelease);
+  await stopping;
+  assert.equal(await waitForExit(daemon), 0);
+});
+
 test("uses a stable private short socket for long Agent LCM homes", async (t) => {
   if (process.platform === "win32") return;
   const longHome = path.join(tempHome("agent-lcm-very-long-home-"), "x".repeat(160));

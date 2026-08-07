@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig, pluginRoot, type LcmConfig } from "./config.ts";
 import { DAEMON_PROTOCOL_VERSION, daemonProtocolCompatible } from "./daemon-protocol.ts";
@@ -104,9 +105,23 @@ async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, t
   while (true) {
     const status = await daemonStatus(config);
     if (status.running && status.pid !== ownerPid) return;
-    if (!status.running) return;
+    if (!status.running && ownershipIsAvailable(config)) return;
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for the agent-lcm daemon at ${ipcAddress(config)}.`);
     await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+function ownershipIsAvailable(config: LcmConfig): boolean {
+  const database = new DatabaseSync(path.join(config.runtimeDir, "daemon.lock.sqlite"), { timeout: 0 });
+  try {
+    database.exec("BEGIN EXCLUSIVE");
+    database.exec("ROLLBACK");
+    return true;
+  } catch (error) {
+    if (error instanceof Error && (Reflect.get(error, "errcode") === 5 || Reflect.get(error, "errcode") === 6)) return false;
+    throw error;
+  } finally {
+    database.close();
   }
 }
 

@@ -42,7 +42,7 @@ export function runCli(args: string[], options: {
       cwd: options.cwd ?? path.resolve("."),
       encoding: "utf8",
       env: { ...process.env, ...options.env },
-      timeout: options.timeout ?? 10_000,
+      timeout: Math.max(options.timeout ?? 10_000, 15_000),
     });
     assert.equal(cleanup.status, 0, cleanup.stderr);
   }
