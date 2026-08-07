@@ -50,6 +50,13 @@ test("package and native plugin versions stay in sync", () => {
   assert.equal(readJson(".cursor-plugin/plugin.json").version, version);
 });
 
+test("the publish workflow passes the release tag to the shell as data", () => {
+  const workflow = fs.readFileSync(".github/workflows/publish.yml", "utf8");
+  assert.doesNotMatch(workflow, /run:.*\$\{\{\s*github\.event\.release\.tag_name\s*\}\}/u);
+  assert.match(workflow, /RELEASE_TAG: \$\{\{\s*github\.event\.release\.tag_name\s*\}\}/u);
+  assert.match(workflow, /npm run release:check -- "\$RELEASE_TAG"/u);
+});
+
 test("the release check rejects a tag that does not match the package", () => {
   const version = readJson("package.json").version;
   const valid = spawnSync("node", ["--no-warnings", "scripts/release.ts", "check", `v${version}`], {
