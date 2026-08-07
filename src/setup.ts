@@ -110,7 +110,9 @@ function mergeKiroConfiguration(existing: Record<string, unknown> | undefined, c
   const kiroHooks = hooks as KiroHook[];
   for (const event of eventsFor("kiro")) {
     const expected = kiroHook(command, event);
-    const index = kiroHooks.findIndex((hook) => hook.name === expected.name);
+    const index = kiroHooks.findIndex((hook) => hook.name === expected.name
+      && hook.trigger === event
+      && isAgentLcmHook(hook.action, event, "kiro"));
     if (index < 0) kiroHooks.push(expected);
     else kiroHooks[index] = expected;
   }
@@ -144,7 +146,7 @@ function removeAgentLcmHooks(
 ): void {
   for (const [event, hooks] of Object.entries(hooksByEvent)) {
     if (!Array.isArray(hooks) || !hooks.every(isRecord)) throw invalidConfiguration(target);
-    const kept = hooks.filter((hook) => !isAgentLcmHook(hook, harness));
+    const kept = hooks.filter((hook) => !isAgentLcmHook(hook, event, harness));
     if (kept.length === 0) delete hooksByEvent[event];
     else hooksByEvent[event] = kept;
   }
@@ -232,11 +234,14 @@ function isExpectedCommandHook(value: unknown, harness: CaptureHarness | "auto",
   return isRecord(value) && (value.type === undefined || value.type === "command") && isCaptureCommand(value.command, harness, event);
 }
 
-function isAgentLcmHook(value: Record<string, unknown>, harness: Exclude<CaptureHarness, "kiro">): boolean {
+function isAgentLcmHook(value: Record<string, unknown>, event: string, harness: CaptureHarness): boolean {
   if ((value.type !== undefined && value.type !== "command") || typeof value.command !== "string") return false;
-  const match = /^(?:node )?"(?:[^"\\/]*[\\/])*agent-lcm(?:\.(?:cmd|exe))?" capture --harness (auto|codex|cursor|copilot|vscode) (sessionStart|userPromptSubmitted|postToolUse|sessionEnd|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
+  const match = /^(?:node )?"(?:[^"\\/]*[\\/])*agent-lcm(?:\.(?:cmd|exe))?" capture --harness (auto|codex|cursor|copilot|vscode|kiro) (sessionStart|userPromptSubmitted|postToolUse|sessionEnd|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
     .exec(value.command);
-  if (!match) return false;
+  const captureEvent = harness === "cursor"
+    ? setupEvents("cursor").find(([hookEvent]) => hookEvent === event)?.[1]
+    : event;
+  if (!match || match[2] !== captureEvent) return false;
   return isSharedHookHarness(harness)
     ? match[1] === "auto" || match[1] === "copilot" || match[1] === "vscode"
     : match[1] === harness;
@@ -247,7 +252,7 @@ function hasSharedPascalRegistration(hooksByEvent: Record<string, unknown>): boo
     const hooks = hooksByEvent[event];
     return Array.isArray(hooks) && hooks.some((hook) => {
       if (!isRecord(hook) || hook.type !== "command" || typeof hook.command !== "string") return false;
-      return isAgentLcmHook(hook, "vscode");
+      return isAgentLcmHook(hook, event, "vscode");
     });
   });
 }

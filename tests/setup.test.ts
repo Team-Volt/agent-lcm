@@ -93,6 +93,11 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
       ],
       sessionStart: [{ type: "command", command: "other-hook", timeout: 30 }],
       customEvent: [{ type: "command", command: "custom-hook", custom: true }],
+      customCaptureEvent: [{
+        type: "command",
+        command: 'node "/opt/custom/agent-lcm" capture --harness vscode Stop',
+        owner: "user",
+      }],
     },
   }));
 
@@ -109,6 +114,11 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
   assert.deepEqual(configuration.hooks.sessionStart[0], { type: "command", command: "other-hook", timeout: 30 });
   assert.equal(configuration.hooks.sessionStart[1].command, "node \"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
   assert.deepEqual(configuration.hooks.customEvent, [{ type: "command", command: "custom-hook", custom: true }]);
+  assert.deepEqual(configuration.hooks.customCaptureEvent, [{
+    type: "command",
+    command: 'node "/opt/custom/agent-lcm" capture --harness vscode Stop',
+    owner: "user",
+  }]);
 });
 
 test("Codex setup replaces its old Agent LCM commands and preserves unrelated hooks", () => {
@@ -210,6 +220,12 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
       action: { type: "command", command: "other-command", timeout: 30 },
       custom: true,
     },
+    {
+      name: "agent-lcm-kiro-PostToolUse",
+      trigger: "PostToolUse",
+      action: { type: "command", command: "user-owned-command", timeout: 45 },
+      metadata: { owner: "user" },
+    },
   ] }));
 
   setupHarness("kiro", { home: clientHome, command: "/new/bin/agent-lcm" });
@@ -221,6 +237,12 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
     trigger: "Stop",
     action: { type: "command", command: "other-command", timeout: 30 },
     custom: true,
+  });
+  assert.deepEqual(configuration.hooks[2], {
+    name: "agent-lcm-kiro-PostToolUse",
+    trigger: "PostToolUse",
+    action: { type: "command", command: "user-owned-command", timeout: 45 },
+    metadata: { owner: "user" },
   });
 });
 
