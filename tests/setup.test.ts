@@ -103,7 +103,12 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
     owner: "user",
     hooks: {
       UserPromptSubmit: [
-        { type: "command", command: "\"/old-location/bin/agent-lcm\" capture --harness vscode UserPromptSubmit" },
+        {
+          type: "command",
+          command: "\"/old-location/bin/agent-lcm\" capture --harness vscode UserPromptSubmit",
+          timeout: 45,
+          metadata: { keep: true },
+        },
         { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
       ],
       sessionStart: [{ type: "command", command: "other-hook", timeout: 30 }],
@@ -128,6 +133,12 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
   ]);
   assert.deepEqual(configuration.hooks.sessionStart[0], { type: "command", command: "other-hook", timeout: 30 });
   assert.equal(configuration.hooks.sessionStart[1].command, "node \"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
+  assert.deepEqual(configuration.hooks.userPromptSubmitted[0], {
+    type: "command",
+    command: 'node "/new-location/bin/agent-lcm" capture --harness auto userPromptSubmitted',
+    timeout: 45,
+    metadata: { keep: true },
+  });
   assert.deepEqual(configuration.hooks.customEvent, [{ type: "command", command: "custom-hook", custom: true }]);
   assert.deepEqual(configuration.hooks.customCaptureEvent, [{
     type: "command",
@@ -275,7 +286,12 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
     {
       name: "agent-lcm-kiro-SessionStart",
       trigger: "SessionStart",
-      action: { type: "command", command: "\"/old/bin/agent-lcm\" capture --harness kiro SessionStart" },
+      action: {
+        type: "command",
+        command: "\"/old/bin/agent-lcm\" capture --harness kiro SessionStart",
+        timeout: 45,
+      },
+      metadata: { keep: true },
     },
     {
       name: "other-hook",
@@ -295,6 +311,8 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
   const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
   assert.equal(configuration.owner, "user");
   assert.equal(configuration.hooks[0].action.command, "node \"/new/bin/agent-lcm\" capture --harness kiro SessionStart");
+  assert.equal(configuration.hooks[0].action.timeout, 45);
+  assert.deepEqual(configuration.hooks[0].metadata, { keep: true });
   assert.deepEqual(configuration.hooks[1], {
     name: "other-hook",
     trigger: "Stop",

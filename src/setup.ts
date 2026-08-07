@@ -80,13 +80,16 @@ function mergeFlatConfiguration(
 ): Record<string, unknown> {
   const configuration = existing ? structuredClone(existing) : { version: 1, hooks: {} };
   if (configuration.version !== 1 || !isRecord(configuration.hooks)) throw invalidConfiguration(target);
-  removeAgentLcmHooks(configuration.hooks, harness, target);
+  if (!Object.values(configuration.hooks).every((hooks) => Array.isArray(hooks) && hooks.every(isRecord))) {
+    throw invalidConfiguration(target);
+  }
   for (const [event, captureEvent] of setupEvents(harness)) {
-    const hooks = configuration.hooks[event];
-    const expected = { ...(harness === "cursor" ? {} : { type: "command" }), command: captureCommand(command, setupCaptureHarness(harness), captureEvent) };
+    const expected = takeAgentLcmHook(configuration.hooks, harness, event) ?? {};
+    if (harness !== "cursor") expected.type = "command";
+    expected.command = captureCommand(command, setupCaptureHarness(harness), captureEvent);
+    const hooks = configuration.hooks[event] as Record<string, unknown>[] | undefined;
     if (hooks === undefined) configuration.hooks[event] = [expected];
-    else if (!Array.isArray(hooks) || !hooks.every(isRecord)) throw invalidConfiguration(target);
-    else if (!hooks.some((entry) => entry.command === expected.command)) hooks.push(expected);
+    else hooks.push(expected);
   }
   return configuration;
 }
@@ -104,7 +107,10 @@ function mergeKiroConfiguration(existing: Record<string, unknown> | undefined, c
       && hook.trigger === event
       && isAgentLcmHook(hook.action, event, "kiro"));
     if (index < 0) kiroHooks.push(expected);
-    else kiroHooks[index] = expected;
+    else {
+      kiroHooks[index].action.type = "command";
+      kiroHooks[index].action.command = expected.action.command;
+    }
   }
   return configuration;
 }
@@ -129,17 +135,34 @@ function setupCaptureHarness(harness: CaptureHarness): CaptureHarness | "auto" {
   return isSharedHookHarness(harness) ? "auto" : harness;
 }
 
-function removeAgentLcmHooks(
+function takeAgentLcmHook(
   hooksByEvent: Record<string, unknown>,
-  harness: Exclude<CaptureHarness, "kiro">,
-  target: string,
-): void {
-  for (const [event, hooks] of Object.entries(hooksByEvent)) {
-    if (!Array.isArray(hooks) || !hooks.every(isRecord)) throw invalidConfiguration(target);
-    const kept = hooks.filter((hook) => !isAgentLcmHook(hook, event, harness));
-    if (kept.length === 0) delete hooksByEvent[event];
-    else hooksByEvent[event] = kept;
+  harness: "cursor" | "vscode" | "copilot",
+  event: string,
+): Record<string, unknown> | undefined {
+  let found: Record<string, unknown> | undefined;
+  const candidates = isSharedHookHarness(harness) ? [event, sharedLegacyEvent(event)] : [event];
+  for (const candidate of candidates) {
+    const hooks = hooksByEvent[candidate];
+    if (!Array.isArray(hooks)) continue;
+    const kept = hooks.filter((hook) => {
+      if (!isRecord(hook) || !isAgentLcmHook(hook, candidate, harness)) return true;
+      found ??= hook;
+      return false;
+    });
+    if (kept.length === 0) delete hooksByEvent[candidate];
+    else hooksByEvent[candidate] = kept;
   }
+  return found;
+}
+
+function sharedLegacyEvent(event: string): string {
+  return ({
+    sessionStart: "SessionStart",
+    userPromptSubmitted: "UserPromptSubmit",
+    postToolUse: "PostToolUse",
+    sessionEnd: "Stop",
+  } as Record<string, string>)[event] ?? event;
 }
 
 function kiroHook(command: string, event: string): KiroHook {
