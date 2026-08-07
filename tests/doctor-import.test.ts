@@ -32,10 +32,10 @@ test("CLI storage commands use the daemon and daemon status controls its lifetim
     ["context-plan", "--session-id", "codex:cli-session", "--json"],
     ["cleanup", "--apply", "--json"],
   ]) {
-    const result = runCli(args, { env });
+    const result = runCli(args, { env, keepDaemon: true });
     assertCliOk(result);
   }
-  const health = JSON.parse(runCli(["health", "--json"], { env }).stdout);
+  const health = JSON.parse(runCli(["health", "--json"], { env, keepDaemon: true }).stdout);
   assert.equal(health.event_count, 1);
   const status = runCli(["daemon", "status", "--json"], { env });
   assertCliOk(status);

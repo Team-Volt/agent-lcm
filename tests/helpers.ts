@@ -25,6 +25,7 @@ export function runCli(args: string[], options: {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   timeout?: number;
+  keepDaemon?: boolean;
 } = {}) {
   const result = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", ...args], {
     cwd: path.resolve("."),
@@ -36,7 +37,7 @@ export function runCli(args: string[], options: {
     },
     timeout: options.timeout ?? 10_000,
   });
-  if (options.env?.AGENT_LCM_HOME && (args[0] === "mcp" || args[0] === "doctor" || args[0] === "import-codex-sessions")) {
+  if (options.env?.AGENT_LCM_HOME && args[0] !== "daemon" && !options.keepDaemon) {
     const cleanup = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "stop"], {
       cwd: options.cwd ?? path.resolve("."),
       encoding: "utf8",
