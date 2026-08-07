@@ -242,19 +242,25 @@ function booleanParam(value: unknown): boolean | undefined {
 }
 
 function drainStorageInbox(config: LcmConfig, storage: DaemonStorage, reportEventIds?: ReadonlySet<string>) {
+  const importedSessions = new Set<string>();
   const report = hasInboxItems(config)
     ? drainInbox(config, (event) => {
       const writer = writableStorage(config, storage);
+      if (reportEventIds) importedSessions.add(event.session_id);
       if (writer.hasEvent(event.event_id)) return "duplicate";
       writer.ingest(event);
       return "ingested";
     }, reportEventIds)
     : { ingested: 0, duplicates: 0, quarantined: 0 };
+  if (importedSessions.size > 0) storage.writer?.rebuildSessionMemorySummaries(importedSessions);
   maintainStorage(config, storage);
   return report;
 }
 
 function maintainStorage(config: LcmConfig, storage: DaemonStorage, force = false): unknown {
+  if (!fs.existsSync(config.manifestPath) && fs.existsSync(config.rawLogPath)) {
+    writableStorage(config, storage);
+  }
   if (!force && !maintenanceNeeded(config)) return undefined;
   storage.writer?.close();
   storage.writer = undefined;

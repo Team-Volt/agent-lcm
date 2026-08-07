@@ -189,24 +189,24 @@ test("raw-only scoped reads keep session data isolated", () => {
   const storage = createStorage({ home, readOnly: true });
   try {
     assert.equal(storage.health().index_available, false);
-    assert.deepEqual(storage.listSessions({ cwd: "/tmp/raw-api-a" }).sessions.map((session) => session.session_id), ["raw-api-a"]);
+    assert.deepEqual(storage.listSessions({ cwd: "/tmp/raw-api-a" }).sessions.map((session) => session.session_id), ["codex:raw-api-a"]);
     assert.deepEqual(
       storage.searchSessions({ query: "shared raw token", cwd: "/tmp/raw-api-a" }).map((session) => session.session_id),
-      ["raw-api-a"],
+      ["codex:raw-api-a"],
     );
-    assert.deepEqual(storage.getSession("raw-api-a").events.map((event) => event.session_id), ["raw-api-a"]);
+    assert.deepEqual(storage.getSession("codex:raw-api-a").events.map((event) => event.session_id), ["codex:raw-api-a"]);
     assert.deepEqual(
-      storage.getSessionGraph("raw-api-a").nodes.map((node) => node.session_id),
-      ["raw-api-a", "raw-api-a"],
+      storage.getSessionGraph("codex:raw-api-a").nodes.map((node) => node.session_id),
+      ["codex:raw-api-a", "codex:raw-api-a"],
     );
     const packed = storage.packContext({
-      sessionIds: ["raw-api-a"],
+      sessionIds: ["codex:raw-api-a"],
       query: "shared raw token",
       budgetTokens: 128,
     });
     assert.equal(packed.markdown.includes("RAW-API-A-ONLY"), true);
     assert.equal(packed.markdown.includes("RAW-API-B-ONLY"), false);
-    assert.deepEqual(packed.sources.map((source) => source.session_id), ["raw-api-a"]);
+    assert.deepEqual(packed.sources.map((source) => source.session_id), ["codex:raw-api-a"]);
   } finally {
     storage.close();
   }

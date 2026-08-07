@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { decodePersistedEvent } from "./event-codec.ts";
-import type { NormalizedEvent } from "./events.ts";
+import { HARNESS_NAMES, harnessSessionId, type NormalizedEvent } from "./events.ts";
 import { readRawEvents } from "./raw-log.ts";
 import { isRecord, recordValue, rowToSessionSummary } from "./storage-rows.ts";
 import { STORED_EVENT_JSON_SQL } from "./stored-event.ts";
@@ -109,7 +109,7 @@ export function extractSessionMetadata(event: NormalizedEvent): Partial<SessionS
     parentSessionId(importedMetadata) ||
     delegatedParentSessionId(event);
   return {
-    ...(inferredParentId ? { parent_session_id: inferredParentId } : {}),
+    ...(inferredParentId ? { parent_session_id: namespacedRelatedSessionId(event, inferredParentId) } : {}),
     ...(stringField(event.payload.agent_role) || stringField(importedMetadata?.agent_role)
       ? { agent_role: stringField(event.payload.agent_role) || stringField(importedMetadata?.agent_role) }
       : {}),
@@ -128,6 +128,12 @@ export function extractSessionMetadata(event: NormalizedEvent): Partial<SessionS
       : {}),
     ...(numberField(usage?.total_token_count) !== undefined ? { total_tokens: numberField(usage?.total_token_count) } : {}),
   };
+}
+
+function namespacedRelatedSessionId(event: NormalizedEvent, sessionId: string): string {
+  return HARNESS_NAMES.some((harness) => sessionId.startsWith(`${harness}:`))
+    ? sessionId
+    : harnessSessionId(event.harness, sessionId);
 }
 
 function delegatedParentSessionId(event: NormalizedEvent): string | undefined {

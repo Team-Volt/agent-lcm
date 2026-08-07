@@ -67,7 +67,7 @@ export function runMcp(requests: unknown[], env: NodeJS.ProcessEnv = {}) {
 }
 
 export function clearDerivedSummaries(home: string): void {
-  const db = new DatabaseSync(path.join(home, "index.sqlite"));
+  const db = new DatabaseSync(path.join(home, "index.sqlite"), { timeout: 5_000 });
   try {
     db.exec(`
       DELETE FROM summary_node_fts;

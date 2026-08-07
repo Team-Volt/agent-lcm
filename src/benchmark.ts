@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 
-import { normalizeHookEvent } from "./events.ts";
+import { harnessSessionId, normalizeHookEvent } from "./events.ts";
 import { createStorage } from "./storage.ts";
 
-const BENCHMARK_SESSION_ID = "agent-lcm-benchmark-long-context";
+const BENCHMARK_SESSION_ID = harnessSessionId("codex", "agent-lcm-benchmark-long-context");
 const BENCHMARK_CWD = "/tmp/agent-lcm-benchmark";
 const BENCHMARK_NEEDLE = "BENCHMARK-NEEDLE recursive evidence recovery source event";
 const BENCHMARK_QUERY = "BENCHMARK-NEEDLE recursive evidence recovery";
@@ -205,13 +205,14 @@ export function runRetrievalQualityBenchmark(options: { home?: string } = {}): R
         cwd: RETRIEVAL_BENCHMARK_CWD,
         limit: 5,
       }).map((match) => match.session_id);
-      const index = topSessionIds.indexOf(entry.expectedSessionId);
+      const expectedSessionId = harnessSessionId("codex", entry.expectedSessionId);
+      const index = topSessionIds.indexOf(expectedSessionId);
       return {
         id: entry.id,
         category: entry.category,
         split: entry.split,
         query: entry.query,
-        expected_session_id: entry.expectedSessionId,
+        expected_session_id: expectedSessionId,
         rank: index < 0 ? null : index + 1,
         top_session_ids: topSessionIds,
       };

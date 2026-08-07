@@ -1902,7 +1902,7 @@ test("overflow search scans references older than the former fixed ceiling", () 
   const matches = storage.searchOverflow({ query: "overflow-beyond-ceiling-needle", limit: 1 });
 
   assert.equal(matches.length, 1);
-  assert.equal(matches[0].session_id, "overflow-ceiling-0");
+  assert.equal(matches[0].session_id, "codex:overflow-ceiling-0");
   storage.close();
 });
 
@@ -2068,10 +2068,10 @@ test("lists root and child sessions with stable cursor pagination", () => {
   const second = storage.listSessions({ since: "2026-07-14T12:00:00Z", limit: 1, cursor: first.next_cursor });
   const roots = storage.listSessions({ since: "2026-07-14T12:00:00Z", rootsOnly: true });
 
-  assert.deepEqual(first.sessions.map((session) => session.session_id), ["root-new"]);
+  assert.deepEqual(first.sessions.map((session) => session.session_id), ["codex:root-new"]);
   assert.equal(first.next_cursor, "1");
-  assert.deepEqual(second.sessions.map((session) => session.session_id), ["child"]);
-  assert.deepEqual(roots.sessions.map((session) => session.session_id), ["root-new", "root-old"]);
+  assert.deepEqual(second.sessions.map((session) => session.session_id), ["codex:child"]);
+  assert.deepEqual(roots.sessions.map((session) => session.session_id), ["codex:root-new", "codex:root-old"]);
   storage.close();
 });
 
@@ -2158,10 +2158,10 @@ test("infers child lineage from codex delegation prompts", () => {
     now,
   }));
 
-  const child = storage.listSessions({ parentSessionId: "delegation-root" }).sessions[0];
+  const child = storage.listSessions({ parentSessionId: "codex:delegation-root" }).sessions[0];
 
   assert.equal(child.session_id, "codex:delegated-child");
-  assert.equal(child.parent_session_id, "delegation-root");
+  assert.equal(child.parent_session_id, "codex:delegation-root");
   storage.close();
 });
 
@@ -2678,7 +2678,7 @@ test("search sessions explains the best summary-node match", () => {
   assert.equal(typeof match.best_match?.score, "number");
   assert.match(match.best_match?.snippet ?? "", /summary node snippets|source lineage/u);
   assert.equal(match.best_match?.topics?.includes("summary"), true);
-  assert.ok(match.best_match?.node_id?.startsWith("summary:discovery-session"));
+  assert.ok(match.best_match?.node_id?.startsWith("summary:codex:discovery-session"));
 
   storage.close();
 });

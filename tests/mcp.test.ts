@@ -389,7 +389,7 @@ test("MCP stats reports aggregate summary depth and graph counts", () => {
   assert.equal(stats.graph_edges_by_kind.summary_source, 11);
 });
 
-test("MCP stats reports daemon-rebuilt summaries", () => {
+test("MCP stats does not rebuild deleted summaries on a read", () => {
   const home = tempHome();
   const cwd = "/tmp/mcp-readonly-stats";
   for (let index = 0; index < 9; index += 1) {
@@ -421,8 +421,8 @@ test("MCP stats reports daemon-rebuilt summaries", () => {
 
   const stats = responses[1].result.structuredContent.stats;
   assert.equal(stats.event_count, 9);
-  assert.equal(stats.summary_count, 1);
-  assert.equal(stats.summary_node_count > 0, true);
+  assert.equal(stats.summary_count, 0);
+  assert.equal(stats.summary_node_count, 0);
   assert.equal(stats.index_error, undefined);
 });
 

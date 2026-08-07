@@ -12,6 +12,7 @@ import { daemonRequest, daemonStatus, ensureDaemon, stopDaemon } from "../src/da
 import { normalizeHookEvent } from "../src/events.ts";
 import { publishInboxEvent } from "../src/inbox.ts";
 import { ipcAddress, readOrCreateToken } from "../src/ipc.ts";
+import { readManifest } from "../src/raw-segments.ts";
 import { createStorage } from "../src/storage.ts";
 import { rawRequest, readJsonl, tempHome } from "./helpers.ts";
 
@@ -384,6 +385,62 @@ test("daemon tool requests use the daemon storage", async (t) => {
 
   assert.equal(result.structuredContent.health.event_count, 1);
   assert.equal(readJsonl(config.rawLogPath).length, 1);
+});
+
+test("daemon finalizes summaries after draining an import batch out of event order", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+  const compact = {
+    ...normalizeHookEvent({
+      hookEvent: "PostCompact",
+      rawInput: JSON.stringify({ session_id: "daemon-import-session", cwd: "/tmp/daemon", summary: "import outcome" }),
+      now: () => new Date("2026-08-06T12:00:02.000Z"),
+    }),
+    event_id: "0".repeat(64),
+  };
+  const prompt = {
+    ...normalizeHookEvent({
+      hookEvent: "UserPromptSubmit",
+      rawInput: JSON.stringify({ session_id: "daemon-import-session", cwd: "/tmp/daemon", prompt: "import request" }),
+      now: () => new Date("2026-08-06T12:00:00.000Z"),
+    }),
+    event_id: "1".repeat(64),
+  };
+  const tool = {
+    ...normalizeHookEvent({
+      hookEvent: "PreToolUse",
+      rawInput: JSON.stringify({ session_id: "daemon-import-session", cwd: "/tmp/daemon", tool_name: "late_import_tool" }),
+      now: () => new Date("2026-08-06T12:00:01.000Z"),
+    }),
+    event_id: "f".repeat(64),
+  };
+  for (const event of [tool, prompt, compact]) publishInboxEvent(config, event);
+
+  await daemonRequest(config, "drain", { eventIds: [tool.event_id, prompt.event_id, compact.event_id] });
+  const result = await daemonRequest<{ structuredContent: { matches: unknown[] } }>(config, "tool", {
+    name: "lcm_search_sessions",
+    arguments: { query: "late_import_tool" },
+  });
+
+  assert.equal(result.structuredContent.matches.length, 1);
+});
+
+test("daemon migrates and compresses a legacy raw store before serving requests", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  t.after(() => stopDaemon(config));
+  fs.mkdirSync(config.home, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(config.rawLogPath, `${JSON.stringify(sampleEvent("legacy daemon migration"))}\n`, { mode: 0o600 });
+
+  await ensureDaemon(config);
+  const health = await daemonRequest<{ structuredContent: { health: { event_count: number; compressed_segment_count: number } } }>(config, "tool", {
+    name: "lcm_health",
+    arguments: {},
+  });
+
+  assert.equal(health.structuredContent.health.event_count, 1);
+  assert.equal(health.structuredContent.health.compressed_segment_count, 1);
+  assert.equal(readManifest(config.manifestPath).migration?.complete, true);
 });
 
 test("read requests do not create or rebuild the derived store before capture", async (t) => {

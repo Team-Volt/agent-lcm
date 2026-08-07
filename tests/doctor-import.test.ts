@@ -66,7 +66,7 @@ test("doctor reports actionable recommendations for an unwired empty install", (
   });
   assert.equal(report.adapter_status.codex.configured, false);
   assert.equal(report.recommendations.some((text: string) => text.includes("Install the Agent LCM plugin")), true);
-  assert.equal(report.recommendations.some((text: string) => text.includes("import-codex-sessions")), true);
+  assert.equal(report.recommendations.some((text: string) => text.includes("import --all")), true);
 });
 
 test("import-codex-sessions dry-run counts importable records without writing storage", () => {
@@ -197,7 +197,7 @@ test("import-codex-sessions exposes child lineage, runtime metadata, usage, and 
     "sessions",
     "--since", "2026-07-14T13:59:00.000Z",
     "--until", "2026-07-14T14:01:00.000Z",
-    "--parent-session-id", "parent-session",
+    "--parent-session-id", "codex:parent-session",
     "--json",
   ], { env: { AGENT_LCM_HOME: home } });
   assertCliOk(listed);
@@ -210,7 +210,7 @@ test("import-codex-sessions exposes child lineage, runtime metadata, usage, and 
     last_seen: "2026-07-14T14:00:02.000Z",
     cwd: "/tmp/lineage",
     event_count: 3,
-    parent_session_id: "parent-session",
+    parent_session_id: "codex:parent-session",
     agent_role: "worker",
     agent_nickname: "Child Worker",
     model: "gpt-5.6-sol",
@@ -241,7 +241,7 @@ test("import-codex-sessions exposes child lineage, runtime metadata, usage, and 
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "lcm_list_sessions", arguments: { since: "2026-07-14T13:59:00.000Z", parentSessionId: "parent-session" } },
+      params: { name: "lcm_list_sessions", arguments: { since: "2026-07-14T13:59:00.000Z", parentSessionId: "codex:parent-session" } },
     },
     {
       jsonrpc: "2.0",
@@ -250,7 +250,7 @@ test("import-codex-sessions exposes child lineage, runtime metadata, usage, and 
       params: { name: "lcm_usage", arguments: { since: "2026-07-14T13:59:00.000Z" } },
     },
   ], { AGENT_LCM_HOME: home });
-  assert.equal(responses[1].result.structuredContent.page.sessions[0].parent_session_id, "parent-session");
+  assert.equal(responses[1].result.structuredContent.page.sessions[0].parent_session_id, "codex:parent-session");
   assert.equal(responses[2].result.structuredContent.usage.totals.total_tokens, 120);
 });
 
@@ -325,7 +325,7 @@ test("metadata backfill does not duplicate events imported by an older version",
   assertCliOk(listed);
   const [session] = JSON.parse(listed.stdout).sessions;
   assert.equal(session.event_count, 4);
-  assert.equal(session.parent_session_id, "parent-session");
+  assert.equal(session.parent_session_id, "codex:parent-session");
   assert.equal(session.agent_role, "worker");
   assert.equal(session.model, "gpt-5.6-sol");
   assert.equal(session.reasoning_effort, "high");
