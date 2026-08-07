@@ -78,17 +78,11 @@ function detectHarness(payload: Record<string, unknown> | undefined, nativeEvent
   if (!payload) throw new Error("Unable to determine harness from capture input; pass --harness explicitly.");
   const hasSnakeCaseSession = typeof payload.session_id === "string" && payload.session_id.trim().length > 0;
   const hasCamelCaseSession = typeof payload.sessionId === "string" && payload.sessionId.trim().length > 0;
-  if (hasSnakeCaseSession && !hasCamelCaseSession && startsUppercase(nativeEvent)) return "vscode";
-  if (hasCamelCaseSession && !hasSnakeCaseSession && startsLowercase(nativeEvent)) return "copilot";
+  const isVsCodeEvent = nativeEvent !== undefined && (EVENT_MAP.vscode[nativeEvent] !== undefined || VSCODE_ALIASES[nativeEvent] !== undefined);
+  const isCopilotEvent = nativeEvent !== undefined && EVENT_MAP.copilot[nativeEvent] !== undefined;
+  if (hasSnakeCaseSession && !hasCamelCaseSession && isVsCodeEvent) return "vscode";
+  if (hasCamelCaseSession && !hasSnakeCaseSession && isCopilotEvent) return "copilot";
   throw new Error("Unable to determine harness from capture input; pass --harness explicitly.");
-}
-
-function startsUppercase(value: string | undefined): boolean {
-  return typeof value === "string" && /^[A-Z]/u.test(value);
-}
-
-function startsLowercase(value: string | undefined): boolean {
-  return typeof value === "string" && /^[a-z]/u.test(value);
 }
 
 function recordInput(input: unknown): Record<string, unknown> | undefined {

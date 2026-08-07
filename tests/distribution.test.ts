@@ -176,6 +176,16 @@ test("the packed CLI runs outside the checkout and sets up every harness", (t) =
     timeout: 15_000,
   });
   assert.equal(capture.status, 0, capture.stderr);
+  const sharedHooks = JSON.parse(fs.readFileSync(path.join(home, ".copilot/hooks/agent-lcm.json"), "utf8"));
+  const vscodeCapture = spawnSync(sharedHooks.hooks.userPromptSubmitted[0].command, {
+    cwd: root,
+    encoding: "utf8",
+    env,
+    input: JSON.stringify({ session_id: "distribution-vscode-session", cwd: root, prompt: "capture from VS Code hook" }),
+    shell: true,
+    timeout: 15_000,
+  });
+  assert.equal(vscodeCapture.status, 0, vscodeCapture.stderr);
   const daemon = runInstalled(["daemon", "start", "--json"]);
   assert.equal(daemon.status, 0, daemon.stderr);
   assert.equal(JSON.parse(daemon.stdout).running, true);

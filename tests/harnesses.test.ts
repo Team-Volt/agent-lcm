@@ -34,6 +34,15 @@ test("explicit VS Code capture accepts its documented payload spelling", () => {
   assert.equal(event.hook_event, "UserPromptSubmit");
 });
 
+test("auto capture accepts VS Code events from the shared hook file", () => {
+  const event = mapHarnessEvent("auto", "userPromptSubmitted", {
+    session_id: "vscode-shared-hook",
+    cwd: "/tmp/vscode-shared-hook",
+  });
+  assert.equal(event.harness, "vscode");
+  assert.equal(event.hook_event, "UserPromptSubmit");
+});
+
 test("auto capture rejects input without an unambiguous client marker", () => {
   assert.throws(
     () => mapHarnessEvent("auto", "UserPromptSubmit", { conversationId: "ambiguous", cwd: "/tmp/ambiguous" }),
@@ -41,13 +50,9 @@ test("auto capture rejects input without an unambiguous client marker", () => {
   );
 });
 
-test("auto capture rejects mixed harness markers and event casing", () => {
+test("auto capture rejects mixed harness markers and unsupported event casing", () => {
   assert.throws(
     () => mapHarnessEvent("auto", "UserPromptSubmit", { session_id: "vscode", sessionId: "copilot" }),
-    /Unable to determine harness/u,
-  );
-  assert.throws(
-    () => mapHarnessEvent("auto", "userPromptSubmitted", { session_id: "vscode" }),
     /Unable to determine harness/u,
   );
   assert.throws(
