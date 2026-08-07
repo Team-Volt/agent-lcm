@@ -41,10 +41,48 @@ test("the npm package contains the complete plugin and no development files", (t
 });
 
 test("package and native plugin versions stay in sync", () => {
-  const version = readJson("package.json").version;
+  const packageJson = readJson("package.json");
+  const version = packageJson.version;
+  assert.equal(packageJson.name, "@team-volt/agent-lcm");
   assert.equal(readJson("plugin.json").version, version);
   assert.equal(readJson(".codex-plugin/plugin.json").version, version);
   assert.equal(readJson(".cursor-plugin/plugin.json").version, version);
+});
+
+test("the release check rejects a tag that does not match the package", () => {
+  const version = readJson("package.json").version;
+  const valid = spawnSync("node", ["--no-warnings", "scripts/release.ts", "check", `v${version}`], {
+    cwd: path.resolve("."), encoding: "utf8",
+  });
+  assert.equal(valid.status, 0, valid.stderr);
+
+  const invalid = spawnSync("node", ["--no-warnings", "scripts/release.ts", "check", "v9.9.9"], {
+    cwd: path.resolve("."), encoding: "utf8",
+  });
+  assert.notEqual(invalid.status, 0);
+});
+
+test("the release script updates every versioned package file", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-version-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const files = [
+    "package.json",
+    "package-lock.json",
+    "plugin.json",
+    ".codex-plugin/plugin.json",
+    ".cursor-plugin/plugin.json",
+  ];
+  for (const file of files) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.copyFileSync(file, path.join(root, file));
+  }
+
+  const result = spawnSync("node", ["--no-warnings", path.resolve("scripts/release.ts"), "set", "0.0.2"], {
+    cwd: root, encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  for (const file of files) assert.equal(readJson(path.join(root, file)).version, "0.0.2", file);
+  assert.equal(readJson(path.join(root, "package-lock.json")).packages[""].version, "0.0.2");
 });
 
 test("the Codex marketplace installs the repository-root plugin", () => {

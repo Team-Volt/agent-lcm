@@ -52,7 +52,7 @@ the component types each client currently loads.
 ## Install the CLI
 
 ```sh
-npm install --global agent-lcm
+npm install --global @team-volt/agent-lcm
 agent-lcm setup all
 ```
 
@@ -155,7 +155,7 @@ becomes the owner. Native plugin copies with the same daemon protocol will reuse
 it instead of replacing it:
 
 ```sh
-npm install --global agent-lcm@latest
+npm install --global @team-volt/agent-lcm@latest
 agent-lcm daemon stop
 agent-lcm daemon start
 ```
