@@ -63,10 +63,9 @@ npm install --global github:Team-Volt/agent-lcm
 agent-lcm setup all
 ```
 
-The npm package provides the stable `agent-lcm` command for setup, imports,
-diagnostics, and daemon administration. Native plugin copies remain
-self-contained, so a harness can capture and query sessions even when its
-plugin lives in a managed cache. Every copy uses the same `~/.agent-lcm` store;
+The npm package provides the stable `agent-lcm` command used by capture hooks,
+imports, diagnostics, and daemon administration. Native plugins provide MCP and
+skills from their managed caches. Every copy uses the same `~/.agent-lcm` store;
 you never need to find or reference a harness cache path.
 
 ## Install in each harness
@@ -109,8 +108,10 @@ command. Restart the harness after installation.
 
 ## Enable automatic capture
 
-`agent-lcm setup all` installs or repairs capture hooks for all supported
-harnesses. To configure only selected harnesses, run:
+`agent-lcm setup all` detects the harnesses installed under your home directory
+and installs or repairs hooks only for those harnesses. It does not create
+configuration directories for clients you do not use. To configure a harness
+that setup cannot detect, run its command directly:
 
 ```sh
 agent-lcm setup codex
@@ -123,14 +124,16 @@ agent-lcm setup kiro
 Run only the commands for the harnesses you use. VS Code and GitHub Copilot
 share `~/.copilot/hooks/agent-lcm.json`; either setup command installs the same
 auto-detecting hooks. Setup preserves unrelated hook entries, is safe to run
-again, and writes private files containing the absolute Agent LCM command.
+again, and writes private files containing the absolute Agent LCM command. If a
+target file already exists and needs changes, setup first saves a timestamped
+`-pre-agent-lcm-` backup beside it.
 
-The hook locations are:
+The user hook locations are:
 
 | Harness | Hook file |
 | --- | --- |
-| Codex | `~/.codex/hooks/agent-lcm.json` |
-| Cursor | `~/.cursor/hooks/agent-lcm.json` |
+| Codex | `~/.codex/hooks.json` |
+| Cursor | `~/.cursor/hooks.json` |
 | VS Code | `~/.copilot/hooks/agent-lcm.json` |
 | GitHub Copilot | `~/.copilot/hooks/agent-lcm.json` |
 | Kiro | `~/.kiro/hooks/agent-lcm.json` |

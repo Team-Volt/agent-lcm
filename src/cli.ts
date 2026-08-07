@@ -11,9 +11,8 @@ import type { CaptureHarness } from "./harnesses.ts";
 import { readStatus } from "./installer.ts";
 import { startMcpServer } from "./mcp.ts";
 import { packageVersion } from "./release.ts";
-import { setupHarness, setupStatus } from "./setup.ts";
-
-const SETUP_HARNESSES: CaptureHarness[] = ["codex", "cursor", "vscode", "copilot", "kiro"];
+import { setupHarness, setupStatus, type SetupReport } from "./setup.ts";
+import { detectedHarnesses } from "./setup-targets.ts";
 
 type DaemonCliParams =
   | { command: "health" | "stats" }
@@ -81,14 +80,17 @@ export async function main(argv: string[]): Promise<void> {
     const commandPath = path.resolve(process.argv[1] ?? path.join(pluginRoot(), "bin", "agent-lcm"));
     if (rest[0] === "all" || rest[0] === "--all") {
       if (optionValue(rest, "--home")) throw new Error("--home cannot be used with setup all.");
-      printObjectOrText(SETUP_HARNESSES.map((harness) => setupHarness(harness, { command: commandPath })));
+      printSetupReports(
+        detectedHarnesses().map((harness) => setupHarness(harness, { command: commandPath })),
+        rest.includes("--json"),
+      );
       return;
     }
     const harness = captureHarness(rest[0]);
-    printObjectOrText(setupHarness(harness, {
+    printSetupReports(setupHarness(harness, {
       home: optionValue(rest, "--home"),
       command: commandPath,
-    }));
+    }), rest.includes("--json"));
     return;
   }
   if (command === "daemon") {
@@ -293,4 +295,20 @@ function numberOptionValue(args: string[], flag: string): number | undefined {
 
 function printObjectOrText(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function printSetupReports(value: SetupReport | SetupReport[], json: boolean): void {
+  if (json) {
+    printObjectOrText(value);
+    return;
+  }
+  const reports = Array.isArray(value) ? value : [value];
+  if (reports.length === 0) {
+    process.stdout.write("No supported harnesses were detected. Configure one with agent-lcm setup <harness>.\n");
+    return;
+  }
+  for (const report of reports) {
+    const state = report.changed ? "have been configured" : "are already configured";
+    process.stdout.write(`${report.harness} hooks ${state}: ${report.path}\n`);
+  }
 }
