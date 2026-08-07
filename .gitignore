@@ -1,4 +1,5 @@
 node_modules/
+dist/
 .agent-lcm/
 .omo/
 **/docs/*plan*.md

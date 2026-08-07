@@ -12,11 +12,19 @@ hooks.json                    shared lower-camel hook shape for client adapters
 .codex-plugin/plugin.json     Codex native compatibility manifest
 .cursor-plugin/plugin.json    Cursor native compatibility manifest
 hooks/                        harness-specific hook manifests
+bin/agent-lcm                 source and npm CLI entry point
+dist/                         generated npm runtime
 ```
 
 Agent Plugins 1.0 standardizes skills and MCP servers. Hooks remain
 client-specific, so `agent-lcm setup <harness>` installs the matching capture
 configuration when a client does not load a bundled hook manifest.
+
+The npm package and each native plugin copy can start the same per-user daemon.
+Daemon protocol compatibility, not package release version, decides whether a
+running daemon can be reused. This prevents independently cached plugin versions
+from replacing one another while preserving orderly replacement for an
+incompatible protocol.
 
 ## Capture and retrieval flow
 

@@ -104,6 +104,44 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
   assert.equal(configuration.hooks.sessionStart[1].command, "\"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
 });
 
+test("Codex setup replaces its old Agent LCM commands and preserves unrelated hooks", () => {
+  const clientHome = tempHome("agent-lcm-codex-legacy-");
+  const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(setupPath), { recursive: true });
+  fs.writeFileSync(setupPath, JSON.stringify({ hooks: {
+    SessionStart: [
+      { type: "command", command: "\"/old/bin/agent-lcm\" capture --harness codex SessionStart" },
+      { type: "command", command: "other-hook" },
+    ],
+  } }));
+
+  const first = setupHarness("codex", { home: clientHome, command: "/new/bin/agent-lcm" });
+  const second = setupHarness("codex", { home: clientHome, command: "/new/bin/agent-lcm" });
+  const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
+
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+  assert.deepEqual(configuration.hooks.SessionStart, [
+    { type: "command", command: "other-hook" },
+    { type: "command", command: "\"/new/bin/agent-lcm\" capture --harness codex SessionStart" },
+  ]);
+});
+
+test("Kiro setup updates its owned hooks after a binary move", () => {
+  const clientHome = tempHome("agent-lcm-kiro-legacy-");
+  const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(setupPath), { recursive: true });
+  fs.writeFileSync(setupPath, JSON.stringify({ version: "v1", hooks: [{
+    name: "agent-lcm-kiro-SessionStart",
+    trigger: "SessionStart",
+    action: { type: "command", command: "\"/old/bin/agent-lcm\" capture --harness kiro SessionStart" },
+  }] }));
+
+  setupHarness("kiro", { home: clientHome, command: "/new/bin/agent-lcm" });
+  const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
+  assert.equal(configuration.hooks[0].action.command, "\"/new/bin/agent-lcm\" capture --harness kiro SessionStart");
+});
+
 test("setup rejects shell-sensitive binary paths before writing a hook file", () => {
   const clientHome = tempHome("agent-lcm-command-");
   const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");

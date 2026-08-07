@@ -3,9 +3,9 @@
 ## Start with doctor
 
 ```sh
-node bin/agent-lcm doctor --json
-node bin/agent-lcm setup status
-node bin/agent-lcm daemon status
+agent-lcm doctor --json
+agent-lcm setup status
+agent-lcm daemon status
 ```
 
 `doctor` checks Codex plugin wiring, the recall skill, the shared daemon, the
@@ -15,30 +15,27 @@ the harness hook files separately.
 ## The MCP server is missing
 
 An Agent Plugins client should discover `mcp.json` at the plugin root. Restart
-the harness after installing or refreshing the checkout.
+the harness after installing or updating the plugin.
 
 For manual MCP configuration, use a stdio server with an absolute path:
 
 ```json
 {
-  "command": "node",
-  "args": ["/absolute/path/to/agent-lcm/bin/agent-lcm", "mcp"]
+  "command": "agent-lcm",
+  "args": ["mcp"]
 }
 ```
 
-Run `node bin/agent-lcm --help` with the same Node installation if the server
-fails to start. Agent LCM requires Node 22.18 or newer.
+Run `agent-lcm --help` in a new terminal if the server fails to start. Agent LCM
+requires Node 22.18 or newer. GUI apps may not inherit your npm global `PATH`;
+prefer native plugin installation when that happens.
 
 ## Hooks are not capturing
 
 Install or repair the harness hook file, then restart the harness:
 
 ```sh
-node "$PWD/bin/agent-lcm" setup codex
-node "$PWD/bin/agent-lcm" setup cursor
-node "$PWD/bin/agent-lcm" setup vscode
-node "$PWD/bin/agent-lcm" setup copilot
-node "$PWD/bin/agent-lcm" setup kiro
+agent-lcm setup all
 ```
 
 Use only the harnesses you need. VS Code and GitHub Copilot share
@@ -51,9 +48,9 @@ will not run until the harness allows those hooks.
 Check whether events reach the queue and daemon:
 
 ```sh
-node bin/agent-lcm daemon start
-node bin/agent-lcm daemon status
-node bin/agent-lcm health --json
+agent-lcm daemon start
+agent-lcm daemon status
+agent-lcm health --json
 ```
 
 A nonzero `queue_depth` means capture succeeded but the daemon has not drained
@@ -65,9 +62,9 @@ queue records; inspect `~/.agent-lcm/quarantine/` before removing them.
 Use a temporary home so tests do not touch your normal store:
 
 ```sh
-AGENT_LCM_HOME=/private/tmp/agent-lcm-check node bin/agent-lcm daemon start
-AGENT_LCM_HOME=/private/tmp/agent-lcm-check node bin/agent-lcm health --json
-AGENT_LCM_HOME=/private/tmp/agent-lcm-check node bin/agent-lcm daemon stop
+AGENT_LCM_HOME=/private/tmp/agent-lcm-check agent-lcm daemon start
+AGENT_LCM_HOME=/private/tmp/agent-lcm-check agent-lcm health --json
+AGENT_LCM_HOME=/private/tmp/agent-lcm-check agent-lcm daemon stop
 ```
 
 `events.jsonl` and manifest-listed segments are the source of truth. If SQLite
@@ -80,9 +77,9 @@ Agent LCM uses an authenticated local endpoint plus a SQLite ownership lock.
 Independent starters should converge on one process.
 
 ```sh
-node bin/agent-lcm daemon status
-node bin/agent-lcm daemon stop
-node bin/agent-lcm daemon start
+agent-lcm daemon status
+agent-lcm daemon stop
+agent-lcm daemon start
 ```
 
 Do not delete runtime or lock files while `daemon status` reports a responsive
@@ -94,8 +91,8 @@ recovers stale metadata.
 Use a source path when the harness has no stable default export location:
 
 ```sh
-node bin/agent-lcm import --harness cursor /path/to/chat.md --dry-run
-node bin/agent-lcm import --harness vscode /path/to/export.json --dry-run
+agent-lcm import --harness cursor /path/to/chat.md --dry-run
+agent-lcm import --harness vscode /path/to/export.json --dry-run
 ```
 
 Codex defaults to `~/.codex/sessions`, GitHub Copilot to
@@ -112,8 +109,8 @@ The active raw log rotates at 64 MiB. Closed segments should move from
 should keep locators instead of full duplicate JSON.
 
 ```sh
-node bin/agent-lcm health --json
-node bin/agent-lcm maintain --once --json
+agent-lcm health --json
+agent-lcm maintain --once --json
 ```
 
 `migration_state`, `active_bytes`, `archive_bytes`, and the segment counts show
@@ -135,13 +132,13 @@ A process environment value overrides the file. Invalid values appear as
 Preview derived-index cleanup:
 
 ```sh
-node bin/agent-lcm cleanup --json
+agent-lcm cleanup --json
 ```
 
 If the preview is sound, apply it:
 
 ```sh
-node bin/agent-lcm cleanup --apply --json
+agent-lcm cleanup --apply --json
 ```
 
 Cleanup rebuilds high-signal FTS rows, clears old duplicate event text, refreshes

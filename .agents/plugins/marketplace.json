@@ -1,0 +1,20 @@
+{
+  "name": "agent-lcm",
+  "interface": {
+    "displayName": "Agent LCM"
+  },
+  "plugins": [
+    {
+      "name": "agent-lcm",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

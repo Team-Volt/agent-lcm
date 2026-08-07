@@ -10,7 +10,10 @@ import { runCapture, runHook } from "./hook.ts";
 import type { CaptureHarness } from "./harnesses.ts";
 import { readStatus } from "./installer.ts";
 import { startMcpServer } from "./mcp.ts";
+import { packageVersion } from "./release.ts";
 import { setupHarness, setupStatus } from "./setup.ts";
+
+const SETUP_HARNESSES: CaptureHarness[] = ["codex", "cursor", "vscode", "copilot", "kiro"];
 
 type DaemonCliParams =
   | { command: "health" | "stats" }
@@ -51,7 +54,7 @@ type DaemonCliParams =
 export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
   if (command === "--version" || command === "-v") {
-    process.stdout.write("0.1.0\n");
+    process.stdout.write(`${packageVersion()}\n`);
     return;
   }
   if (command === "--help" || command === "-h" || command === undefined) {
@@ -75,10 +78,16 @@ export async function main(argv: string[]): Promise<void> {
       printObjectOrText(setupStatus({ home: optionValue(rest, "--home") }));
       return;
     }
+    const commandPath = path.resolve(process.argv[1] ?? path.join(pluginRoot(), "bin", "agent-lcm"));
+    if (rest[0] === "all" || rest[0] === "--all") {
+      if (optionValue(rest, "--home")) throw new Error("--home cannot be used with setup all.");
+      printObjectOrText(SETUP_HARNESSES.map((harness) => setupHarness(harness, { command: commandPath })));
+      return;
+    }
     const harness = captureHarness(rest[0]);
     printObjectOrText(setupHarness(harness, {
       home: optionValue(rest, "--home"),
-      command: path.resolve(process.argv[1] ?? path.join(pluginRoot(), "bin", "agent-lcm")),
+      command: commandPath,
     }));
     return;
   }
@@ -237,6 +246,7 @@ Commands:
   agent-lcm mcp
   agent-lcm hook <event>
   agent-lcm capture --harness codex|cursor|vscode|copilot|kiro|auto [event]
+  agent-lcm setup all
   agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]
   agent-lcm setup status
   agent-lcm status [--codex-home PATH] [--json]

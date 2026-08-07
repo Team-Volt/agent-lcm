@@ -48,47 +48,71 @@ the component types each client currently loads.
 ## Requirements
 
 - Node.js 22.18 or newer
-- A local checkout of this private repository
+- Access to the private `Team-Volt/agent-lcm` repository when installing the
+  native plugin from GitHub
 
 ```sh
-git clone git@github.com:Team-Volt/agent-lcm.git
-cd agent-lcm
-npm ci
+npm install --global agent-lcm
+agent-lcm setup all
 ```
 
-## Install the plugin
+The npm package provides the stable `agent-lcm` command for setup, imports,
+diagnostics, and daemon administration. Native plugin copies remain
+self-contained, so a harness can capture and query sessions even when its
+plugin lives in a managed cache. Every copy uses the same `~/.agent-lcm` store;
+you never need to find or reference a harness cache path.
 
-Point your harness's local Agent Plugins install flow at this checkout. The
-standard leaves install commands and UI to each client, but compatible clients
-discover the same two portable components:
+## Install in each harness
+
+Agent Plugins 1.0 defines the package, not one shared installer. Use the native
+flow for each harness:
+
+| Harness | Install |
+| --- | --- |
+| Codex | `codex plugin marketplace add Team-Volt/agent-lcm`, then `codex plugin add agent-lcm@agent-lcm` |
+| GitHub Copilot CLI | `copilot plugin install Team-Volt/agent-lcm` |
+| VS Code | Run `Chat: Install Plugin From Source` and enter `https://github.com/Team-Volt/agent-lcm`; VS Code also discovers the Copilot CLI install |
+| Cursor | Install Agent LCM from your organization's private Team Marketplace; admins add the repository in Cursor settings |
+| Kiro IDE | Open Powers, choose the GitHub import option, and enter `https://github.com/Team-Volt/agent-lcm` |
+
+These flows follow the current [Codex plugin](https://help.openai.com/en/articles/20001256-plugins-in-codex/),
+[Copilot CLI plugin](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing),
+[VS Code agent plugin](https://code.visualstudio.com/docs/agent-customization/agent-plugins),
+[Cursor marketplace](https://cursor.com/blog/marketplace), and
+[Kiro Powers](https://kiro.dev/docs/powers/) documentation. Private repository
+access still depends on the GitHub account or organization policy used by the
+harness.
+
+Compatible clients discover the same portable components:
 
 - `skills/lcm-recall/SKILL.md`
 - the `agent-lcm` stdio server in `mcp.json`
 
-Codex and Cursor compatibility manifests are included for clients that still
-use their native plugin layout. If a client only supports manual MCP setup, add
-a stdio server with this command and arguments:
+Codex and Cursor compatibility manifests are included for their native plugin
+layouts. If a client cannot install the plugin, add this stdio MCP server:
 
 ```json
 {
-  "command": "node",
-  "args": ["/absolute/path/to/agent-lcm/bin/agent-lcm", "mcp"]
+  "command": "agent-lcm",
+  "args": ["mcp"]
 }
 ```
 
-Use an absolute path. Restart the harness after adding the plugin or MCP server.
+The harness must inherit a `PATH` that contains the npm global binary. Native
+plugin installation is more reliable for GUI apps because it uses the bundled
+command. Restart the harness after installation.
 
 ## Enable automatic capture
 
-If the plugin installer does not load the bundled hooks, run the setup command
-for that harness from the checkout:
+`agent-lcm setup all` installs or repairs capture hooks for all supported
+harnesses. To configure only selected harnesses, run:
 
 ```sh
-node "$PWD/bin/agent-lcm" setup codex
-node "$PWD/bin/agent-lcm" setup cursor
-node "$PWD/bin/agent-lcm" setup vscode
-node "$PWD/bin/agent-lcm" setup copilot
-node "$PWD/bin/agent-lcm" setup kiro
+agent-lcm setup codex
+agent-lcm setup cursor
+agent-lcm setup vscode
+agent-lcm setup copilot
+agent-lcm setup kiro
 ```
 
 Run only the commands for the harnesses you use. VS Code and GitHub Copilot
@@ -109,16 +133,26 @@ The hook locations are:
 Check the result, then restart each harness:
 
 ```sh
-node bin/agent-lcm setup status
-node bin/agent-lcm doctor --json
+agent-lcm setup status
+agent-lcm doctor --json
 ```
 
 Hooks start the daemon on demand. You can also manage it directly:
 
 ```sh
-node bin/agent-lcm daemon start
-node bin/agent-lcm daemon status
-node bin/agent-lcm daemon stop
+agent-lcm daemon start
+agent-lcm daemon status
+agent-lcm daemon stop
+```
+
+After upgrading the npm package, restart the daemon once so the new runtime
+becomes the owner. Native plugin copies with the same daemon protocol will reuse
+it instead of replacing it:
+
+```sh
+npm install --global agent-lcm@latest
+agent-lcm daemon stop
+agent-lcm daemon start
 ```
 
 ## Import existing sessions
@@ -127,15 +161,15 @@ Start with a dry run. Import never changes the source files, and rerunning it
 skips event IDs already in the shared store.
 
 ```sh
-node bin/agent-lcm import --harness codex --dry-run
-node bin/agent-lcm import --harness codex
+agent-lcm import --harness codex --dry-run
+agent-lcm import --harness codex
 ```
 
 Known default locations are available for Codex, GitHub Copilot, and Kiro:
 
 ```sh
-node bin/agent-lcm import --harness copilot
-node bin/agent-lcm import --harness kiro
+agent-lcm import --harness copilot
+agent-lcm import --harness kiro
 ```
 
 Cursor and VS Code need an exported file because their local session formats
@@ -143,16 +177,16 @@ are not stable public import surfaces. Pass a Cursor chat Markdown export or a
 VS Code JSON/OTLP export:
 
 ```sh
-node bin/agent-lcm import --harness cursor /path/to/chat.md --dry-run
-node bin/agent-lcm import --harness vscode /path/to/export.json --dry-run
+agent-lcm import --harness cursor /path/to/chat.md --dry-run
+agent-lcm import --harness vscode /path/to/export.json --dry-run
 ```
 
 To scan the known locations for every directly readable harness under a home
 directory:
 
 ```sh
-node bin/agent-lcm import --all --dry-run
-node bin/agent-lcm import --all
+agent-lcm import --all --dry-run
+agent-lcm import --all
 ```
 
 The report lists scanned and imported sessions, imported and duplicate events,
@@ -160,7 +194,7 @@ rejected records, failures, and harnesses that still need an export. The legacy
 Codex-only command remains available during initial migration work:
 
 ```sh
-node bin/agent-lcm import-codex-sessions --dry-run --json
+agent-lcm import-codex-sessions --dry-run --json
 ```
 
 ## Local storage
@@ -197,8 +231,8 @@ Finite retention removes exact old event sources but keeps session and summary
 records. Check `config_error` and migration fields with:
 
 ```sh
-node bin/agent-lcm health --json
-node bin/agent-lcm maintain --once --json
+agent-lcm health --json
+agent-lcm maintain --once --json
 ```
 
 ## Privacy and safety
@@ -216,13 +250,13 @@ private files with mode `0600` on platforms that support POSIX permissions.
 ## Useful commands
 
 ```sh
-node bin/agent-lcm --help
-node bin/agent-lcm doctor --json
-node bin/agent-lcm health --json
-node bin/agent-lcm stats --json
-node bin/agent-lcm sessions --include-summaries --json
-node bin/agent-lcm usage --json
-node bin/agent-lcm cleanup --json
+agent-lcm --help
+agent-lcm doctor --json
+agent-lcm health --json
+agent-lcm stats --json
+agent-lcm sessions --include-summaries --json
+agent-lcm usage --json
+agent-lcm cleanup --json
 ```
 
 `cleanup` compacts the derived search index; it does not delete retained raw
@@ -231,6 +265,9 @@ events. Use `cleanup --apply` only after reviewing the preview.
 ## Development
 
 ```sh
+git clone git@github.com:Team-Volt/agent-lcm.git
+cd agent-lcm
+npm ci
 npm run typecheck
 npm test
 npm run smoke

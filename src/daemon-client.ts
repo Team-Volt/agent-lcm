@@ -3,13 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { loadConfig, pluginRoot, type LcmConfig } from "./config.ts";
-import { CURRENT_DAEMON_VERSION } from "./daemon.ts";
+import { DAEMON_PROTOCOL_VERSION, daemonProtocolCompatible } from "./daemon-protocol.ts";
 import { ipcAddress, readToken, sendDaemonRequest, type DaemonRequest } from "./ipc.ts";
 
 export type DaemonStatus = {
   running: boolean;
   pid?: number;
   version?: string;
+  protocol_version?: number;
   queue_depth: number;
   quarantine_count: number;
 };
@@ -27,20 +28,21 @@ export async function ensureDaemon(config: LcmConfig = loadConfig()): Promise<vo
 
 async function ensureDaemonOnce(config: LcmConfig): Promise<void> {
   let status = await daemonStatus(config);
-  if (status.running && status.version === CURRENT_DAEMON_VERSION) return;
+  if (status.running && daemonProtocolCompatible(status)) return;
   if (status.running) {
     try {
-      await daemonRequest(config, "replace", { version: CURRENT_DAEMON_VERSION });
+      await daemonRequest(config, "replace", { protocol_version: DAEMON_PROTOCOL_VERSION });
     } catch {
       // Another starter may already be replacing it.
     }
     await waitForRelease(config, status.pid);
     status = await daemonStatus(config);
-    if (status.running && status.version === CURRENT_DAEMON_VERSION) return;
+    if (status.running && daemonProtocolCompatible(status)) return;
   }
 
   const env: NodeJS.ProcessEnv = { ...process.env, AGENT_LCM_HOME: config.home };
   delete env.AGENT_LCM_DAEMON_VERSION;
+  delete env.AGENT_LCM_DAEMON_PROTOCOL_VERSION;
   const child = spawn(process.execPath, ["--no-warnings", path.join(pluginRoot(), "bin", "agent-lcm"), "daemon", "run"], {
     cwd: pluginRoot(),
     detached: true,
@@ -49,7 +51,7 @@ async function ensureDaemonOnce(config: LcmConfig): Promise<void> {
   });
   child.unref();
   try {
-    await waitFor(config, (candidate) => candidate.running && candidate.version === CURRENT_DAEMON_VERSION);
+    await waitFor(config, (candidate) => candidate.running && daemonProtocolCompatible(candidate));
   } catch (error) {
     child.kill("SIGTERM");
     throw error;

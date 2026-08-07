@@ -2,6 +2,7 @@ import { DEFAULT_LIMITS } from "./config.ts";
 import { loadConfig } from "./config.ts";
 import { daemonRequest, ensureDaemon } from "./daemon-client.ts";
 import { TOOLS } from "./mcp-catalog.ts";
+import { packageVersion } from "./release.ts";
 
 type JsonRpcRequest = {
   readonly jsonrpc: "2.0";
@@ -11,7 +12,7 @@ type JsonRpcRequest = {
 };
 
 const SERVER_NAME = "agent-lcm";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = packageVersion();
 const SUPPORTED_PROTOCOL_VERSION = "2025-11-25";
 const HEADER_SEPARATOR = Buffer.from("\r\n\r\n", "utf8");
 const MAX_MESSAGE_BYTES = DEFAULT_LIMITS.maxInputBytes;

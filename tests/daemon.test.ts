@@ -332,7 +332,7 @@ test("drains then replaces an older daemon version", async (t) => {
   const child = spawn(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "run"], {
     cwd: path.resolve("."),
     detached: true,
-    env: { ...process.env, AGENT_LCM_HOME: config.home, AGENT_LCM_DAEMON_VERSION: "0.0.0" },
+    env: { ...process.env, AGENT_LCM_HOME: config.home, AGENT_LCM_DAEMON_VERSION: "0.0.0", AGENT_LCM_DAEMON_PROTOCOL_VERSION: "0" },
     stdio: "ignore",
   });
   child.unref();
@@ -352,7 +352,7 @@ test("drains then replaces an older daemon version", async (t) => {
 test("replacement closes an idle client and waits for the old endpoint owner", async (t) => {
   const config = loadConfig({ home: tempHome() });
   t.after(() => stopDaemon(config));
-  const old = spawnDaemon(config, "0.0.0");
+  const old = spawnDaemon(config, "0.0.0", "0");
   await waitUntil(async () => (await daemonStatus(config)).version === "0.0.0");
   const oldStatus = await daemonStatus(config);
   assert.equal(oldStatus.pid, old.pid);
@@ -370,6 +370,21 @@ test("replacement closes an idle client and waits for the old endpoint owner", a
   assert.equal(status.version, CURRENT_DAEMON_VERSION);
   assert.notEqual(status.pid, oldStatus.pid);
   assert.equal(await waitForExit(old), 0);
+});
+
+test("reuses a compatible daemon from another package version", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  t.after(() => stopDaemon(config));
+  const old = spawnDaemon(config, "9.9.9");
+  await waitUntil(async () => (await daemonStatus(config)).version === "9.9.9");
+  const before = await daemonStatus(config);
+
+  await ensureDaemon(config);
+
+  const after = await daemonStatus(config);
+  assert.equal(after.pid, before.pid);
+  assert.equal(after.protocol_version, 1);
+  assert.equal(old.exitCode, null);
 });
 
 test("daemon tool requests use the daemon storage", async (t) => {
@@ -462,9 +477,10 @@ async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 5_000): 
   }
 }
 
-function spawnDaemon(config: ReturnType<typeof loadConfig>, version?: string) {
+function spawnDaemon(config: ReturnType<typeof loadConfig>, version?: string, protocolVersion?: string) {
   const env: NodeJS.ProcessEnv = { ...process.env, AGENT_LCM_HOME: config.home };
   if (version) env.AGENT_LCM_DAEMON_VERSION = version;
+  if (protocolVersion) env.AGENT_LCM_DAEMON_PROTOCOL_VERSION = protocolVersion;
   return spawn(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "run"], {
     cwd: path.resolve("."),
     env,

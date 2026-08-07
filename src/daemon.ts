@@ -4,13 +4,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { LcmConfig } from "./config.ts";
+import { DAEMON_PROTOCOL_VERSION, LEGACY_COMPATIBLE_DAEMON_VERSION } from "./daemon-protocol.ts";
 import { drainInbox } from "./inbox.ts";
 import { callTool } from "./mcp-tools.ts";
 import { maintenanceNeeded, runMaintenanceOnce } from "./maintenance.ts";
 import { hasCode, ipcAddress, prepareIpcAddress, readOrCreateToken, sendDaemonRequest, tokenMatches, type DaemonRequest, type DaemonResponse } from "./ipc.ts";
 import { createStorage, type LcmStorage } from "./storage.ts";
 
-export const CURRENT_DAEMON_VERSION = "0.1.0";
+export const CURRENT_DAEMON_VERSION = LEGACY_COMPATIBLE_DAEMON_VERSION;
 
 const PID_FILE = "daemon.pid";
 const VERSION_FILE = "daemon.version";
@@ -170,6 +171,7 @@ async function dispatchRequest(config: LcmConfig, storage: DaemonStorage, reques
         running: true,
         pid: process.pid,
         version: daemonVersion(),
+        protocol_version: daemonProtocolVersion(),
         queue_depth: countFiles(config.inboxDir, (name) => name.endsWith(".json")),
         quarantine_count: countFiles(config.quarantineDir),
         ...(storage.maintenanceError ? { maintenance_error: storage.maintenanceError } : {}),
@@ -501,4 +503,9 @@ function countFiles(directory: string, predicate: (name: string) => boolean = ()
 
 function daemonVersion(): string {
   return process.env.AGENT_LCM_DAEMON_VERSION || CURRENT_DAEMON_VERSION;
+}
+
+function daemonProtocolVersion(): number {
+  const override = process.env.AGENT_LCM_DAEMON_PROTOCOL_VERSION;
+  return override === undefined ? DAEMON_PROTOCOL_VERSION : Number(override);
 }

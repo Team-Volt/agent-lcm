@@ -8,17 +8,34 @@
   "bin": {
     "agent-lcm": "./bin/agent-lcm"
   },
+  "files": [
+    ".agents/plugins/marketplace.json",
+    ".codex-plugin/",
+    ".cursor-plugin/",
+    "bin/",
+    "dist/",
+    "hooks/",
+    "skills/",
+    "hooks.json",
+    "mcp.json",
+    "plugin.json"
+  ],
   "scripts": {
-    "typecheck": "npm exec --yes --package=typescript@7.0.2 -- tsc --noEmit",
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
     "test": "node --no-warnings --test tests/*.test.ts",
     "benchmark:long-context": "node --no-warnings bin/agent-lcm benchmark long-context --json",
     "benchmark:retrieval-quality": "node --no-warnings bin/agent-lcm benchmark retrieval-quality --json",
-    "smoke": "node --no-warnings scripts/smoke-test.ts"
+    "presmoke": "npm run build",
+    "smoke": "node --no-warnings scripts/smoke-test.ts",
+    "prepack": "npm run build"
   },
   "engines": {
     "node": ">=22.18"
   },
   "devDependencies": {
-    "@types/node": "^22.20.0"
+    "@types/node": "^22.20.0",
+    "typescript": "^7.0.2"
   }
 }
