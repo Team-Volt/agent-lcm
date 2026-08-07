@@ -56,22 +56,47 @@ test("setup rejects malformed Kiro schema without changing the owned file", () =
   assert.deepEqual(fs.readFileSync(setupPath), original);
 });
 
-test("Copilot and VS Code use their documented shared user hook file and validate setup status", () => {
+test("Copilot and VS Code converge on one lower-camel shared user hook configuration", () => {
   const clientHome = tempHome("agent-lcm-copilot-");
   const copilot = setupHarness("copilot", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
   const vscode = setupHarness("vscode", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
 
   assert.equal(copilot.path, path.join(clientHome, "hooks", "agent-lcm.json"));
   assert.equal(vscode.path, copilot.path);
+  assert.equal(vscode.changed, false);
   const configuration = JSON.parse(fs.readFileSync(copilot.path, "utf8"));
   assert.equal(configuration.version, 1);
   assert.equal(configuration.hooks.userPromptSubmitted[0].type, "command");
-  assert.equal(configuration.hooks.UserPromptSubmit[0].type, "command");
+  assert.match(configuration.hooks.userPromptSubmitted[0].command, /--harness auto userPromptSubmitted$/u);
+  assert.deepEqual(Object.keys(configuration.hooks).sort(), ["postToolUse", "sessionEnd", "sessionStart", "userPromptSubmitted"]);
   assert.equal(setupStatus({ home: clientHome }).copilot.configured, true);
   assert.equal(setupStatus({ home: clientHome }).vscode.configured, true);
 
   fs.writeFileSync(copilot.path, '{"version":1,"hooks":{"userPromptSubmitted":[{"command":"agent-lcm"}]}}\n');
   assert.equal(setupStatus({ home: clientHome }).copilot.configured, false);
+});
+
+test("shared setup replaces older Agent LCM Pascal registrations without touching sibling hooks", () => {
+  const clientHome = tempHome("agent-lcm-copilot-legacy-");
+  const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(setupPath), { recursive: true });
+  fs.writeFileSync(setupPath, JSON.stringify({
+    version: 1,
+    hooks: {
+      UserPromptSubmit: [{ type: "command", command: "\"/opt/agent-lcm/bin/agent-lcm\" capture --harness vscode UserPromptSubmit" }],
+      sessionStart: [{ type: "command", command: "other-hook" }],
+    },
+  }));
+
+  const first = setupHarness("vscode", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+  const second = setupHarness("copilot", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+  const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
+
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+  assert.equal(configuration.hooks.UserPromptSubmit, undefined);
+  assert.equal(configuration.hooks.sessionStart[0].command, "other-hook");
+  assert.equal(configuration.hooks.sessionStart[1].command, "\"/opt/agent-lcm/bin/agent-lcm\" capture --harness auto sessionStart");
 });
 
 test("setup rejects shell-sensitive binary paths before writing a hook file", () => {

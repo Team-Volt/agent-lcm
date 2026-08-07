@@ -30,6 +30,6 @@ test("client hook manifests invoke explicit or detected harness capture", () => 
   const portableHooks = readJson("hooks.json");
   assert.equal(portableHooks.version, 1);
   assert.equal(portableHooks.hooks.sessionStart[0].type, "command");
-  assert.equal(portableHooks.hooks.UserPromptSubmit[0].type, "command");
+  assert.deepEqual(Object.keys(portableHooks.hooks).sort(), ["postToolUse", "sessionEnd", "sessionStart", "userPromptSubmitted"]);
   assert.match(JSON.stringify(portableHooks), /capture --harness auto/u);
 });

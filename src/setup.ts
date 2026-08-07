@@ -80,10 +80,11 @@ function mergeHookConfiguration(
   const requiresVersion = harness === "copilot" || harness === "vscode";
   const configuration = existing ? structuredClone(existing) : { ...(requiresVersion ? { version: 1 } : {}), hooks: {} };
   if ((requiresVersion && configuration.version !== 1) || !isRecord(configuration.hooks)) throw invalidConfiguration(target);
+  if (isSharedHookHarness(harness)) removeSharedAgentLcmHooks(configuration.hooks, command, target);
 
   for (const event of eventsFor(harness)) {
     const hooks = configuration.hooks[event];
-    const expectedCommand = captureCommand(command, harness, event);
+    const expectedCommand = captureCommand(command, setupCaptureHarness(harness), event);
     if (hooks === undefined) {
       configuration.hooks[event] = [{ type: "command", command: expectedCommand }];
       continue;
@@ -113,9 +114,26 @@ function mergeKiroConfiguration(existing: Record<string, unknown> | undefined, c
 }
 
 function eventsFor(harness: CaptureHarness): string[] {
-  return harness === "copilot"
+  return isSharedHookHarness(harness)
     ? ["sessionStart", "userPromptSubmitted", "postToolUse", "sessionEnd"]
     : ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
+}
+
+function isSharedHookHarness(harness: CaptureHarness): harness is "copilot" | "vscode" {
+  return harness === "copilot" || harness === "vscode";
+}
+
+function setupCaptureHarness(harness: CaptureHarness): CaptureHarness | "auto" {
+  return isSharedHookHarness(harness) ? "auto" : harness;
+}
+
+function removeSharedAgentLcmHooks(hooksByEvent: Record<string, unknown>, command: string, target: string): void {
+  for (const [event, hooks] of Object.entries(hooksByEvent)) {
+    if (!Array.isArray(hooks) || !hooks.every(isRecord)) throw invalidConfiguration(target);
+    const kept = hooks.filter((hook) => !isSharedAgentLcmHook(hook, command, event));
+    if (kept.length === 0) delete hooksByEvent[event];
+    else hooksByEvent[event] = kept;
+  }
 }
 
 function kiroHook(command: string, event: string): KiroHook {
@@ -126,7 +144,7 @@ function kiroHook(command: string, event: string): KiroHook {
   };
 }
 
-function captureCommand(command: string, harness: CaptureHarness, event: string): string {
+function captureCommand(command: string, harness: CaptureHarness | "auto", event: string): string {
   return `"${command}" capture --harness ${harness} ${event}`;
 }
 
@@ -163,9 +181,10 @@ function configured(harness: CaptureHarness, target: string): boolean {
   if (requiresVersion && configuration.version !== 1) return false;
   const hooksByEvent = configuration.hooks;
   if (!isRecord(hooksByEvent)) return false;
+  if (isSharedHookHarness(harness) && hasSharedPascalRegistration(hooksByEvent)) return false;
   return eventsFor(harness).every((event) => {
     const hooks = hooksByEvent[event];
-    return Array.isArray(hooks) && hooks.some((entry) => isExpectedCommandHook(entry, harness, event));
+    return Array.isArray(hooks) && hooks.some((entry) => isExpectedCommandHook(entry, setupCaptureHarness(harness), event));
   });
 }
 
@@ -177,8 +196,26 @@ function readConfigurationForStatus(target: string): Record<string, unknown> | u
   }
 }
 
-function isExpectedCommandHook(value: unknown, harness: CaptureHarness, event: string): boolean {
+function isExpectedCommandHook(value: unknown, harness: CaptureHarness | "auto", event: string): boolean {
   return isRecord(value) && value.type === "command" && isCaptureCommand(value.command, harness, event);
+}
+
+function isSharedAgentLcmHook(value: Record<string, unknown>, command: string, event: string): boolean {
+  if (value.type !== "command" || typeof value.command !== "string") return false;
+  const expectedPrefix = `"${command}" capture --harness `;
+  if (!value.command.startsWith(expectedPrefix)) return false;
+  return /^(?:auto|copilot|vscode) (?:sessionStart|userPromptSubmitted|postToolUse|sessionEnd|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
+    .test(value.command.slice(expectedPrefix.length));
+}
+
+function hasSharedPascalRegistration(hooksByEvent: Record<string, unknown>): boolean {
+  return ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"].some((event) => {
+    const hooks = hooksByEvent[event];
+    return Array.isArray(hooks) && hooks.some((hook) => {
+      if (!isRecord(hook) || hook.type !== "command" || typeof hook.command !== "string") return false;
+      return / capture --harness (?:auto|copilot|vscode) (?:SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u.test(hook.command);
+    });
+  });
 }
 
 function isExpectedKiroHook(value: unknown, event: string): boolean {
@@ -199,7 +236,7 @@ function isKiroHook(value: unknown): value is KiroHook {
     && typeof value.action.command === "string";
 }
 
-function isCaptureCommand(value: unknown, harness: CaptureHarness, event: string): boolean {
+function isCaptureCommand(value: unknown, harness: CaptureHarness | "auto", event: string): boolean {
   if (typeof value !== "string") return false;
   const suffix = ` capture --harness ${harness} ${event}`;
   if (!value.startsWith("\"") || !value.endsWith(suffix)) return false;

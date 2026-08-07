@@ -17,16 +17,19 @@ test("maps each supported harness into a namespaced sanitized event", () => {
   }
 });
 
-test("auto capture separates VS Code and Copilot payloads", () => {
-  const vscode = mapHarnessEvent("auto", undefined, readFixture("vscode"));
+test("auto capture classifies the shared lower-camel hook payload as Copilot", () => {
+  const vscodeConverted = mapHarnessEvent("auto", "userPromptSubmitted", {
+    sessionId: "vscode-converted",
+    cwd: "/tmp/vscode-converted",
+  });
   const copilot = mapHarnessEvent("auto", undefined, readFixture("copilot"));
 
-  assert.equal(vscode.harness, "vscode");
+  assert.equal(vscodeConverted.harness, "copilot");
   assert.equal(copilot.harness, "copilot");
 });
 
-test("auto capture uses the documented VS Code payload spelling", () => {
-  const event = mapHarnessEvent("auto", "UserPromptSubmit", {
+test("explicit VS Code capture accepts its documented payload spelling", () => {
+  const event = mapHarnessEvent("vscode", "UserPromptSubmit", {
     session_id: "vscode-plugin-format",
     cwd: "/tmp/vscode-copilot-format",
   });
@@ -51,7 +54,7 @@ test("auto capture rejects mixed harness markers and event casing", () => {
     /Unable to determine harness/u,
   );
   assert.throws(
-    () => mapHarnessEvent("auto", "UserPromptSubmit", { sessionId: "copilot" }),
+    () => mapHarnessEvent("auto", "UserPromptSubmit", { session_id: "vscode" }),
     /Unable to determine harness/u,
   );
 });
