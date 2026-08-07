@@ -4,9 +4,26 @@
   "description": "Shared local context memory for agent harnesses.",
   "license": "MIT",
   "author": "Team Volt",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Team-Volt/agent-lcm.git"
+  },
+  "homepage": "https://github.com/Team-Volt/agent-lcm#readme",
+  "bugs": {
+    "url": "https://github.com/Team-Volt/agent-lcm/issues"
+  },
+  "keywords": [
+    "agent-plugins",
+    "coding-agents",
+    "context-memory",
+    "mcp"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
-    "agent-lcm": "./bin/agent-lcm"
+    "agent-lcm": "bin/agent-lcm"
   },
   "files": [
     ".agents/plugins/marketplace.json",

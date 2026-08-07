@@ -56,9 +56,7 @@ npm install --global agent-lcm
 agent-lcm setup all
 ```
 
-Making the GitHub repository public does not change the npm command. The npm
-registry and GitHub are separate release channels. Once the repository is
-public, you can install the same CLI from GitHub before the first npm release:
+You can also install the current source directly from GitHub:
 
 ```sh
 npm install --global github:Team-Volt/agent-lcm
