@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { codexRecordToEvent, rolloutSessionIdFromFile } from "./codex-record.js";
+import { harnessSessionId } from "./events.js";
 export function defaultCodexSessionsPath() {
     return path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "sessions");
 }
@@ -41,7 +42,7 @@ async function readCodexSessionFile(file, report, onRecord) {
                 report.errors.push({ file, line: lineNumber, message: error instanceof Error ? error.message : String(error) });
                 continue;
             }
-            if (!event || (rolloutSessionId && event.session_id !== rolloutSessionId)) {
+            if (!event || (rolloutSessionId && event.session_id !== harnessSessionId("codex", rolloutSessionId))) {
                 report.records_skipped += 1;
                 continue;
             }

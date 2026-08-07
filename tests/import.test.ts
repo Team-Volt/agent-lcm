@@ -41,6 +41,21 @@ test("imports supported exported sessions idempotently without changing sources"
   assert.equal(new Set(events.map((event) => event.event_id)).size, events.length);
 });
 
+test("imports Codex rollouts whose filename ends with the session UUID", async (t) => {
+  const config = loadConfig({ home: tempHome("agent-lcm-import-codex-rollout-") });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+
+  const report = await importSessions({
+    harness: "codex",
+    paths: [fixtures("import/codex/rollout-2026-08-01T10-00-00-12345678-1234-4234-8234-123456789abc.jsonl")],
+    config,
+  });
+
+  assert.equal(report.sessions_imported, 1);
+  assert.ok(report.events_imported > 0);
+});
+
 test("keeps valid sessions when one source file is malformed", async (t) => {
   const source = tempHome("agent-lcm-import-partial-");
   const malformed = path.join(source, "bad", "events.jsonl");
@@ -68,7 +83,10 @@ test("all discovers local Codex, Copilot, and Kiro homes", async (t) => {
   fs.mkdirSync(path.join(codex, "sessions"), { recursive: true });
   fs.mkdirSync(path.join(copilot, "session-state", "one"), { recursive: true });
   fs.mkdirSync(path.join(kiro, "sessions", "cli"), { recursive: true });
-  fs.copyFileSync(fixtures("import/codex/session.jsonl"), path.join(codex, "sessions", "session.jsonl"));
+  fs.copyFileSync(
+    fixtures("import/codex/rollout-2026-08-01T10-00-00-12345678-1234-4234-8234-123456789abc.jsonl"),
+    path.join(codex, "sessions", "rollout-2026-08-01T10-00-00-12345678-1234-4234-8234-123456789abc.jsonl"),
+  );
   fs.copyFileSync(fixtures("import/copilot/events.jsonl"), path.join(copilot, "session-state", "one", "events.jsonl"));
   fs.copyFileSync(fixtures("import/kiro/session.jsonl"), path.join(kiro, "sessions", "cli", "session.jsonl"));
   const config = loadConfig({ home: tempHome("agent-lcm-import-all-home-") });
