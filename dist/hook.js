@@ -170,7 +170,7 @@ function claimPostCompactPending(home, sessionId) {
     fs.unlinkSync(markerPath);
     return true;
 }
-function hasPostCompactPending(home, sessionId) {
+export function hasPostCompactPending(home, sessionId) {
     return fs.existsSync(postCompactRecoveryPath(home, sessionId));
 }
 function postCompactRecoveryPath(home, sessionId) {

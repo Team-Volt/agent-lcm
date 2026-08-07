@@ -174,7 +174,7 @@ function claimPostCompactPending(home: string, sessionId: string): boolean {
   return true;
 }
 
-function hasPostCompactPending(home: string, sessionId: string): boolean {
+export function hasPostCompactPending(home: string, sessionId: string): boolean {
   return fs.existsSync(postCompactRecoveryPath(home, sessionId));
 }
 
