@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-01T10:02:00.000Z","type":"SessionStart","session_id":"kiro-import","cwd":"/tmp/kiro-import"}
+{"timestamp":"2026-08-01T10:02:01.000Z","type":"UserPromptSubmit","session_id":"kiro-import","cwd":"/tmp/kiro-import","prompt":"kiro import request"}

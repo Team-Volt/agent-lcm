@@ -4,7 +4,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { LcmConfig } from "./config.ts";
-import { importCodexSessions } from "./codex-import.ts";
 import { drainInbox } from "./inbox.ts";
 import { callTool } from "./mcp-tools.ts";
 import { hasCode, ipcAddress, prepareIpcAddress, readOrCreateToken, sendDaemonRequest, tokenMatches, type DaemonRequest, type DaemonResponse } from "./ipc.ts";
@@ -132,7 +131,7 @@ async function serve(
         activeSockets.add(socket);
         chain = chain.then(async () => {
           try {
-            drainStorageInbox(config, storage);
+            if (request.method !== "drain") drainStorageInbox(config, storage);
             const result = await dispatchRequest(config, storage, request);
             await writeResponse(socket, { version: 1, id: request.id, ok: true, result }).catch(() => socket.destroy());
             if (request.method === "shutdown" || request.method === "replace") scheduleShutdown();
@@ -187,7 +186,7 @@ async function dispatchRequest(config: LcmConfig, storage: DaemonStorage, reques
 }
 
 async function callCli(config: LcmConfig, daemonStorage: DaemonStorage, params: Record<string, unknown>): Promise<unknown> {
-  const write = params.command === "import-codex-sessions" || (params.command === "cleanup" && params.apply === true);
+  const write = params.command === "cleanup" && params.apply === true;
   return withStorage(config, daemonStorage, write, (storage) => callCliWithStorage(storage, params));
 }
 
@@ -222,11 +221,6 @@ function callCliWithStorage(storage: LcmStorage, params: Record<string, unknown>
       modelContextWindow: numberParam(params.modelContextWindow),
       autoCompactTokenLimit: numberParam(params.autoCompactTokenLimit),
       recentEventLimit: numberParam(params.recentEventLimit),
-    });
-    case "import-codex-sessions": return importCodexSessions(storage, {
-      from: stringParam(params.from),
-      dryRun: params.dryRun === true,
-      batchSize: numberParam(params.batchSize),
     });
     default: throw new Error("Unsupported daemon CLI command.");
   }

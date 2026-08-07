@@ -1,0 +1,1 @@
+{"resourceSpans":[{"scopeSpans":[{"spans":[{"name":"UserPromptSubmit","startTimeUnixNano":"1785578582000000000","attributes":[{"key":"session_id","value":{"stringValue":"vscode-otlp"}},{"key":"cwd","value":{"stringValue":"/tmp/vscode-otlp"}},{"key":"prompt","value":{"stringValue":"otlp request"}}]}]}]}]}

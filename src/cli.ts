@@ -2,10 +2,10 @@ import path from "node:path";
 
 import { loadConfig, pluginRoot } from "./config.ts";
 import { runLongContextBenchmark, runRetrievalQualityBenchmark } from "./benchmark.ts";
-import type { ImportCodexSessionsReport } from "./codex-import.ts";
 import { buildDoctorReport } from "./doctor.ts";
 import { daemonRequest, daemonStatus, ensureDaemon, stopDaemon } from "./daemon-client.ts";
 import { startDaemon } from "./daemon.ts";
+import { importSessions, type ImportHarness, type ImportReport } from "./import.ts";
 import { runCapture, runHook } from "./hook.ts";
 import type { CaptureHarness } from "./harnesses.ts";
 import { readStatus } from "./installer.ts";
@@ -45,7 +45,7 @@ type DaemonCliParams =
     autoCompactTokenLimit?: number;
     recentEventLimit?: number;
   }
-  | { command: "import-codex-sessions"; from?: string; dryRun: boolean; batchSize?: number };
+  ;
 
 export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
@@ -120,13 +120,22 @@ export async function main(argv: string[]): Promise<void> {
   if (command === "import-codex-sessions") {
     const dryRun = rest.includes("--dry-run");
     const showProgress = rest.includes("--progress");
-    const report = await daemonCli<ImportCodexSessionsReport>(loadConfig(), {
-      command: "import-codex-sessions",
-      from: optionValue(rest, "--from"),
-      dryRun,
-      batchSize: numberOptionValue(rest, "--batch-size"),
-    });
+    const from = optionValue(rest, "--from");
+    const report = await importSessions({ harness: "codex", ...(from ? { paths: [from] } : {}), config: loadConfig(), dryRun });
     if (showProgress) writeImportProgress(report);
+    printObjectOrText(report);
+    return;
+  }
+  if (command === "import") {
+    const all = rest.includes("--all");
+    const harness = all ? undefined : importHarness(optionValue(rest, "--harness"));
+    const source = rest.find((item, index) => index > 0 && !item.startsWith("--") && rest[index - 1] !== "--harness");
+    const report = await importSessions({
+      ...(all ? { all: true } : { harness }),
+      ...(source ? { paths: [source] } : {}),
+      config: loadConfig(),
+      dryRun: rest.includes("--dry-run"),
+    });
     printObjectOrText(report);
     return;
   }
@@ -208,8 +217,8 @@ async function daemonCli<T = unknown>(config: ReturnType<typeof loadConfig>, par
   return daemonRequest<T>(config, "cli", params);
 }
 
-function writeImportProgress(report: ImportCodexSessionsReport): void {
-  process.stderr.write(`agent-lcm import: files=${report.files_scanned} records=${report.records_read} importable=${report.events_importable} imported=${report.events_imported} duplicates=${report.events_skipped_duplicate} skipped=${report.records_skipped} rate=${report.events_per_second}/s\n`);
+function writeImportProgress(report: ImportReport): void {
+  process.stderr.write(`agent-lcm import: imported=${report.events_imported} duplicates=${report.events_skipped_duplicate} rejected=${report.records_rejected}\n`);
 }
 
 function printHelp(): void {
@@ -232,6 +241,7 @@ Commands:
   agent-lcm context-plan [--session-id ID] [--cwd PATH] [--repo-root PATH] [--model-context-window N] [--auto-compact-token-limit N] [--recent-event-limit N] [--json]
   agent-lcm benchmark long-context [--events N] [--budget-tokens N] [--home PATH] [--json]
   agent-lcm benchmark retrieval-quality [--home PATH] [--json]
+  agent-lcm import --all|--harness codex|cursor|vscode|copilot|kiro [path] [--dry-run] [--json]
   agent-lcm import-codex-sessions [--from PATH] [--dry-run] [--progress] [--batch-size N] [--json]
 `);
 }
@@ -239,6 +249,11 @@ Commands:
 function captureHarness(value: string | undefined): CaptureHarness {
   if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro") return value;
   throw new Error("Usage: agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]");
+}
+
+function importHarness(value: string | undefined): ImportHarness {
+  if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro") return value;
+  throw new Error("Usage: agent-lcm import --all|--harness codex|cursor|vscode|copilot|kiro [path]");
 }
 
 function optionValue(args: string[], flag: string): string | undefined {

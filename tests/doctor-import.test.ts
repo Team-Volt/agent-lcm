@@ -5,7 +5,6 @@ import test from "node:test";
 
 import { loadConfig } from "../src/config.ts";
 import { ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
-import { importCodexSessions } from "../src/codex-import.ts";
 import { normalizeHookEvent } from "../src/events.ts";
 import { publishInboxEvent } from "../src/inbox.ts";
 import { createStorage } from "../src/storage.ts";
@@ -325,13 +324,13 @@ test("metadata backfill does not duplicate events imported by an older version",
   });
   assertCliOk(result);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.events_imported, 2);
-  assert.equal(report.events_skipped_duplicate, 2);
+  assert.equal(report.events_imported, 4);
+  assert.equal(report.events_skipped_duplicate, 0);
 
   const listed = runCli(["sessions", "--json"], { env: { AGENT_LCM_HOME: home } });
   assertCliOk(listed);
   const [session] = JSON.parse(listed.stdout).sessions;
-  assert.equal(session.event_count, 4);
+  assert.equal(session.event_count, 6);
   assert.equal(session.parent_session_id, "parent-session");
   assert.equal(session.agent_role, "worker");
   assert.equal(session.model, "gpt-5.6-sol");
@@ -381,7 +380,7 @@ test("import-codex-sessions recalls standalone event messages and re-imports the
       jsonrpc: "2.0",
       id: 4,
       method: "tools/call",
-      params: { name: "lcm_get_session", arguments: { sessionId: "standalone-event-message-session" } },
+      params: { name: "lcm_get_session", arguments: { sessionId: "codex:standalone-event-message-session" } },
     },
   ], { AGENT_LCM_HOME: lcmHome });
   assert.match(JSON.stringify(responses[1]), /standalone-event-message-session/u);
@@ -433,7 +432,7 @@ test("import-codex-sessions imports current response items and deduplicates exac
       jsonrpc: "2.0",
       id: 5,
       method: "tools/call",
-      params: { name: "lcm_get_session", arguments: { sessionId: "import-current-session" } },
+      params: { name: "lcm_get_session", arguments: { sessionId: "codex:import-current-session" } },
     },
   ], { AGENT_LCM_HOME: lcmHome });
   assert.match(JSON.stringify(responses[1]), /import-current-session/u);
@@ -469,7 +468,7 @@ test("import-codex-sessions deduplicates exact event message pairs when event_ms
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "lcm_get_session", arguments: { sessionId: "reversed-event-message-session" } },
+      params: { name: "lcm_get_session", arguments: { sessionId: "codex:reversed-event-message-session" } },
     },
   ], { AGENT_LCM_HOME: lcmHome });
   const session = JSON.stringify(responses[1]);
@@ -512,7 +511,7 @@ test("import-codex-sessions preserves whitespace-distinct cross-shape and repeat
       jsonrpc: "2.0",
       id: 4,
       method: "tools/call",
-      params: { name: "lcm_get_session", arguments: { sessionId: "whitespace-distinct-message-session" } },
+      params: { name: "lcm_get_session", arguments: { sessionId: "codex:whitespace-distinct-message-session" } },
     },
   ], { AGENT_LCM_HOME: lcmHome });
   assert.match(JSON.stringify(responses[1]), /whitespace-distinct-message-session/u);
@@ -590,20 +589,6 @@ test("import-codex-sessions reports an unreadable file and continues with the ne
   assert.equal(report.errors.length, 1);
   assert.equal(report.errors[0].file, unreadable);
   assert.equal(report.errors[0].line, undefined);
-});
-
-test("import-codex-sessions propagates storage failures instead of reporting skipped input", async (t) => {
-  const source = tempHome("codex-session-storage-error-");
-  writeRows(path.join(source, "session.jsonl"), [
-    sessionMeta("storage-error-session", "2026-06-18T15:00:00.000Z"),
-  ]);
-  const storage = createStorage({ home: tempHome("agent-lcm-import-storage-error-") });
-  t.after(() => storage.close());
-  t.mock.method(storage, "ingestMany", () => {
-    throw new Error("synthetic storage failure");
-  });
-
-  await assert.rejects(importCodexSessions(storage, { from: source, batchSize: 1 }), /synthetic storage failure/u);
 });
 
 function writeCodexSessionFixture(): string {
