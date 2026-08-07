@@ -37,6 +37,7 @@ export function publishInboxEvent(config: LcmConfig, event: NormalizedEvent): st
 export function drainInbox(
   config: LcmConfig,
   ingest: (event: NormalizedEvent) => "ingested" | "duplicate",
+  reportEventIds?: ReadonlySet<string>,
 ): DrainInboxReport {
   ensureInboxDirectories(config);
   const report: DrainInboxReport = { ingested: 0, duplicates: 0, quarantined: 0 };
@@ -48,12 +49,14 @@ export function drainInbox(
       if (path.basename(inboxPath, ".json") !== event.event_id) throw new Error("Inbox filename does not match event ID.");
     } catch {
       quarantine(config, inboxPath, name);
-      report.quarantined += 1;
+      if (!reportEventIds || reportEventIds.has(path.basename(inboxPath, ".json"))) report.quarantined += 1;
       continue;
     }
     const result = ingest(event);
-    if (result === "ingested") report.ingested += 1;
-    else report.duplicates += 1;
+    if (!reportEventIds || reportEventIds.has(event.event_id)) {
+      if (result === "ingested") report.ingested += 1;
+      else report.duplicates += 1;
+    }
     fs.unlinkSync(inboxPath);
     fsyncDirectory(config.inboxDir);
   }

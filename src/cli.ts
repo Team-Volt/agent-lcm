@@ -118,6 +118,7 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   if (command === "import-codex-sessions") {
+    if (rest.includes("--batch-size")) throw new Error("--batch-size is not supported; imports use durable batches.");
     const dryRun = rest.includes("--dry-run");
     const showProgress = rest.includes("--progress");
     const from = optionValue(rest, "--from");
@@ -128,6 +129,7 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (command === "import") {
     const all = rest.includes("--all");
+    if (all && rest.includes("--harness")) throw new Error("Pass exactly one of --all or --harness.");
     const harness = all ? undefined : importHarness(optionValue(rest, "--harness"));
     const source = rest.find((item, index) => index > 0 && !item.startsWith("--") && rest[index - 1] !== "--harness");
     const report = await importSessions({
@@ -242,7 +244,7 @@ Commands:
   agent-lcm benchmark long-context [--events N] [--budget-tokens N] [--home PATH] [--json]
   agent-lcm benchmark retrieval-quality [--home PATH] [--json]
   agent-lcm import --all|--harness codex|cursor|vscode|copilot|kiro [path] [--dry-run] [--json]
-  agent-lcm import-codex-sessions [--from PATH] [--dry-run] [--progress] [--batch-size N] [--json]
+  agent-lcm import-codex-sessions [--from PATH] [--dry-run] [--progress] [--json]
 `);
 }
 

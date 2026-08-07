@@ -31,28 +31,11 @@ export type ImportReport = {
   needs_export: Array<"vscode" | "cursor">;
 };
 
-type ImportDiagnostics = {
-  mode: "dry-run" | "import";
-  source: string;
-  files_scanned: number;
-  records_read: number;
-  events_importable: number;
-  records_skipped: number;
-  duration_ms: number;
-  events_per_second: number;
-  errors: Array<{ file: string; line?: number; message: string }>;
-};
-
-type WorkingReport = ImportReport & ImportDiagnostics;
-
-type SourceEvent = { source: string; position: number; event: NormalizedEvent };
-
 const BATCH_SIZE = 5000;
 
 export async function importSessions(options: ImportOptions): Promise<ImportReport> {
   if ((options.all === true) === (options.harness !== undefined)) throw new Error("Pass exactly one of --all or --harness.");
-  const started = Date.now();
-  const report: WorkingReport = {
+  const report: ImportReport = {
     sessions_scanned: 0,
     sessions_imported: 0,
     events_imported: 0,
@@ -60,25 +43,16 @@ export async function importSessions(options: ImportOptions): Promise<ImportRepo
     records_rejected: 0,
     failures: [],
     needs_export: options.all ? ["vscode", "cursor"] : [],
-    mode: options.dryRun ? "dry-run" : "import",
-    source: (options.paths ?? []).map((value) => path.resolve(value)).join(",") || sourceLabel(options.harness, options.all),
-    files_scanned: 0,
-    records_read: 0,
-    events_importable: 0,
-    records_skipped: 0,
-    duration_ms: 0,
-    events_per_second: 0,
-    errors: [],
   };
   const selections = sourcesFor(options);
   if (!options.dryRun) await ensureDaemon(options.config);
-  const pending: SourceEvent[] = [];
+  const pending: NormalizedEvent[] = [];
 
   const flush = async (): Promise<void> => {
     if (pending.length === 0 || options.dryRun) return;
     const batch = pending.splice(0, pending.length);
-    for (const item of batch) publishInboxEvent(options.config, item.event);
-    const drained = await daemonRequest<DrainInboxReport>(options.config, "drain", {});
+    for (const event of batch) publishInboxEvent(options.config, event);
+    const drained = await daemonRequest<DrainInboxReport>(options.config, "drain", { eventIds: batch.map((event) => event.event_id) });
     report.events_imported += drained.ingested;
     report.events_skipped_duplicate += drained.duplicates;
   };
@@ -91,12 +65,10 @@ export async function importSessions(options: ImportOptions): Promise<ImportRepo
     }
     for (const file of files) {
       report.sessions_scanned += 1;
-      report.files_scanned += 1;
       try {
         const events = await parseSession(selection.harness, file, report);
         if (events.length > 0) report.sessions_imported += 1;
         for (const item of events) {
-          report.events_importable += 1;
           if (!options.dryRun) pending.push(item);
           if (pending.length >= BATCH_SIZE) await flush();
         }
@@ -107,8 +79,6 @@ export async function importSessions(options: ImportOptions): Promise<ImportRepo
     }
   }
   await flush();
-  report.duration_ms = Math.max(0, Date.now() - started);
-  report.events_per_second = report.duration_ms === 0 ? 0 : Math.round((report.events_imported / (report.duration_ms / 1000)) * 100) / 100;
   return report;
 }
 
@@ -127,10 +97,6 @@ function defaultPath(harness: ImportHarness): string {
   if (harness === "copilot") return path.join(os.homedir(), ".copilot", "session-state");
   if (harness === "kiro") return path.join(os.homedir(), ".kiro", "sessions", "cli");
   return "";
-}
-
-function sourceLabel(harness: ImportHarness | undefined, all: boolean | undefined): string {
-  return all ? "discovered homes" : harness ?? "";
 }
 
 function filesFor(harness: ImportHarness, paths: string[]): string[] {
@@ -162,30 +128,27 @@ function walkFiles(source: string): string[] {
   return result;
 }
 
-async function parseSession(harness: ImportHarness, file: string, report: WorkingReport): Promise<SourceEvent[]> {
+async function parseSession(harness: ImportHarness, file: string, report: ImportReport): Promise<NormalizedEvent[]> {
   if (harness === "codex") return parseCodex(file, report);
-  if (harness === "cursor") return parseCursor(file, report);
+  if (harness === "cursor") return parseCursor(file);
   if (file.endsWith(".jsonl")) return parseJsonl(harness, file, report);
-  return parseJson(harness, file, report);
+  return parseJson(harness, file);
 }
 
-async function parseCodex(file: string, report: WorkingReport): Promise<SourceEvent[]> {
-  const events: SourceEvent[] = [];
+async function parseCodex(file: string, report: ImportReport): Promise<NormalizedEvent[]> {
+  const events: NormalizedEvent[] = [];
   const parsed = await readCodexSessions(file, (record) => {
-    events.push({ source: record.file, position: record.line, event: stableEvent("codex", record.event, record.file, record.line) });
+    events.push(record.event);
   });
-  report.records_read += parsed.records_read;
-  report.records_skipped += parsed.records_skipped;
   report.records_rejected += parsed.errors.length;
   for (const error of parsed.errors) {
-    report.errors.push(error);
-    addFailure(report, error.file, error.message, false);
+    addFailure(report, error.file, error.message);
   }
   return events;
 }
 
-async function parseJsonl(harness: ImportHarness, file: string, report: WorkingReport): Promise<SourceEvent[]> {
-  const events: SourceEvent[] = [];
+async function parseJsonl(harness: ImportHarness, file: string, report: ImportReport): Promise<NormalizedEvent[]> {
+  const events: NormalizedEvent[] = [];
   const input = fs.createReadStream(file, { encoding: "utf8" });
   const lines = readline.createInterface({ input, crlfDelay: Infinity });
   let position = 0;
@@ -193,11 +156,14 @@ async function parseJsonl(harness: ImportHarness, file: string, report: WorkingR
     for await (const line of lines) {
       position += 1;
       if (line.trim().length === 0) continue;
-      report.records_read += 1;
-      const record = JSON.parse(line) as unknown;
-      const event = mapRecord(harness, record, file, position);
-      if (event) events.push({ source: file, position, event });
-      else report.records_skipped += 1;
+      try {
+        const record = JSON.parse(line) as unknown;
+        const event = mapRecord(harness, preparedRecord(harness, record), file, position);
+        if (event) events.push(event);
+      } catch (error) {
+        report.records_rejected += 1;
+        addFailure(report, file, error instanceof Error ? error.message : String(error));
+      }
     }
   } finally {
     lines.close();
@@ -206,30 +172,26 @@ async function parseJsonl(harness: ImportHarness, file: string, report: WorkingR
   return events;
 }
 
-function parseJson(harness: ImportHarness, file: string, report: WorkingReport): SourceEvent[] {
+function parseJson(harness: ImportHarness, file: string): NormalizedEvent[] {
   const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
   const records = harness === "vscode" ? vscodeRecords(parsed) : [parsed];
-  const events: SourceEvent[] = [];
+  const events: NormalizedEvent[] = [];
   for (const [index, record] of records.entries()) {
-    report.records_read += 1;
-    const event = mapRecord(harness, record, file, index + 1);
-    if (event) events.push({ source: file, position: index + 1, event });
-    else report.records_skipped += 1;
+    const event = mapRecord(harness, preparedRecord(harness, record), file, index + 1);
+    if (event) events.push(event);
   }
   return events;
 }
 
-function parseCursor(file: string, report: WorkingReport): SourceEvent[] {
+function parseCursor(file: string): NormalizedEvent[] {
   const text = fs.readFileSync(file, "utf8");
   const title = /^#\s+.*?:\s*(.+)$/mu.exec(text)?.[1]?.trim() || path.basename(file, path.extname(file));
   const chunks = [...text.matchAll(/^##\s+(User|Assistant)\s*\n+([\s\S]*?)(?=^##\s+|(?![\s\S]))/gmu)];
-  const events: SourceEvent[] = [];
+  const events: NormalizedEvent[] = [];
   for (const [index, chunk] of chunks.entries()) {
-    report.records_read += 1;
     const role = chunk[1]!.toLowerCase();
     const content = chunk[2]!.trim();
     if (!content) {
-      report.records_skipped += 1;
       continue;
     }
     const event = mapImportedEvent("cursor", role === "user" ? "UserPromptSubmit" : "Stop", {
@@ -238,7 +200,7 @@ function parseCursor(file: string, report: WorkingReport): SourceEvent[] {
       ...(role === "user" ? { prompt: content } : { last_assistant_message: content }),
       imported_from: path.resolve(file),
     }, file, index + 1, "1970-01-01T00:00:00.000Z");
-    events.push({ source: file, position: index + 1, event });
+    events.push(event);
   }
   return events;
 }
@@ -253,15 +215,24 @@ function otlpRecords(value: Record<string, unknown>): unknown[] {
   const records: unknown[] = [];
   for (const resource of value.resourceSpans as unknown[]) {
     if (!isRecord(resource) || !Array.isArray(resource.scopeSpans)) continue;
+    const resourceAttributes = isRecord(resource.resource) ? attributeValues(resource.resource.attributes) : {};
     for (const scope of resource.scopeSpans) {
       if (!isRecord(scope) || !Array.isArray(scope.spans)) continue;
       for (const span of scope.spans) {
         if (!isRecord(span)) continue;
-        const attributes: Record<string, unknown> = {};
-        if (Array.isArray(span.attributes)) for (const attribute of span.attributes) {
-          if (isRecord(attribute) && typeof attribute.key === "string" && isRecord(attribute.value)) attributes[attribute.key] = Object.values(attribute.value)[0];
-        }
-        records.push({ ...attributes, type: span.name, timestamp: nanoTimestamp(span.startTimeUnixNano) });
+        const attributes = { ...resourceAttributes, ...attributeValues(span.attributes) };
+        const operation = stringValue(attributes["gen_ai.operation.name"]) ?? stringValue(span.name)?.split(" ")[0];
+        const type = operation === "invoke_agent" ? "SessionStart" : operation === "chat" ? "Stop" : operation === "execute_tool" ? "PostToolUse" : undefined;
+        if (!type) continue;
+        records.push({
+          ...attributes,
+          type,
+          session_id: stringValue(attributes["gen_ai.conversation.id"]) ?? stringValue(attributes["session.id"]),
+          tool_name: attributes["gen_ai.tool.name"],
+          tool_use_id: attributes["gen_ai.tool.call.id"],
+          last_assistant_message: attributes["gen_ai.output.messages"],
+          timestamp: nanoTimestamp(span.startTimeUnixNano),
+        });
       }
     }
   }
@@ -273,14 +244,51 @@ function nanoTimestamp(value: unknown): string | undefined {
   return new Date(Number(BigInt(value) / 1_000_000n)).toISOString();
 }
 
+function attributeValues(value: unknown): Record<string, unknown> {
+  const attributes: Record<string, unknown> = {};
+  if (!Array.isArray(value)) return attributes;
+  for (const attribute of value) {
+    if (isRecord(attribute) && typeof attribute.key === "string" && isRecord(attribute.value)) attributes[attribute.key] = Object.values(attribute.value)[0];
+  }
+  return attributes;
+}
+
+function contentText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (isRecord(value)) return stringValue(value.text);
+  if (!Array.isArray(value)) return undefined;
+  return value.map((item) => contentText(item)).filter((item): item is string => item !== undefined).join("\n");
+}
+
+function preparedRecord(harness: ImportHarness, value: unknown): unknown {
+  if (harness !== "kiro" || !isRecord(value)) return value;
+  const params = isRecord(value.params) ? value.params : undefined;
+  if (value.method === "session/prompt" && params) return { ...params, type: "UserPromptSubmit", prompt: contentText(params.content) };
+  if (value.method !== "session/notification" || !params || !isRecord(params.update)) return value;
+  const update = params.update;
+  const session_id = stringValue(params.sessionId) ?? stringValue(params.session_id);
+  const type = stringValue(update.sessionUpdate) ?? stringValue(update.type);
+  if (type === "AgentMessageChunk") return { ...update, session_id, type: "Stop", last_assistant_message: contentText(update.content) };
+  if (type === "ToolCall" || type === "ToolCallUpdate") return {
+    ...update,
+    session_id,
+    type: "PostToolUse",
+    tool_name: stringValue(update.title) ?? stringValue(update.name),
+    tool_use_id: stringValue(update.toolCallId) ?? stringValue(update.tool_use_id),
+    tool_input: update.rawInput ?? update.parameters,
+    tool_response: update.content ?? update.result,
+  };
+  if (type === "TurnEnd") return { ...update, session_id, type: "Stop" };
+  return value;
+}
+
 function mapRecord(harness: ImportHarness, value: unknown, file: string, position: number): NormalizedEvent | undefined {
   if (!isRecord(value)) throw new Error("record is not an object");
   const sessionId = stringValue(value.session_id) ?? stringValue(value.sessionId) ?? stringValue(value.conversation_id) ?? path.basename(file, path.extname(file));
   const role = stringValue(value.role)?.toLowerCase();
   const nativeEvent = knownEvent(
     harness,
-    stringValue(value.hook_event_name) ?? stringValue(value.eventName) ?? stringValue(value.event) ?? stringValue(value.event_type) ?? stringValue(value.type)
-      ?? (harness === "kiro" && file.endsWith("session.json") ? "SessionStart" : undefined),
+    stringValue(value.hook_event_name) ?? stringValue(value.eventName) ?? stringValue(value.event) ?? stringValue(value.event_type) ?? stringValue(value.type),
     role,
   );
   if (!nativeEvent) return undefined;
@@ -330,9 +338,8 @@ function timestamp(value: Record<string, unknown>): string {
   return candidate;
 }
 
-function addFailure(report: WorkingReport, source: string, error: string, includeLegacy = true): void {
+function addFailure(report: ImportReport, source: string, error: string): void {
   report.failures.push({ source, error });
-  if (includeLegacy) report.errors.push({ file: source, message: error });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

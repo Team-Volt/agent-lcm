@@ -79,10 +79,6 @@ test("import-codex-sessions dry-run counts importable records without writing st
 
   assertCliOk(result);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.mode, "dry-run");
-  assert.equal(report.files_scanned, 1);
-  assert.equal(report.records_read, 5);
-  assert.equal(report.events_importable, 4);
   assert.equal(report.events_imported, 0);
   assert.equal(fs.existsSync(path.join(lcmHome, "events.jsonl")), false);
 });
@@ -91,13 +87,11 @@ test("import-codex-sessions ingests existing Codex JSONL sessions idempotently",
   const source = writeCodexSessionFixture();
   const lcmHome = tempHome("agent-lcm-import-");
 
-  const first = runCli(["import-codex-sessions", "--from", source, "--batch-size", "1", "--json"], {
+  const first = runCli(["import-codex-sessions", "--from", source, "--json"], {
     env: { AGENT_LCM_HOME: lcmHome },
   });
   assertCliOk(first);
   const firstReport = JSON.parse(first.stdout);
-  assert.equal(firstReport.mode, "import");
-  assert.equal(firstReport.events_importable, 4);
   assert.equal(firstReport.events_imported, 4);
   assert.equal(firstReport.events_skipped_duplicate, 0);
 
@@ -324,13 +318,13 @@ test("metadata backfill does not duplicate events imported by an older version",
   });
   assertCliOk(result);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.events_imported, 4);
-  assert.equal(report.events_skipped_duplicate, 0);
+  assert.equal(report.events_imported, 2);
+  assert.equal(report.events_skipped_duplicate, 2);
 
   const listed = runCli(["sessions", "--json"], { env: { AGENT_LCM_HOME: home } });
   assertCliOk(listed);
   const [session] = JSON.parse(listed.stdout).sessions;
-  assert.equal(session.event_count, 6);
+  assert.equal(session.event_count, 4);
   assert.equal(session.parent_session_id, "parent-session");
   assert.equal(session.agent_role, "worker");
   assert.equal(session.model, "gpt-5.6-sol");
@@ -348,10 +342,7 @@ test("import-codex-sessions recalls standalone event messages and re-imports the
 
   assertCliOk(first);
   const firstReport = JSON.parse(first.stdout);
-  assert.equal(firstReport.records_read, 5);
-  assert.equal(firstReport.events_importable, 3);
   assert.equal(firstReport.events_imported, 3);
-  assert.equal(firstReport.records_skipped, 2);
 
   const second = runCli(["import-codex-sessions", "--from", source, "--json"], {
     env: { AGENT_LCM_HOME: lcmHome },
@@ -403,10 +394,7 @@ test("import-codex-sessions imports current response items and deduplicates exac
 
   assertCliOk(result);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.records_read, 10);
-  assert.equal(report.events_importable, 7);
   assert.equal(report.events_imported, 7);
-  assert.equal(report.records_skipped, 3);
 
   const responses = runMcp([
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
@@ -457,10 +445,7 @@ test("import-codex-sessions deduplicates exact event message pairs when event_ms
 
   assertCliOk(result);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.records_read, 6);
-  assert.equal(report.events_importable, 3);
   assert.equal(report.events_imported, 3);
-  assert.equal(report.records_skipped, 3);
 
   const responses = runMcp([
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
@@ -488,10 +473,7 @@ test("import-codex-sessions preserves whitespace-distinct cross-shape and repeat
 
   assertCliOk(result);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.records_read, 10);
-  assert.equal(report.events_importable, 9);
   assert.equal(report.events_imported, 9);
-  assert.equal(report.records_skipped, 1);
 
   const responses = runMcp([
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
@@ -535,13 +517,10 @@ test("import-codex-sessions skips an invalid timestamp and imports later records
 
   assertCliOk(result);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.files_scanned, 2);
-  assert.equal(report.records_read, 5);
   assert.equal(report.events_imported, 4);
-  assert.equal(report.records_skipped, 1);
-  assert.equal(report.errors.length, 1);
-  assert.equal(report.errors[0].line, 2);
-  assert.match(report.errors[0].message, /Invalid time value|invalid timestamp/iu);
+  assert.equal(report.records_rejected, 1);
+  assert.equal(report.failures.length, 1);
+  assert.match(report.failures[0].error, /Invalid time value|invalid timestamp/iu);
 
   const responses = runMcp([
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
@@ -583,12 +562,9 @@ test("import-codex-sessions reports an unreadable file and continues with the ne
 
   assertCliOk(result);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.files_scanned, 2);
   assert.equal(report.events_imported, 2);
-  assert.equal(report.records_skipped, 1);
-  assert.equal(report.errors.length, 1);
-  assert.equal(report.errors[0].file, unreadable);
-  assert.equal(report.errors[0].line, undefined);
+  assert.equal(report.failures.length, 1);
+  assert.equal(report.failures[0].source, unreadable);
 });
 
 function writeCodexSessionFixture(): string {

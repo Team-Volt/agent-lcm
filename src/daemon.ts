@@ -173,7 +173,7 @@ async function dispatchRequest(config: LcmConfig, storage: DaemonStorage, reques
         quarantine_count: countFiles(config.quarantineDir),
       };
     case "drain":
-      return drainStorageInbox(config, storage);
+      return drainStorageInbox(config, storage, stringSet(request.params.eventIds));
     case "tool":
       return withReadableStorage(config, storage, (reader) => callTool(reader, request.params));
     case "cli":
@@ -238,14 +238,19 @@ function booleanParam(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function drainStorageInbox(config: LcmConfig, storage: DaemonStorage) {
+function drainStorageInbox(config: LcmConfig, storage: DaemonStorage, reportEventIds?: ReadonlySet<string>) {
   if (!hasInboxItems(config)) return { ingested: 0, duplicates: 0, quarantined: 0 };
   const writer = writableStorage(config, storage);
   return drainInbox(config, (event) => {
     if (writer.hasEvent(event.event_id)) return "duplicate";
     writer.ingest(event);
     return "ingested";
-  });
+  }, reportEventIds);
+}
+
+function stringSet(value: unknown): ReadonlySet<string> | undefined {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) return undefined;
+  return new Set(value);
 }
 
 function withReadableStorage<T>(config: LcmConfig, storage: DaemonStorage, operation: (value: LcmStorage) => T): T {

@@ -5,7 +5,9 @@ import test from "node:test";
 
 import { loadConfig } from "../src/config.ts";
 import { ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
+import { normalizeHookEvent } from "../src/events.ts";
 import { importSessions, type ImportOptions } from "../src/import.ts";
+import { publishInboxEvent } from "../src/inbox.ts";
 import { assertCliOk, readJsonl, runCli, tempHome } from "./helpers.ts";
 
 const fixtures = (name: string) => path.resolve("tests/fixtures", name);
@@ -27,6 +29,7 @@ test("imports supported exported sessions idempotently without changing sources"
     const first = await importSessions(source.options);
     const second = await importSessions(source.options);
     assert.ok(first.events_imported > 0, source.options.harness);
+    assert.deepEqual(Object.keys(first).sort(), ["events_imported", "events_skipped_duplicate", "failures", "needs_export", "records_rejected", "sessions_imported", "sessions_scanned"]);
     assert.equal(second.events_imported, 0, source.options.harness);
     assert.equal(second.events_skipped_duplicate, first.events_imported, source.options.harness);
     assert.deepEqual(source.paths.map((file) => fs.readFileSync(file)), before, source.options.harness);
@@ -43,7 +46,7 @@ test("keeps valid sessions when one source file is malformed", async (t) => {
   const malformed = path.join(source, "bad", "events.jsonl");
   fs.mkdirSync(path.dirname(malformed), { recursive: true });
   fs.mkdirSync(path.join(source, "valid"), { recursive: true });
-  fs.writeFileSync(malformed, "{bad json}\n");
+  fs.writeFileSync(malformed, `{bad json}\n${fs.readFileSync(fixtures("import/copilot/events.jsonl"), "utf8")}`);
   fs.copyFileSync(fixtures("import/copilot/events.jsonl"), path.join(source, "valid", "events.jsonl"));
   const config = loadConfig({ home: tempHome("agent-lcm-import-partial-home-") });
   t.after(() => stopDaemon(config));
@@ -78,16 +81,16 @@ test("all discovers local Codex, Copilot, and Kiro homes", async (t) => {
   assert.deepEqual(report.needs_export, ["vscode", "cursor"]);
 });
 
-test("imports VS Code OTLP debug exports and Kiro session metadata", async (t) => {
+test("imports VS Code OTLP debug exports and Kiro ACP session events", async (t) => {
   const config = loadConfig({ home: tempHome("agent-lcm-import-debug-home-") });
   t.after(() => stopDaemon(config));
   await ensureDaemon(config);
 
   const vscode = await importSessions({ harness: "vscode", paths: [fixtures("import/vscode/otlp.json")], config });
-  const kiro = await importSessions({ harness: "kiro", paths: [fixtures("import/kiro/session.json")], config });
+  const kiro = await importSessions({ harness: "kiro", paths: [fixtures("import/kiro/session.jsonl")], config });
 
-  assert.equal(vscode.events_imported, 1);
-  assert.equal(kiro.events_imported, 1);
+  assert.equal(vscode.events_imported, 3);
+  assert.equal(kiro.events_imported, 3);
 });
 
 test("CLI imports one selected harness", () => {
@@ -98,4 +101,30 @@ test("CLI imports one selected harness", () => {
 
   assertCliOk(result);
   assert.equal(JSON.parse(result.stdout).events_imported, 2);
+});
+
+test("reports only this import when draining a shared inbox", async (t) => {
+  const config = loadConfig({ home: tempHome("agent-lcm-import-shared-inbox-") });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+  publishInboxEvent(config, normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: "other", cwd: "/tmp/other", prompt: "other queued event" }),
+    env: {},
+  }));
+
+  const report = await importSessions({ harness: "copilot", paths: [fixtures("import/copilot")], config });
+
+  assert.equal(report.events_imported, 2);
+  assert.equal(report.events_skipped_duplicate, 0);
+  assert.equal(readJsonl(config.rawLogPath).length, 3);
+});
+
+test("CLI requires exactly one import selector", () => {
+  const result = runCli(["import", "--all", "--harness", "copilot", "--json"], {
+    env: { AGENT_LCM_HOME: tempHome("agent-lcm-import-cli-selector-") },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /exactly one/u);
 });

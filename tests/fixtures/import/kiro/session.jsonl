@@ -1,2 +1,3 @@
-{"timestamp":"2026-08-01T10:02:00.000Z","type":"SessionStart","session_id":"kiro-import","cwd":"/tmp/kiro-import"}
-{"timestamp":"2026-08-01T10:02:01.000Z","type":"UserPromptSubmit","session_id":"kiro-import","cwd":"/tmp/kiro-import","prompt":"kiro import request"}
+{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"kiro-import","update":{"sessionUpdate":"AgentMessageChunk","content":{"type":"text","text":"kiro import response"}}}}
+{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"kiro-import","update":{"sessionUpdate":"ToolCall","toolCallId":"tool-1","title":"readFile","rawInput":{"path":"/tmp/kiro-import"}}}}
+{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"kiro-import","update":{"sessionUpdate":"TurnEnd"}}}
