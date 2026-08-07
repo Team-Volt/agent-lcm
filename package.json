@@ -33,6 +33,7 @@
     "dist/",
     "hooks/",
     "skills/",
+    "src/",
     "hooks.json",
     "mcp.json",
     "plugin.json"
