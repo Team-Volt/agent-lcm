@@ -179,6 +179,21 @@ test("setup all configures only harnesses already installed for the user", () =>
   assert.equal(fs.existsSync(path.join(userHome, ".kiro")), false);
 });
 
+test("setup prints a clear result for people and keeps JSON output for scripts", () => {
+  const userHome = tempHome("agent-lcm-output-");
+  const text = runCli(["setup", "codex", "--home", userHome]);
+  assertCliOk(text);
+  assert.equal(text.stdout, `codex hooks have been configured: ${path.join(userHome, "hooks.json")}\n`);
+
+  const json = runCli(["setup", "codex", "--home", userHome, "--json"]);
+  assertCliOk(json);
+  assert.deepEqual(JSON.parse(json.stdout), {
+    harness: "codex",
+    path: path.join(userHome, "hooks.json"),
+    changed: false,
+  });
+});
+
 test("Kiro setup updates its owned hooks after a binary move", () => {
   const clientHome = tempHome("agent-lcm-kiro-legacy-");
   const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");
