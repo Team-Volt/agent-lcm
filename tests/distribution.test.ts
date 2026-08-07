@@ -38,7 +38,9 @@ test("the npm package contains the complete plugin and no development files", (t
   assert.equal(fs.existsSync(path.join(root, filename)), true);
 
   const packageJson = readJson("package.json");
-  for (const script of ["preinstall", "install", "postinstall", "prepare"]) assert.equal(packageJson.scripts?.[script], undefined);
+  for (const script of ["preinstall", "install", "postinstall", "build", "prepack", "prepare"]) {
+    assert.equal(packageJson.scripts?.[script], undefined);
+  }
 });
 
 test("package and native plugin versions stay in sync", () => {

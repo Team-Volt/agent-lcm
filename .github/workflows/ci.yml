@@ -23,7 +23,7 @@ jobs:
       - run: npm run typecheck
       - name: Check committed build output
         run: |
-          npm run build
+          npm run compile
           git diff --exit-code -- dist
           test -z "$(git status --porcelain --untracked-files=all -- dist)"
       - run: npm test
