@@ -1,7 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
 
 import type { CaptureHarness } from "./harnesses.ts";
+import { backupSetupConfiguration, readSetupConfiguration, writeSetupConfiguration } from "./setup-files.ts";
 import { SETUP_HARNESSES, setupPath } from "./setup-targets.ts";
 
 export type SetupOptions = { home?: string; command: string };
@@ -14,11 +14,11 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
   const target = setupPath(harness, options.home);
   const command = options.command.trim();
   assertSafeCommand(command);
-  const existing = readConfiguration(target);
+  const existing = readSetupConfiguration(target);
   const next = mergeConfiguration(existing, harness, command, target);
   if (existing && JSON.stringify(existing) === JSON.stringify(next)) return { harness, path: target, changed: false };
-  if (existing) backupConfiguration(target);
-  writeConfiguration(target, next);
+  if (existing) backupSetupConfiguration(target);
+  writeSetupConfiguration(target, next);
   return { harness, path: target, changed: true };
 }
 
@@ -27,24 +27,6 @@ export function setupStatus(options: SetupStatusOptions = {}): Record<CaptureHar
     const target = setupPath(harness, options.home);
     return [harness, { configured: configured(harness, target), path: target }];
   })) as Record<CaptureHarness, HarnessSetupStatus>;
-}
-
-function readConfiguration(target: string): Record<string, unknown> | undefined {
-  let text: string;
-  try {
-    text = fs.readFileSync(target, "utf8");
-  } catch (error) {
-    if (hasCode(error, "ENOENT")) return undefined;
-    throw error;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw invalidConfiguration(target);
-  }
-  if (!isRecord(value)) throw invalidConfiguration(target);
-  return value;
 }
 
 function mergeConfiguration(
@@ -65,19 +47,26 @@ function mergeCodexConfiguration(
 ): Record<string, unknown> {
   const configuration = existing ? structuredClone(existing) : { hooks: {} };
   if (!isRecord(configuration.hooks)) throw invalidConfiguration(target);
-  removeAgentLcmHooks(configuration.hooks, "codex", target);
 
   for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]) {
-    const hooks = configuration.hooks[event];
     const expectedCommand = captureCommand(command, "codex", event);
-    if (hooks === undefined) {
-      configuration.hooks[event] = [{ type: "command", command: expectedCommand }];
+    const selectors = configuration.hooks[event];
+    if (selectors === undefined) {
+      configuration.hooks[event] = [{ hooks: [{ type: "command", command: expectedCommand }] }];
       continue;
     }
-    if (!Array.isArray(hooks) || !hooks.every(isRecord)) throw invalidConfiguration(target);
-    if (!hooks.some((entry) => entry.type === "command" && entry.command === expectedCommand)) {
-      hooks.push({ type: "command", command: expectedCommand });
+    if (!Array.isArray(selectors) || !selectors.every(isRecord)) throw invalidConfiguration(target);
+    let found = false;
+    for (const selector of selectors) {
+      if (!Array.isArray(selector.hooks) || !selector.hooks.every(isRecord)) throw invalidConfiguration(target);
+      for (const hook of selector.hooks) {
+        if (!isAgentLcmHook(hook, event, "codex")) continue;
+        hook.type = "command";
+        hook.command = expectedCommand;
+        found = true;
+      }
     }
+    if (!found) selectors.push({ hooks: [{ type: "command", command: expectedCommand }] });
   }
   return configuration;
 }
@@ -174,32 +163,6 @@ function assertSafeCommand(command: string): void {
   }
 }
 
-function writeConfiguration(target: string, configuration: Record<string, unknown>): void {
-  const directory = path.dirname(target);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  fs.chmodSync(directory, 0o700);
-  const temporary = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(configuration, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(temporary, target);
-  fs.chmodSync(target, 0o600);
-}
-
-function backupConfiguration(target: string): void {
-  const extension = path.extname(target);
-  const stem = target.slice(0, -extension.length);
-  const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
-  for (let suffix = 0; ; suffix += 1) {
-    const candidate = `${stem}-pre-agent-lcm-${timestamp}${suffix ? `-${suffix}` : ""}${extension}`;
-    try {
-      fs.copyFileSync(target, candidate, fs.constants.COPYFILE_EXCL);
-      fs.chmodSync(candidate, 0o600);
-      return;
-    } catch (error) {
-      if (!hasCode(error, "EEXIST")) throw error;
-    }
-  }
-}
-
 function configured(harness: CaptureHarness, target: string): boolean {
   const configuration = readConfigurationForStatus(target);
   if (!configuration) return false;
@@ -212,11 +175,14 @@ function configured(harness: CaptureHarness, target: string): boolean {
   if (harness !== "codex" && configuration.version !== 1) return false;
   const hooksByEvent = configuration.hooks;
   if (!isRecord(hooksByEvent)) return false;
+  if (harness === "codex") return eventsFor(harness).every((event) => {
+    const selectors = hooksByEvent[event];
+    return Array.isArray(selectors) && selectors.some((selector) => isRecord(selector)
+      && Array.isArray(selector.hooks)
+      && selector.hooks.some((hook) => isExpectedCommandHook(hook, harness, event)));
+  });
   if (isSharedHookHarness(harness) && hasSharedPascalRegistration(hooksByEvent)) return false;
-  const events = harness === "codex"
-    ? [["SessionStart", "SessionStart"], ["UserPromptSubmit", "UserPromptSubmit"], ["PostToolUse", "PostToolUse"], ["Stop", "Stop"]] as const
-    : setupEvents(harness);
-  return events.every(([event, captureEvent]) => {
+  return setupEvents(harness).every(([event, captureEvent]) => {
     const hooks = hooksByEvent[event];
     return Array.isArray(hooks) && hooks.some((entry) => isExpectedCommandHook(entry, setupCaptureHarness(harness), captureEvent));
   });
@@ -224,7 +190,7 @@ function configured(harness: CaptureHarness, target: string): boolean {
 
 function readConfigurationForStatus(target: string): Record<string, unknown> | undefined {
   try {
-    return readConfiguration(target);
+    return readSetupConfiguration(target);
   } catch {
     return undefined;
   }
@@ -293,10 +259,6 @@ function isCaptureCommand(value: unknown, harness: CaptureHarness | "auto", even
 
 function invalidConfiguration(target: string): Error {
   return new Error(`Cannot update invalid setup configuration: ${target}`);
-}
-
-function hasCode(error: unknown, code: string): boolean {
-  return error instanceof Error && Reflect.get(error, "code") === code;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -165,7 +165,7 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   assert.equal(fs.existsSync(path.join(home, ".copilot")), false);
   assert.equal(fs.existsSync(path.join(home, ".kiro")), false);
   const codexHooks = JSON.parse(fs.readFileSync(path.join(home, ".codex/hooks.json"), "utf8"));
-  const capture = spawnSync(codexHooks.hooks.UserPromptSubmit[0].command, {
+  const capture = spawnSync(codexHooks.hooks.UserPromptSubmit[0].hooks[0].command, {
     cwd: root,
     encoding: "utf8",
     env,

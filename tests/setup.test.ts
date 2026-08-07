@@ -126,10 +126,15 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
   const setupPath = path.join(clientHome, "hooks.json");
   fs.mkdirSync(path.dirname(setupPath), { recursive: true });
   const original = JSON.stringify({ owner: "user", hooks: {
-    SessionStart: [
-      { type: "command", command: "\"/old/bin/agent-lcm\" capture --harness codex SessionStart" },
-      { type: "command", command: "other-hook" },
-    ],
+    SessionStart: [{ matcher: "*", hooks: [
+      { type: "command", command: "\"/old/bin/agent-lcm\" capture --harness codex SessionStart", timeout: 15 },
+      { type: "command", command: "other-hook", timeout: 30 },
+    ] }],
+    CustomEvent: [{ hooks: [{
+      type: "command",
+      command: 'node "/opt/custom/agent-lcm" capture --harness codex Stop',
+      owner: "user",
+    }] }],
   } });
   fs.writeFileSync(setupPath, original);
 
@@ -140,10 +145,19 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
   assert.equal(first.changed, true);
   assert.equal(second.changed, false);
   assert.equal(configuration.owner, "user");
-  assert.deepEqual(configuration.hooks.SessionStart, [
-    { type: "command", command: "other-hook" },
-    { type: "command", command: "node \"/new/bin/agent-lcm\" capture --harness codex SessionStart" },
-  ]);
+  assert.deepEqual(configuration.hooks.SessionStart, [{ matcher: "*", hooks: [
+    {
+      type: "command",
+      command: "node \"/new/bin/agent-lcm\" capture --harness codex SessionStart",
+      timeout: 15,
+    },
+    { type: "command", command: "other-hook", timeout: 30 },
+  ] }]);
+  assert.deepEqual(configuration.hooks.CustomEvent, [{ hooks: [{
+    type: "command",
+    command: 'node "/opt/custom/agent-lcm" capture --harness codex Stop',
+    owner: "user",
+  }] }]);
   const backups = fs.readdirSync(clientHome).filter((name) => name.startsWith("hooks-pre-agent-lcm-"));
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(clientHome, backups[0] ?? ""), "utf8"), original);
@@ -202,6 +216,27 @@ test("setup prints a clear result for people and keeps JSON output for scripts",
     path: path.join(userHome, "hooks.json"),
     changed: false,
   });
+});
+
+test("setup never overwrites an existing timestamped backup", () => {
+  const clientHome = tempHome("agent-lcm-backup-collision-");
+  const setupPath = path.join(clientHome, "hooks.json");
+  const original = '{"hooks":{}}\n';
+  const timestamp = "2026-08-07T12-34-56-789Z";
+  const firstBackup = path.join(clientHome, `hooks-pre-agent-lcm-${timestamp}.json`);
+  const nextBackup = path.join(clientHome, `hooks-pre-agent-lcm-${timestamp}-1.json`);
+  fs.writeFileSync(setupPath, original);
+  fs.writeFileSync(firstBackup, "existing backup");
+  const originalToISOString = Date.prototype.toISOString;
+  Date.prototype.toISOString = () => "2026-08-07T12:34:56.789Z";
+  try {
+    setupHarness("codex", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+  } finally {
+    Date.prototype.toISOString = originalToISOString;
+  }
+
+  assert.equal(fs.readFileSync(firstBackup, "utf8"), "existing backup");
+  assert.equal(fs.readFileSync(nextBackup, "utf8"), original);
 });
 
 test("Kiro setup updates its owned hooks after a binary move", () => {
