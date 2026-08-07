@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { LcmConfig } from "./config.ts";
 import { drainInbox } from "./inbox.ts";
 import { callTool } from "./mcp-tools.ts";
+import { maintenanceNeeded, runMaintenanceOnce } from "./maintenance.ts";
 import { hasCode, ipcAddress, prepareIpcAddress, readOrCreateToken, sendDaemonRequest, tokenMatches, type DaemonRequest, type DaemonResponse } from "./ipc.ts";
 import { createStorage, type LcmStorage } from "./storage.ts";
 
@@ -17,7 +18,7 @@ const OWNERSHIP_FILE = "daemon.lock.sqlite";
 const START_TIMEOUT_MS = 5_000;
 const START_POLL_MS = 25;
 
-type DaemonStorage = { writer?: LcmStorage };
+type DaemonStorage = { writer?: LcmStorage; maintenanceError?: string };
 
 export async function startDaemon(config: LcmConfig): Promise<void> {
   const token = readOrCreateToken(config);
@@ -171,6 +172,7 @@ async function dispatchRequest(config: LcmConfig, storage: DaemonStorage, reques
         version: daemonVersion(),
         queue_depth: countFiles(config.inboxDir, (name) => name.endsWith(".json")),
         quarantine_count: countFiles(config.quarantineDir),
+        ...(storage.maintenanceError ? { maintenance_error: storage.maintenanceError } : {}),
       };
     case "drain":
       return drainStorageInbox(config, storage, stringSet(request.params.eventIds));
@@ -186,6 +188,7 @@ async function dispatchRequest(config: LcmConfig, storage: DaemonStorage, reques
 }
 
 async function callCli(config: LcmConfig, daemonStorage: DaemonStorage, params: Record<string, unknown>): Promise<unknown> {
+  if (params.command === "maintain") return maintainStorage(config, daemonStorage, true);
   const write = params.command === "cleanup" && params.apply === true;
   return withStorage(config, daemonStorage, write, (storage) => callCliWithStorage(storage, params));
 }
@@ -239,13 +242,31 @@ function booleanParam(value: unknown): boolean | undefined {
 }
 
 function drainStorageInbox(config: LcmConfig, storage: DaemonStorage, reportEventIds?: ReadonlySet<string>) {
-  if (!hasInboxItems(config)) return { ingested: 0, duplicates: 0, quarantined: 0 };
-  const writer = writableStorage(config, storage);
-  return drainInbox(config, (event) => {
-    if (writer.hasEvent(event.event_id)) return "duplicate";
-    writer.ingest(event);
-    return "ingested";
-  }, reportEventIds);
+  const report = hasInboxItems(config)
+    ? drainInbox(config, (event) => {
+      const writer = writableStorage(config, storage);
+      if (writer.hasEvent(event.event_id)) return "duplicate";
+      writer.ingest(event);
+      return "ingested";
+    }, reportEventIds)
+    : { ingested: 0, duplicates: 0, quarantined: 0 };
+  maintainStorage(config, storage);
+  return report;
+}
+
+function maintainStorage(config: LcmConfig, storage: DaemonStorage, force = false): unknown {
+  if (!force && !maintenanceNeeded(config)) return undefined;
+  storage.writer?.close();
+  storage.writer = undefined;
+  try {
+    const report = runMaintenanceOnce(config);
+    storage.maintenanceError = report.errors.length > 0 ? report.errors.join("; ") : undefined;
+    return report;
+  } catch (error) {
+    storage.maintenanceError = error instanceof Error ? error.message : String(error);
+    if (force) throw error;
+    return undefined;
+  }
 }
 
 function stringSet(value: unknown): ReadonlySet<string> | undefined {

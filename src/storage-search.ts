@@ -5,6 +5,7 @@ import type { NormalizedEvent } from "./events.ts";
 import { overflowReferenceFromEvent, searchOverflowContent, type OverflowSearchMatch } from "./overflow.ts";
 import { readRawEvents } from "./raw-log.ts";
 import { parseStringArray, recordValue, rowToSessionSummary } from "./storage-rows.ts";
+import { STORED_EVENT_JSON_SQL } from "./stored-event.ts";
 import { getCurrentStoredSession, summarizeSessions } from "./storage-sessions.ts";
 export { searchSummaryNodes } from "./storage-summaries.ts";
 import { harnessSet, harnessSqlFragment, matchesHarness, type SearchOverflowArgs, type SearchSessionArgs, type SessionDiscovery, type SessionSearchMatch, type SessionSummary } from "./storage-types.ts";
@@ -338,7 +339,8 @@ export function searchStoredSessions(db: DatabaseSync | undefined, rawLogPath: s
   const harnessFilter = harnessSqlFragment("s.harness", args.harnesses, 5);
   const eventStatement = db.prepare(`
     SELECT s.*,
-           e.raw_json AS match_text, e.timestamp AS match_timestamp, 1 AS match_weight,
+           lcm_raw_json(e.raw_json, e.segment_id, e.raw_offset, e.raw_length) AS match_text,
+           e.timestamp AS match_timestamp, 1 AS match_weight,
            'event' AS match_kind, e.event_id AS match_event_id
     FROM event_fts f
     JOIN events e ON e.event_id = f.event_id
@@ -404,9 +406,9 @@ export function searchStoredOverflow(
   const selectedHarnesses = harnessSet(args.harnesses);
   const events = db
     ? db.prepare(`
-        SELECT raw_json
+        SELECT ${STORED_EVENT_JSON_SQL} AS raw_json
         FROM events
-        WHERE json_extract(raw_json, '$.payload.overflow_ref.sha256') IS NOT NULL
+        WHERE overflow_sha256 IS NOT NULL
           AND (?1 IS NULL OR cwd = ?1)
           AND (?2 IS NULL OR repo_root = ?2)
           ${harnessSqlFragment("harness", args.harnesses, 4).sql}

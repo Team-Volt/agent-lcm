@@ -14,6 +14,7 @@ import { setupHarness, setupStatus } from "./setup.ts";
 
 type DaemonCliParams =
   | { command: "health" | "stats" }
+  | { command: "maintain" }
   | { command: "cleanup"; apply: boolean }
   | {
     command: "sessions";
@@ -172,6 +173,11 @@ export async function main(argv: string[]): Promise<void> {
     printObjectOrText(await daemonCli(loadConfig(), { command: "cleanup", apply }));
     return;
   }
+  if (command === "maintain") {
+    if (!rest.includes("--once")) throw new Error("Usage: agent-lcm maintain --once [--json]");
+    printObjectOrText(await daemonCli(loadConfig(), { command: "maintain" }));
+    return;
+  }
   if (command === "sessions") {
     printObjectOrText(await daemonCli(loadConfig(), {
       command: "sessions",
@@ -238,6 +244,7 @@ Commands:
   agent-lcm health [--json]
   agent-lcm stats [--json]
   agent-lcm cleanup [--apply] [--json]   Preview or apply safe derived-index compaction; raw events are preserved
+  agent-lcm maintain --once [--json]     Run raw segment migration, compression, and retention
   agent-lcm sessions [--since ISO] [--until ISO] [--cwd PATH] [--repo-root PATH] [--parent-session-id ID] [--roots-only] [--include-summaries] [--limit N] [--cursor N] [--json]
   agent-lcm usage [--since ISO] [--until ISO] [--cwd PATH] [--repo-root PATH] [--parent-session-id ID] [--roots-only] [--json]
   agent-lcm context-plan [--session-id ID] [--cwd PATH] [--repo-root PATH] [--model-context-window N] [--auto-compact-token-limit N] [--recent-event-limit N] [--json]
