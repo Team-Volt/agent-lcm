@@ -143,8 +143,7 @@ export function readLocatedEvent(config, location) {
     return createLocatedEventReader(config)(location);
 }
 export function createLocatedEventReader(config) {
-    let cachedSegmentId;
-    let cachedContent;
+    const cachedSegments = new Map();
     return (location) => {
         const record = readManifest(config.manifestPath).segments.find((segment) => segment.id === location.segmentId);
         const targetPath = record
@@ -156,13 +155,18 @@ export function createLocatedEventReader(config) {
             throw new Error("Invalid raw event location.");
         }
         if (record?.compressed) {
-            if (cachedSegmentId !== record.id) {
-                cachedContent = gunzipSync(fs.readFileSync(targetPath));
-                cachedSegmentId = record.id;
+            let content = cachedSegments.get(record.id);
+            if (content) {
+                cachedSegments.delete(record.id);
+                cachedSegments.set(record.id, content);
             }
-            const content = cachedContent;
-            if (!content)
-                throw new Error(`Compressed raw segment could not be read: ${record.id}`);
+            else {
+                content = gunzipSync(fs.readFileSync(targetPath));
+                cachedSegments.set(record.id, content);
+                const oldestSegmentId = cachedSegments.keys().next().value;
+                if (oldestSegmentId !== undefined && cachedSegments.size > 2)
+                    cachedSegments.delete(oldestSegmentId);
+            }
             const serialized = content.subarray(location.offset, location.offset + location.length);
             if (serialized.length !== location.length)
                 throw new Error("Raw event location is outside the segment.");

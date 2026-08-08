@@ -12,6 +12,7 @@ import { runMaintenanceOnce } from "../src/maintenance.ts";
 import {
   appendRawEvents,
   appendSegmentedEvents,
+  createLocatedEventReader,
   readAllRawEvents,
   readLocatedEvent,
   readRawLog,
@@ -402,6 +403,36 @@ test("compresses a verified closed segment and keeps locator reads available", (
   assert.equal(record.compressed, true);
   assert.equal(fs.existsSync(path.join(home, record.path)), true);
   assert.deepEqual(readLocatedEvent(config, firstLocation), first);
+});
+
+test("located event reads retain two decompressed segments", () => {
+  const home = tempHome();
+  const config = loadConfig({ home });
+  const events = ["first", "second", "active"].map((prompt, index) => normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({ session_id: `cache-${index}`, cwd: "/tmp/cache", prompt }),
+    env: {},
+    now: () => new Date(`2026-06-09T12:00:0${index}.000Z`),
+  }));
+  const first = appendSegmentedEvents(config, [events[0]], { segmentCapBytes: 1_024 })[0];
+  const second = appendSegmentedEvents(config, [events[1]], { segmentCapBytes: fs.statSync(config.rawLogPath).size + 1 })[0];
+  appendSegmentedEvents(config, [events[2]], { segmentCapBytes: fs.statSync(config.rawLogPath).size + 1 });
+  runMaintenanceOnce(config);
+  const originalReadFileSync = fs.readFileSync;
+  let compressedReads = 0;
+  fs.readFileSync = ((...args: Parameters<typeof originalReadFileSync>) => {
+    if (typeof args[0] === "string" && args[0].endsWith(".gz")) compressedReads += 1;
+    return originalReadFileSync(...args);
+  }) as typeof fs.readFileSync;
+  try {
+    const read = createLocatedEventReader(config);
+    assert.equal(read(first).event_id, events[0].event_id);
+    assert.equal(read(second).event_id, events[1].event_id);
+    assert.equal(read(first).event_id, events[0].event_id);
+    assert.equal(compressedReads, 2);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
 });
 
 test("checksum failure preserves the indexed payload copy", () => {
@@ -2281,8 +2312,8 @@ test("cleanup compacts legacy search text while preserving the raw log", () => {
   try {
     db.exec("UPDATE events SET text = raw_json");
     db.exec(`
-      INSERT INTO event_fts (event_id, session_id, cwd, repo_root, hook_event, content)
-      SELECT event_id, session_id, cwd, COALESCE(repo_root, ''), hook_event, raw_json
+      INSERT INTO event_fts (rowid, event_id, session_id, cwd, repo_root, hook_event, content)
+      SELECT rowid, event_id, session_id, cwd, COALESCE(repo_root, ''), hook_event, raw_json
       FROM events
       WHERE hook_event = 'PreToolUse'
     `);
@@ -2604,10 +2635,10 @@ test("search sessions merges summary and raw-event candidates before ranking a q
 
   const db = new DatabaseSync(path.join(home, "index.sqlite"));
   try {
-    db.prepare("DELETE FROM event_fts WHERE session_id = ?1").run("codex:summary-candidate");
-    db.prepare("DELETE FROM session_summary_fts WHERE session_id = ?1").run("codex:summary-candidate");
-    db.prepare("DELETE FROM summary_node_fts WHERE session_id = ?1").run("codex:raw-candidate");
-    db.prepare("DELETE FROM session_summary_fts WHERE session_id = ?1").run("codex:raw-candidate");
+    db.prepare("DELETE FROM event_fts WHERE rowid IN (SELECT rowid FROM events WHERE session_id = ?1)").run("codex:summary-candidate");
+    db.prepare("DELETE FROM session_summary_fts WHERE rowid IN (SELECT rowid FROM session_summaries WHERE session_id = ?1)").run("codex:summary-candidate");
+    db.prepare("DELETE FROM summary_node_fts WHERE rowid IN (SELECT rowid FROM summary_nodes WHERE session_id = ?1)").run("codex:raw-candidate");
+    db.prepare("DELETE FROM session_summary_fts WHERE rowid IN (SELECT rowid FROM session_summaries WHERE session_id = ?1)").run("codex:raw-candidate");
   } finally {
     db.close();
   }

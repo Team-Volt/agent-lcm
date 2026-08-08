@@ -8,14 +8,20 @@ import { extractFileReferences } from "./file-refs.ts";
 import { overflowReferenceFromEvent } from "./overflow.ts";
 import { rawLogState, rawLogStat, readRawEventIds, readRawEvents, segmentedRawLogState, type RawEventLocation, type RawLogState } from "./raw-log.ts";
 import { eventSearchText } from "./storage-context.ts";
-import { recordValue } from "./storage-rows.ts";
-import { initializeStorageSchema } from "./storage-schema.ts";
+import { recordValue, rowToSessionMemorySummary, rowToSummaryNode } from "./storage-rows.ts";
+import { createSearchIndexTables, initializeStorageSchema } from "./storage-schema.ts";
 import { segmentStorageHealth } from "./raw-segments.ts";
 import { STORED_EVENT_JSON_SQL } from "./stored-event.ts";
 import { getSummaryBackfillSessionIds, rebuildSessionMemorySummary, shouldRebuildSessionMemorySummary } from "./storage-summaries.ts";
 import { extractEventMetadata, extractSessionMetadata, isCodexLcmToolEvent, isSearchIndexEvent, maxNullable, scalar, summarizeSessions } from "./storage-sessions.ts";
 import type { Health, IndexCleanupReport } from "./storage-types.ts";
-import { SUMMARY_ALGORITHM_VERSION, SUMMARY_NODE_VERSION, isSummarySourceEvent } from "./summary.ts";
+import {
+  SUMMARY_ALGORITHM_VERSION,
+  SUMMARY_NODE_VERSION,
+  isSummarySourceEvent,
+  summaryNodeSearchText,
+  summarySearchText,
+} from "./summary.ts";
 
 const SUMMARY_SOURCE_HOOKS = "('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')";
 const FILE_REF_BACKFILL_KEY = "file_refs_backfilled_v1";
@@ -122,12 +128,14 @@ export function previewCleanupReport(indexPath: string, inspection: CleanupInspe
 
 export function replaceCleanupSearchIndex(db: DatabaseSync, searchableEvents: readonly NormalizedEvent[]): void {
   db.prepare("DELETE FROM event_fts").run();
+  const selectRowId = db.prepare("SELECT rowid FROM events WHERE event_id = ?1");
   const insertSearchEvent = db.prepare(`
-    INSERT INTO event_fts (event_id, session_id, cwd, repo_root, hook_event, content)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+    INSERT INTO event_fts (rowid, event_id, session_id, cwd, repo_root, hook_event, content)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
   `);
   for (const event of searchableEvents) {
-    insertSearchEvent.run(event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
+    const rowId = Number(recordValue(selectRowId.get(event.event_id)).rowid);
+    insertSearchEvent.run(rowId, event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
   }
   db.prepare("UPDATE events SET text = '' WHERE text <> ''").run();
 }
@@ -272,6 +280,64 @@ export function initializeIndex(db: DatabaseSync): void {
   const { backfillSessionMetadata } = initializeStorageSchema(db);
   backfillExistingEventMetadata(db);
   if (backfillSessionMetadata) backfillExistingSessionMetadata(db);
+  migrateSearchIndexes(db);
+}
+
+function migrateSearchIndexes(db: DatabaseSync): void {
+  const names = ["event_fts", "session_summary_fts", "summary_node_fts"];
+  const schemas = db.prepare(`
+    SELECT name, sql FROM sqlite_master
+    WHERE type = 'table' AND name IN ('event_fts', 'session_summary_fts', 'summary_node_fts')
+  `).all();
+  if (names.every((name) => schemas.some((row) => {
+    const record = recordValue(row);
+    return record.name === name && String(record.sql).includes("contentless_delete=1");
+  }))) return;
+
+  const eventRows = db.prepare(`SELECT rowid, ${STORED_EVENT_JSON_SQL} AS raw_json FROM events ORDER BY rowid`).all();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("DROP TABLE event_fts; DROP TABLE session_summary_fts; DROP TABLE summary_node_fts");
+    createSearchIndexTables(db);
+    const insertEvent = db.prepare(`
+      INSERT INTO event_fts (rowid, event_id, session_id, cwd, repo_root, hook_event, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `);
+    for (const row of eventRows) {
+      const record = recordValue(row);
+      const event = decodePersistedEvent(String(record.raw_json));
+      if (!isSearchIndexEvent(event) || isCodexLcmToolEvent(event)) continue;
+      insertEvent.run(
+        Number(record.rowid), event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event),
+      );
+    }
+    const insertSummary = db.prepare(`
+      INSERT INTO session_summary_fts (rowid, session_id, cwd, repo_root, content)
+      VALUES (?1, ?2, ?3, ?4, ?5)
+    `);
+    for (const row of db.prepare("SELECT rowid, * FROM session_summaries ORDER BY rowid").all()) {
+      const summary = rowToSessionMemorySummary(row);
+      insertSummary.run(
+        Number(recordValue(row).rowid), summary.session_id, summary.cwd, summary.repo_root ?? "", summarySearchText(summary),
+      );
+    }
+    const insertNode = db.prepare(`
+      INSERT INTO summary_node_fts (rowid, node_id, session_id, cwd, repo_root, depth, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `);
+    for (const row of db.prepare("SELECT rowid, * FROM summary_nodes ORDER BY rowid").all()) {
+      const node = rowToSummaryNode(row);
+      insertNode.run(
+        Number(recordValue(row).rowid), node.node_id, node.session_id, node.cwd, node.repo_root ?? "",
+        String(node.depth), summaryNodeSearchText(node),
+      );
+    }
+    db.exec("COMMIT");
+    db.exec("VACUUM");
+  } catch (error) {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function indexEventInTransaction(
@@ -330,9 +396,9 @@ export function indexEventInTransaction(
   );
   if (isSearchIndexEvent(event) && !isCodexLcmToolEvent(event)) {
     db.prepare(`
-      INSERT INTO event_fts (event_id, session_id, cwd, repo_root, hook_event, content)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-    `).run(event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
+      INSERT INTO event_fts (rowid, event_id, session_id, cwd, repo_root, hook_event, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `).run(insert.lastInsertRowid, event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
   }
   indexFileRefsForEvent(db, event);
   const summaryTouched = isSummarySourceEvent(event);

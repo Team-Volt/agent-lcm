@@ -775,11 +775,27 @@ test("migrates pre-DAG SQLite indexes without persisting graph projections", () 
   const storage = createStorage({ home });
   const health = storage.health();
   assert.equal(health.index_available, true);
+  assert.deepEqual(
+    storage.searchSessions({ query: "legacy migration event 1", limit: 5 }).map((match) => match.session_id),
+    [codexId("legacy-session")],
+  );
   assert.equal(health.graph_node_count !== undefined && health.graph_node_count > 0, true);
   assert.equal(health.graph_edge_count !== undefined && health.graph_edge_count > 0, true);
   assert.equal(storage.getSessionGraph(codexId("legacy-session"), { limit: 20 }).nodes.some((node) => node.kind === "turn"), true);
 
   storage.close();
+  const migrated = new DatabaseSync(path.join(home, "index.sqlite"), { readOnly: true });
+  const schema = migrated.prepare("SELECT sql FROM sqlite_master WHERE name = 'event_fts'").get();
+  assert.match(String(schema?.sql), /content\s*=\s*''/u);
+  assert.match(String(schema?.sql), /contentless_delete\s*=\s*1/u);
+  const ftsRow = migrated.prepare("SELECT rowid, event_id FROM event_fts LIMIT 1").get();
+  assert.equal(typeof ftsRow?.rowid, "number");
+  assert.equal(ftsRow?.event_id, null);
+  assert.equal(
+    migrated.prepare("SELECT e.event_id FROM event_fts f JOIN events e ON e.rowid = f.rowid LIMIT 1").get()?.event_id,
+    events[1].event_id,
+  );
+  migrated.close();
 });
 
 function ingest(
