@@ -141,8 +141,10 @@ summary nodes with `contains`, `next`, `tool_result`, `checkpoint`, and
 ## Import flow
 
 Importers read source files without modifying them, normalize records through
-the same harness adapters, and publish durable batches to the inbox. The daemon
-reports ingested and duplicate event IDs for each requested batch.
+the same harness adapters, and send bounded authenticated batches to the shared
+daemon. The daemon bulk-ingests each batch, defers summary work, and rebuilds
+each touched session once after the import. Imports are idempotent and do not
+create one inbox file per event; hooks still use the durable inbox.
 
 Codex, GitHub Copilot, and Kiro have default local search paths. Cursor accepts
 chat Markdown exports. VS Code accepts JSON conversation exports or OTLP JSON.
