@@ -334,6 +334,7 @@ function migrateSearchIndexes(db: DatabaseSync): void {
     }
     db.exec("COMMIT");
     db.exec("VACUUM");
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK");
     throw error;

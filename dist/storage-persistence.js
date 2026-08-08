@@ -273,6 +273,7 @@ function migrateSearchIndexes(db) {
         }
         db.exec("COMMIT");
         db.exec("VACUUM");
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     }
     catch (error) {
         if (db.isTransaction)

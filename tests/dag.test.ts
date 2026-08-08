@@ -4,8 +4,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
+import { loadConfig } from "../src/config.ts";
 import { normalizeHookEvent } from "../src/events.ts";
 import { createStorage } from "../src/storage.ts";
+import { initializeIndex } from "../src/storage-persistence.ts";
+import { registerStoredEventReader } from "../src/stored-event.ts";
 import { clearDerivedSummaries, tempHome } from "./helpers.ts";
 
 const codexId = (nativeId: string): string => `codex:${nativeId}`;
@@ -770,6 +773,10 @@ test("migrates pre-DAG SQLite indexes without persisting graph projections", () 
       VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7)
     `).run(event.event_id, event.session_id, event.timestamp, event.hook_event, event.cwd, JSON.stringify(event.payload), JSON.stringify(event));
   }
+  registerStoredEventReader(db, loadConfig({ home }));
+  initializeIndex(db);
+  const walPath = path.join(home, "index.sqlite-wal");
+  assert.equal(fs.existsSync(walPath) ? fs.statSync(walPath).size : 0, 0);
   db.close();
 
   const storage = createStorage({ home });
