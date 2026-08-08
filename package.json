@@ -1,6 +1,6 @@
 {
   "name": "@team-volt/agent-lcm",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Shared local context memory for agent harnesses.",
   "license": "MIT",
   "author": "Team Volt",
@@ -34,6 +34,7 @@
     "hooks/",
     "skills/",
     "hooks.json",
+    "mcp.cursor.json",
     "mcp.json",
     "plugin.json"
   ],

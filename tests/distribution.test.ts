@@ -29,6 +29,7 @@ test("the npm package contains the complete plugin and no development files", (t
     "README.md",
     "bin/agent-lcm",
     "hooks.json",
+    "mcp.cursor.json",
     "mcp.json",
     "package.json",
     "plugin.json",
@@ -159,7 +160,7 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   );
   const mcpConfiguration = JSON.parse(fs.readFileSync(path.join(packageRoot, "mcp.json"), "utf8"))
     .mcpServers["agent-lcm"] as { command: string; args: string[] };
-  const mcp = spawnSync(mcpConfiguration.command, mcpConfiguration.args.map((arg) => arg.replaceAll("${CURSOR_PLUGIN_ROOT}", packageRoot)), {
+  const mcp = spawnSync(mcpConfiguration.command, mcpConfiguration.args.map((arg) => arg.replaceAll("${PLUGIN_ROOT}", packageRoot)), {
     cwd: packageRoot,
     encoding: "utf8",
     env,
@@ -168,6 +169,17 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   });
   assert.equal(mcp.status, 0, mcp.stderr);
   assert.equal(JSON.parse(mcp.stdout).result.serverInfo.version, readJson("package.json").version);
+  const cursorMcpConfiguration = JSON.parse(fs.readFileSync(path.join(packageRoot, "mcp.cursor.json"), "utf8"))
+    .mcpServers["agent-lcm"] as { command: string; args: string[] };
+  const cursorMcp = spawnSync(cursorMcpConfiguration.command, cursorMcpConfiguration.args.map((arg) => arg.replaceAll("${CURSOR_PLUGIN_ROOT}", packageRoot)), {
+    cwd: packageRoot,
+    encoding: "utf8",
+    env,
+    input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })}\n`,
+    timeout: 15_000,
+  });
+  assert.equal(cursorMcp.status, 0, cursorMcp.stderr);
+  assert.equal(JSON.parse(cursorMcp.stdout).result.serverInfo.version, readJson("package.json").version);
   const importRoot = path.join(root, "empty-codex-sessions");
   fs.mkdirSync(importRoot);
   const imported = runInstalled(["import", "--harness", "codex", importRoot, "--dry-run", "--json"]);
