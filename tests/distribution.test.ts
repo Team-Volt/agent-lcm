@@ -23,6 +23,7 @@ test("the npm package contains the complete plugin and no development files", (t
   for (const required of [
     ".agents/plugins/marketplace.json",
     ".codex-plugin/plugin.json",
+    ".cursor-plugin/marketplace.json",
     ".cursor-plugin/plugin.json",
     "LICENSE",
     "README.md",
@@ -106,6 +107,16 @@ test("the Codex marketplace installs the repository-root plugin", () => {
   });
 });
 
+test("the Cursor marketplace installs the repository-root plugin", () => {
+  const marketplace = readJson(".cursor-plugin/marketplace.json");
+  assert.equal(marketplace.name, "agent-lcm");
+  assert.deepEqual(marketplace.plugins, [{
+    name: "agent-lcm",
+    source: ".",
+    description: "Shared local context memory for agent harnesses.",
+  }]);
+});
+
 test("the packed CLI runs outside the checkout and sets up detected harnesses", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-install-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -145,7 +156,7 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   );
   const mcpConfiguration = JSON.parse(fs.readFileSync(path.join(packageRoot, "mcp.json"), "utf8"))
     .mcpServers["agent-lcm"] as { command: string; args: string[] };
-  const mcp = spawnSync(mcpConfiguration.command, mcpConfiguration.args.map((arg) => arg.replaceAll("${PLUGIN_ROOT}", packageRoot)), {
+  const mcp = spawnSync(mcpConfiguration.command, mcpConfiguration.args.map((arg) => arg.replaceAll("${CURSOR_PLUGIN_ROOT}", packageRoot)), {
     cwd: packageRoot,
     encoding: "utf8",
     env,
