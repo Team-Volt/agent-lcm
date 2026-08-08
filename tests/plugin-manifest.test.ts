@@ -4,9 +4,10 @@ import { readJson } from "./helpers.ts";
 
 test("root is an Agent Plugins 1.0 package", () => {
   const plugin = readJson("plugin.json");
-  assert.deepEqual(Object.keys(plugin).sort(), ["$schema", "description", "name", "version"]);
+  assert.deepEqual(Object.keys(plugin).sort(), ["$schema", "description", "homepage", "name", "version"]);
   assert.equal(plugin.$schema, "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json");
   assert.equal(plugin.name, "agent-lcm");
+  assert.equal(plugin.homepage, "https://github.com/Team-Volt/agent-lcm");
 
   const mcp = readJson("mcp.json");
   assert.equal(mcp.$schema, "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json");
@@ -20,6 +21,7 @@ test("root is an Agent Plugins 1.0 package", () => {
 test("client hook manifests invoke explicit or detected harness capture", () => {
   const codex = readJson(".codex-plugin/plugin.json");
   assert.equal(codex.hooks, "./hooks/codex.json");
+  assert.equal(codex.homepage, "https://github.com/Team-Volt/agent-lcm");
   const codexManifest = readJson("hooks/codex.json");
   const codexHooks = JSON.stringify(codexManifest);
   assert.deepEqual(Object.keys(codexManifest.hooks).sort(), [
@@ -42,6 +44,7 @@ test("client hook manifests invoke explicit or detected harness capture", () => 
 
   const cursor = readJson(".cursor-plugin/plugin.json");
   assert.equal(cursor.hooks, "./hooks/cursor.json");
+  assert.equal(cursor.homepage, "https://github.com/Team-Volt/agent-lcm");
   assert.equal(cursor.mcpServers, "./mcp.cursor.json");
   assert.deepEqual(readJson("mcp.cursor.json").mcpServers["agent-lcm"], {
     type: "stdio",
