@@ -281,6 +281,7 @@ export function initializeIndex(db: DatabaseSync): void {
   backfillExistingEventMetadata(db);
   if (backfillSessionMetadata) backfillExistingSessionMetadata(db);
   migrateSearchIndexes(db);
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 }
 
 function migrateSearchIndexes(db: DatabaseSync): void {
@@ -294,9 +295,9 @@ function migrateSearchIndexes(db: DatabaseSync): void {
     return record.name === name && String(record.sql).includes("contentless_delete=1");
   }))) return;
 
-  const eventRows = db.prepare(`SELECT rowid, ${STORED_EVENT_JSON_SQL} AS raw_json FROM events ORDER BY rowid`).all();
   db.exec("BEGIN IMMEDIATE");
   try {
+    const eventRows = db.prepare(`SELECT rowid, event_id, ${STORED_EVENT_JSON_SQL} AS raw_json FROM events ORDER BY rowid`).all();
     db.exec("DROP TABLE event_fts; DROP TABLE session_summary_fts; DROP TABLE summary_node_fts");
     createSearchIndexTables(db);
     const insertEvent = db.prepare(`
@@ -306,6 +307,7 @@ function migrateSearchIndexes(db: DatabaseSync): void {
     for (const row of eventRows) {
       const record = recordValue(row);
       const event = decodePersistedEvent(String(record.raw_json));
+      if (event.event_id !== String(record.event_id)) throw new Error(`Stored event locator mismatch for ${String(record.event_id)}.`);
       if (!isSearchIndexEvent(event) || isCodexLcmToolEvent(event)) continue;
       insertEvent.run(
         Number(record.rowid), event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event),
@@ -334,7 +336,6 @@ function migrateSearchIndexes(db: DatabaseSync): void {
     }
     db.exec("COMMIT");
     db.exec("VACUUM");
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK");
     throw error;

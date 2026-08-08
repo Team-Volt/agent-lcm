@@ -774,6 +774,15 @@ test("migrates pre-DAG SQLite indexes without persisting graph projections", () 
     `).run(event.event_id, event.session_id, event.timestamp, event.hook_event, event.cwd, JSON.stringify(event.payload), JSON.stringify(event));
   }
   registerStoredEventReader(db, loadConfig({ home }));
+  db.prepare("UPDATE events SET raw_json = ?1 WHERE event_id = ?2").run(JSON.stringify(events[1]), events[0].event_id);
+  assert.throws(() => initializeIndex(db), /Stored event locator mismatch/u);
+  db.prepare("UPDATE events SET raw_json = ?1 WHERE event_id = ?2").run(JSON.stringify(events[0]), events[0].event_id);
+  db.exec("PRAGMA journal_mode = WAL");
+  const reader = new DatabaseSync(path.join(home, "index.sqlite"));
+  reader.exec("BEGIN; SELECT COUNT(*) FROM events");
+  initializeIndex(db);
+  assert.equal(fs.statSync(path.join(home, "index.sqlite-wal")).size > 0, true);
+  reader.close();
   initializeIndex(db);
   const walPath = path.join(home, "index.sqlite-wal");
   assert.equal(fs.existsSync(walPath) ? fs.statSync(walPath).size : 0, 0);
