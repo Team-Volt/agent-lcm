@@ -4,8 +4,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
+import { loadConfig } from "../src/config.ts";
 import { normalizeHookEvent } from "../src/events.ts";
 import { createStorage } from "../src/storage.ts";
+import { initializeIndex } from "../src/storage-persistence.ts";
+import { registerStoredEventReader } from "../src/stored-event.ts";
 import { clearDerivedSummaries, tempHome } from "./helpers.ts";
 
 const codexId = (nativeId: string): string => `codex:${nativeId}`;
@@ -770,16 +773,45 @@ test("migrates pre-DAG SQLite indexes without persisting graph projections", () 
       VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7)
     `).run(event.event_id, event.session_id, event.timestamp, event.hook_event, event.cwd, JSON.stringify(event.payload), JSON.stringify(event));
   }
+  registerStoredEventReader(db, loadConfig({ home }));
+  db.prepare("UPDATE events SET raw_json = ?1 WHERE event_id = ?2").run(JSON.stringify(events[1]), events[0].event_id);
+  assert.throws(() => initializeIndex(db), /Stored event locator mismatch/u);
+  db.prepare("UPDATE events SET raw_json = ?1 WHERE event_id = ?2").run(JSON.stringify(events[0]), events[0].event_id);
+  db.exec("PRAGMA journal_mode = WAL");
+  const reader = new DatabaseSync(path.join(home, "index.sqlite"));
+  reader.exec("BEGIN; SELECT COUNT(*) FROM events");
+  initializeIndex(db);
+  assert.equal(fs.statSync(path.join(home, "index.sqlite-wal")).size > 0, true);
+  reader.close();
+  initializeIndex(db);
+  const walPath = path.join(home, "index.sqlite-wal");
+  assert.equal(fs.existsSync(walPath) ? fs.statSync(walPath).size : 0, 0);
   db.close();
 
   const storage = createStorage({ home });
   const health = storage.health();
   assert.equal(health.index_available, true);
+  assert.deepEqual(
+    storage.searchSessions({ query: "legacy migration event 1", limit: 5 }).map((match) => match.session_id),
+    [codexId("legacy-session")],
+  );
   assert.equal(health.graph_node_count !== undefined && health.graph_node_count > 0, true);
   assert.equal(health.graph_edge_count !== undefined && health.graph_edge_count > 0, true);
   assert.equal(storage.getSessionGraph(codexId("legacy-session"), { limit: 20 }).nodes.some((node) => node.kind === "turn"), true);
 
   storage.close();
+  const migrated = new DatabaseSync(path.join(home, "index.sqlite"), { readOnly: true });
+  const schema = migrated.prepare("SELECT sql FROM sqlite_master WHERE name = 'event_fts'").get();
+  assert.match(String(schema?.sql), /content\s*=\s*''/u);
+  assert.match(String(schema?.sql), /contentless_delete\s*=\s*1/u);
+  const ftsRow = migrated.prepare("SELECT rowid, event_id FROM event_fts LIMIT 1").get();
+  assert.equal(typeof ftsRow?.rowid, "number");
+  assert.equal(ftsRow?.event_id, null);
+  assert.equal(
+    migrated.prepare("SELECT e.event_id FROM event_fts f JOIN events e ON e.rowid = f.rowid LIMIT 1").get()?.event_id,
+    events[1].event_id,
+  );
+  migrated.close();
 });
 
 function ingest(

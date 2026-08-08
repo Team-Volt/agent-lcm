@@ -147,6 +147,9 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   const version = runInstalled(["--version"]);
   assert.equal(version.status, 0, version.stderr);
   assert.equal(version.stdout.trim(), readJson("package.json").version);
+  const versionCommand = runInstalled(["version"]);
+  assert.equal(versionCommand.status, 0, versionCommand.stderr);
+  assert.equal(versionCommand.stdout.trim(), readJson("package.json").version);
   const packageRoot = path.join(
     prefix,
     ...(process.platform === "win32" ? [] : ["lib"]),

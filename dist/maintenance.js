@@ -242,7 +242,7 @@ function expireSegments(config, db, now) {
         try {
             invalidateRawLogState(db);
             for (const record of expired) {
-                db.prepare("DELETE FROM event_fts WHERE event_id IN (SELECT event_id FROM events WHERE segment_id = ?1)").run(record.id);
+                db.prepare("DELETE FROM event_fts WHERE rowid IN (SELECT rowid FROM events WHERE segment_id = ?1)").run(record.id);
                 db.prepare("DELETE FROM file_refs WHERE observed_event_id IN (SELECT event_id FROM events WHERE segment_id = ?1)").run(record.id);
                 db.prepare("DELETE FROM events WHERE segment_id = ?1").run(record.id);
             }
@@ -292,7 +292,7 @@ function compressSegment(config, record) {
     const plainPath = path.join(config.home, record.path);
     const plain = fs.readFileSync(plainPath);
     verifySegmentContent(plain, record);
-    const compressed = gzipSync(plain, { level: 1 });
+    const compressed = gzipSync(plain, { level: 6 });
     verifySegmentContent(gunzipSync(compressed), record);
     const relativePath = `${record.path}.gz`;
     const compressedPath = path.join(config.home, relativePath);

@@ -4,13 +4,13 @@ import { extractFileReferences } from "./file-refs.js";
 import { overflowReferenceFromEvent } from "./overflow.js";
 import { rawLogStat, readRawEventIds, readRawEvents, segmentedRawLogState } from "./raw-log.js";
 import { eventSearchText } from "./storage-context.js";
-import { recordValue } from "./storage-rows.js";
-import { initializeStorageSchema } from "./storage-schema.js";
+import { recordValue, rowToSessionMemorySummary, rowToSummaryNode } from "./storage-rows.js";
+import { createSearchIndexTables, initializeStorageSchema } from "./storage-schema.js";
 import { segmentStorageHealth } from "./raw-segments.js";
 import { STORED_EVENT_JSON_SQL } from "./stored-event.js";
 import { getSummaryBackfillSessionIds, rebuildSessionMemorySummary, shouldRebuildSessionMemorySummary } from "./storage-summaries.js";
 import { extractEventMetadata, extractSessionMetadata, isCodexLcmToolEvent, isSearchIndexEvent, maxNullable, scalar, summarizeSessions } from "./storage-sessions.js";
-import { SUMMARY_ALGORITHM_VERSION, SUMMARY_NODE_VERSION, isSummarySourceEvent } from "./summary.js";
+import { SUMMARY_ALGORITHM_VERSION, SUMMARY_NODE_VERSION, isSummarySourceEvent, summaryNodeSearchText, summarySearchText, } from "./summary.js";
 const SUMMARY_SOURCE_HOOKS = "('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')";
 const FILE_REF_BACKFILL_KEY = "file_refs_backfilled_v1";
 const DELEGATION_PARENT_BACKFILL_KEY = "delegation_parent_backfilled_v1";
@@ -89,12 +89,14 @@ export function previewCleanupReport(indexPath, inspection) {
 }
 export function replaceCleanupSearchIndex(db, searchableEvents) {
     db.prepare("DELETE FROM event_fts").run();
+    const selectRowId = db.prepare("SELECT rowid FROM events WHERE event_id = ?1");
     const insertSearchEvent = db.prepare(`
-    INSERT INTO event_fts (event_id, session_id, cwd, repo_root, hook_event, content)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+    INSERT INTO event_fts (rowid, event_id, session_id, cwd, repo_root, hook_event, content)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
   `);
     for (const event of searchableEvents) {
-        insertSearchEvent.run(event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
+        const rowId = Number(recordValue(selectRowId.get(event.event_id)).rowid);
+        insertSearchEvent.run(rowId, event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
     }
     db.prepare("UPDATE events SET text = '' WHERE text <> ''").run();
 }
@@ -224,6 +226,62 @@ export function initializeIndex(db) {
     backfillExistingEventMetadata(db);
     if (backfillSessionMetadata)
         backfillExistingSessionMetadata(db);
+    migrateSearchIndexes(db);
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+}
+function migrateSearchIndexes(db) {
+    const names = ["event_fts", "session_summary_fts", "summary_node_fts"];
+    const schemas = db.prepare(`
+    SELECT name, sql FROM sqlite_master
+    WHERE type = 'table' AND name IN ('event_fts', 'session_summary_fts', 'summary_node_fts')
+  `).all();
+    if (names.every((name) => schemas.some((row) => {
+        const record = recordValue(row);
+        return record.name === name && String(record.sql).includes("contentless_delete=1");
+    })))
+        return;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+        const eventRows = db.prepare(`SELECT rowid, event_id, ${STORED_EVENT_JSON_SQL} AS raw_json FROM events ORDER BY rowid`).all();
+        db.exec("DROP TABLE event_fts; DROP TABLE session_summary_fts; DROP TABLE summary_node_fts");
+        createSearchIndexTables(db);
+        const insertEvent = db.prepare(`
+      INSERT INTO event_fts (rowid, event_id, session_id, cwd, repo_root, hook_event, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `);
+        for (const row of eventRows) {
+            const record = recordValue(row);
+            const event = decodePersistedEvent(String(record.raw_json));
+            if (event.event_id !== String(record.event_id))
+                throw new Error(`Stored event locator mismatch for ${String(record.event_id)}.`);
+            if (!isSearchIndexEvent(event) || isCodexLcmToolEvent(event))
+                continue;
+            insertEvent.run(Number(record.rowid), event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
+        }
+        const insertSummary = db.prepare(`
+      INSERT INTO session_summary_fts (rowid, session_id, cwd, repo_root, content)
+      VALUES (?1, ?2, ?3, ?4, ?5)
+    `);
+        for (const row of db.prepare("SELECT rowid, * FROM session_summaries ORDER BY rowid").all()) {
+            const summary = rowToSessionMemorySummary(row);
+            insertSummary.run(Number(recordValue(row).rowid), summary.session_id, summary.cwd, summary.repo_root ?? "", summarySearchText(summary));
+        }
+        const insertNode = db.prepare(`
+      INSERT INTO summary_node_fts (rowid, node_id, session_id, cwd, repo_root, depth, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `);
+        for (const row of db.prepare("SELECT rowid, * FROM summary_nodes ORDER BY rowid").all()) {
+            const node = rowToSummaryNode(row);
+            insertNode.run(Number(recordValue(row).rowid), node.node_id, node.session_id, node.cwd, node.repo_root ?? "", String(node.depth), summaryNodeSearchText(node));
+        }
+        db.exec("COMMIT");
+        db.exec("VACUUM");
+    }
+    catch (error) {
+        if (db.isTransaction)
+            db.exec("ROLLBACK");
+        throw error;
+    }
 }
 export function indexEventInTransaction(db, event, rebuildSummary, location) {
     if (!db)
@@ -265,9 +323,9 @@ export function indexEventInTransaction(db, event, rebuildSummary, location) {
   `).run(event.session_id, event.harness, event.timestamp, event.cwd, event.repo_root ?? null, event.git_branch ?? null, sessionMetadata.parent_session_id ?? null, sessionMetadata.agent_role ?? null, sessionMetadata.agent_nickname ?? null, sessionMetadata.model ?? null, sessionMetadata.reasoning_effort ?? null, sessionMetadata.total_input_tokens ?? null, sessionMetadata.cached_input_tokens ?? null, sessionMetadata.output_tokens ?? null, sessionMetadata.reasoning_output_tokens ?? null, sessionMetadata.total_tokens ?? null);
     if (isSearchIndexEvent(event) && !isCodexLcmToolEvent(event)) {
         db.prepare(`
-      INSERT INTO event_fts (event_id, session_id, cwd, repo_root, hook_event, content)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-    `).run(event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
+      INSERT INTO event_fts (rowid, event_id, session_id, cwd, repo_root, hook_event, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `).run(insert.lastInsertRowid, event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
     }
     indexFileRefsForEvent(db, event);
     const summaryTouched = isSummarySourceEvent(event);

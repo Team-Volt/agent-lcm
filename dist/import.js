@@ -21,11 +21,19 @@ export async function importSessions(options) {
         failures: [],
         needs_export: options.all ? ["vscode", "cursor"] : [],
     };
-    const selections = sourcesFor(options);
+    const selections = sourcesFor(options).map((selection) => ({
+        ...selection,
+        files: filesFor(selection.harness, selection.paths),
+    }));
+    const totalSessions = selections.reduce((total, selection) => total + selection.files.length, 0);
+    options.onProgress?.({
+        phase: "scan",
+        totalSessions,
+        harnesses: selections.map((selection) => ({ harness: selection.harness, sessions: selection.files.length })),
+    });
     if (!options.dryRun)
         await ensureDaemon(options.config);
     const pending = [];
-    const touchedSessions = new Set();
     const maxBatchBytes = options.config.limits.maxInputBytes - DAEMON_REQUEST_OVERHEAD_BYTES;
     let pendingBytes = 2;
     const flush = async () => {
@@ -38,14 +46,25 @@ export async function importSessions(options) {
         pendingBytes = 2;
     };
     for (const selection of selections) {
-        const files = filesFor(selection.harness, selection.paths);
+        const files = selection.files;
+        const touchedSessions = new Set();
+        let sessionsCompleted = 0;
+        options.onProgress?.({
+            phase: "harness_start", harness: selection.harness, sessionsCompleted, sessionsTotal: files.length,
+            sessionsCompletedTotal: report.sessions_scanned, totalSessions,
+        });
         if (files.length === 0) {
             if (!selection.optional)
                 addFailure(report, selection.paths[0] ?? selection.harness, `No ${selection.harness} session files found.`);
+            options.onProgress?.({
+                phase: "harness_complete", harness: selection.harness, sessionsCompleted, sessionsTotal: 0,
+                sessionsCompletedTotal: report.sessions_scanned, totalSessions,
+            });
             continue;
         }
         for (const file of files) {
             report.sessions_scanned += 1;
+            sessionsCompleted += 1;
             let events;
             try {
                 events = await parseSession(selection.harness, file, report);
@@ -53,6 +72,10 @@ export async function importSessions(options) {
             catch (error) {
                 report.records_rejected += 1;
                 addFailure(report, file, error instanceof Error ? error.message : String(error));
+                options.onProgress?.({
+                    phase: "session", harness: selection.harness, sessionsCompleted, sessionsTotal: files.length,
+                    sessionsCompletedTotal: report.sessions_scanned, totalSessions,
+                });
                 continue;
             }
             if (events.length > 0)
@@ -70,11 +93,19 @@ export async function importSessions(options) {
                 pending.push(item);
                 touchedSessions.add(item.session_id);
             }
+            options.onProgress?.({
+                phase: "session", harness: selection.harness, sessionsCompleted, sessionsTotal: files.length,
+                sessionsCompletedTotal: report.sessions_scanned, totalSessions,
+            });
         }
+        await flush();
+        if (!options.dryRun)
+            await rebuildImportedSessions(options.config, touchedSessions, maxBatchBytes);
+        options.onProgress?.({
+            phase: "harness_complete", harness: selection.harness, sessionsCompleted, sessionsTotal: files.length,
+            sessionsCompletedTotal: report.sessions_scanned, totalSessions,
+        });
     }
-    await flush();
-    if (!options.dryRun)
-        await rebuildImportedSessions(options.config, touchedSessions, maxBatchBytes);
     return report;
 }
 async function rebuildImportedSessions(config, sessions, maxBatchBytes) {

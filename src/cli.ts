@@ -5,7 +5,7 @@ import { runLongContextBenchmark, runRetrievalQualityBenchmark } from "./benchma
 import { buildDoctorReport } from "./doctor.ts";
 import { daemonRequest, daemonStatus, ensureDaemon, stopDaemon } from "./daemon-client.ts";
 import { startDaemon } from "./daemon.ts";
-import { importSessions, type ImportHarness, type ImportOptions, type ImportReport } from "./import.ts";
+import { importSessions, type ImportHarness, type ImportOptions, type ImportProgress, type ImportReport } from "./import.ts";
 import { runCapture, runHook } from "./hook.ts";
 import type { CaptureHarness } from "./harnesses.ts";
 import { readStatus } from "./installer.ts";
@@ -52,7 +52,7 @@ type DaemonCliParams =
 
 export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
-  if (command === "--version" || command === "-v") {
+  if (command === "version" || command === "--version" || command === "-v") {
     process.stdout.write(`${packageVersion()}\n`);
     return;
   }
@@ -239,22 +239,59 @@ function writeImportProgress(report: ImportReport): void {
 }
 
 async function importWithProgress(options: ImportOptions): Promise<ImportReport> {
-  process.stderr.write("agent-lcm import: scanning sessions...\n");
-  const heartbeat = setInterval(() => process.stderr.write("agent-lcm import: still working...\n"), 10_000);
-  heartbeat.unref();
-  try {
-    const report = await importSessions(options);
-    writeImportProgress(report);
-    return report;
-  } finally {
-    clearInterval(heartbeat);
+  const harnessStarted = new Map<string, number>();
+  const report = await importSessions({
+    ...options,
+    onProgress: (progress) => renderImportProgress(progress, harnessStarted),
+  });
+  writeImportProgress(report);
+  return report;
+}
+
+function renderImportProgress(progress: ImportProgress, harnessStarted: Map<string, number>): void {
+  if (progress.phase === "scan") {
+    process.stderr.write(
+      `agent-lcm import: ${progress.totalSessions} ${plural(progress.totalSessions, "session")} across ${progress.harnesses.length} ${plural(progress.harnesses.length, "harness")}\n`,
+    );
+    return;
   }
+  if (progress.phase === "harness_start") harnessStarted.set(progress.harness, Date.now());
+  if (!process.stderr.isTTY && progress.phase === "session") return;
+  const elapsedMs = Date.now() - (harnessStarted.get(progress.harness) ?? Date.now());
+  const etaMs = progress.sessionsCompleted > 0
+    ? elapsedMs / progress.sessionsCompleted * (progress.sessionsTotal - progress.sessionsCompleted)
+    : undefined;
+  const line = `[${progress.harness}] ${progressBar(progress.sessionsCompleted, progress.sessionsTotal)} sessions ${progress.sessionsCompleted}/${progress.sessionsTotal} elapsed=${duration(elapsedMs)}${etaMs === undefined ? "" : ` eta=${duration(etaMs)}`}`;
+  if (process.stderr.isTTY) {
+    process.stderr.write(`\r\u001b[2K${line}${progress.phase === "harness_complete" ? "\n" : ""}`);
+  } else if (progress.phase === "harness_complete") {
+    process.stderr.write(`${line}\n`);
+  }
+}
+
+function progressBar(completed: number, total: number): string {
+  const width = 20;
+  const filled = total === 0 ? 0 : Math.round(width * completed / total);
+  return `[${"#".repeat(filled)}${"-".repeat(width - filled)}]`;
+}
+
+function duration(milliseconds: number): string {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function plural(count: number, noun: string): string {
+  if (count === 1) return noun;
+  return noun === "harness" ? "harnesses" : `${noun}s`;
 }
 
 function printHelp(): void {
   process.stdout.write(`agent-lcm
 
 Commands:
+  agent-lcm version
   agent-lcm daemon run|start|status|stop
   agent-lcm mcp
   agent-lcm hook <event>
