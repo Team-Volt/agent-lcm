@@ -7,7 +7,7 @@ import test from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
 import { normalizeHookEvent } from "../src/events.ts";
-import { importSessions, type ImportOptions } from "../src/import.ts";
+import { importSessions, type ImportOptions, type ImportProgress } from "../src/import.ts";
 import { publishInboxEvent } from "../src/inbox.ts";
 import { assertCliOk, readJsonl, runCli, tempHome } from "./helpers.ts";
 
@@ -93,11 +93,62 @@ test("all discovers local Codex, Copilot, and Kiro homes", async (t) => {
   const config = loadConfig({ home: tempHome("agent-lcm-import-all-home-") });
   t.after(() => stopDaemon(config));
   await ensureDaemon(config);
+  const progress: ImportProgress[] = [];
 
-  const report = await importSessions({ all: true, config, paths: [root] });
+  const report = await importSessions({ all: true, config, paths: [root], onProgress: (event) => progress.push(event) });
 
   assert.ok(report.events_imported >= 3);
   assert.deepEqual(report.needs_export, ["vscode", "cursor"]);
+  assert.deepEqual(progress[0], {
+    phase: "scan",
+    totalSessions: 3,
+    harnesses: [
+      { harness: "codex", sessions: 1 },
+      { harness: "copilot", sessions: 1 },
+      { harness: "kiro", sessions: 1 },
+    ],
+  });
+  assert.deepEqual(
+    progress.flatMap((event) => event.phase === "harness_start" || event.phase === "harness_complete"
+      ? [`${event.harness}:${event.phase}:${event.sessionsCompleted}/${event.sessionsTotal}`]
+      : []),
+    [
+      "codex:harness_start:0/1",
+      "codex:harness_complete:1/1",
+      "copilot:harness_start:0/1",
+      "copilot:harness_complete:1/1",
+      "kiro:harness_start:0/1",
+      "kiro:harness_complete:1/1",
+    ],
+  );
+  assert.deepEqual(
+    progress.flatMap((event) => event.phase === "session" ? [event.sessionsCompletedTotal] : []),
+    [1, 2, 3],
+  );
+  const cli = runCli(["import", "--all", root, "--dry-run", "--json"], {
+    env: { AGENT_LCM_HOME: tempHome("agent-lcm-import-all-cli-home-") },
+  });
+  assertCliOk(cli);
+  assert.equal(JSON.parse(cli.stdout).sessions_scanned, 3);
+  assert.match(cli.stderr, /3 sessions across 3 harnesses/u);
+});
+
+test("dry-run progress reports zero discovered sessions without starting the daemon", async () => {
+  const progress: ImportProgress[] = [];
+  const config = loadConfig({ home: tempHome("agent-lcm-import-empty-progress-") });
+
+  const report = await importSessions({
+    harness: "copilot",
+    paths: [path.join(config.home, "missing")],
+    config,
+    dryRun: true,
+    onProgress: (event) => progress.push(event),
+  });
+
+  assert.equal(report.sessions_scanned, 0);
+  assert.equal(report.failures.length, 1);
+  assert.deepEqual(progress.map((event) => event.phase), ["scan", "harness_start", "harness_complete"]);
+  assert.equal(progress.every((event) => event.phase === "scan" || event.sessionsTotal === 0), true);
 });
 
 test("imports VS Code OTLP debug exports and Kiro ACP session events", async (t) => {
@@ -130,7 +181,9 @@ test("CLI reports progress while importing without corrupting JSON stdout", () =
 
   assertCliOk(result);
   assert.equal(JSON.parse(result.stdout).events_imported, 2);
-  assert.match(result.stderr, /agent-lcm import: scanning sessions/u);
+  assert.match(result.stderr, /agent-lcm import: 1 session across 1 harness/u);
+  assert.match(result.stderr, /copilot.*sessions 1\/1/u);
+  assert.match(result.stderr, /elapsed=/u);
   assert.match(result.stderr, /imported=2/u);
 });
 
