@@ -26,32 +26,34 @@ export function publishInboxEvent(config, event) {
     }
     return targetPath;
 }
-export function drainInbox(config, ingest, reportEventIds) {
+export async function drainInbox(config, ingest, limit = 100) {
     ensureInboxDirectories(config);
     const report = { ingested: 0, duplicates: 0, quarantined: 0 };
-    for (const name of fs.readdirSync(config.inboxDir).filter((entry) => entry.endsWith(".json")).sort()) {
+    const pending = [];
+    for (const name of fs.readdirSync(config.inboxDir).filter((entry) => entry.endsWith(".json")).sort().slice(0, limit)) {
         const inboxPath = path.join(config.inboxDir, name);
-        let event;
         try {
-            event = decodePersistedEvent(fs.readFileSync(inboxPath, "utf8"));
+            const event = decodePersistedEvent(fs.readFileSync(inboxPath, "utf8"));
             if (path.basename(inboxPath, ".json") !== event.event_id)
                 throw new Error("Inbox filename does not match event ID.");
+            pending.push({ event, inboxPath });
         }
         catch {
             quarantine(config, inboxPath, name);
-            if (!reportEventIds || reportEventIds.has(path.basename(inboxPath, ".json")))
-                report.quarantined += 1;
-            continue;
+            report.quarantined += 1;
         }
-        const result = ingest(event);
-        if (!reportEventIds || reportEventIds.has(event.event_id)) {
-            if (result === "ingested")
-                report.ingested += 1;
-            else
-                report.duplicates += 1;
+    }
+    if (pending.length > 0) {
+        const result = await ingest(pending.map(({ event }) => event));
+        report.ingested += result.imported;
+        report.duplicates += result.skippedDuplicate;
+        try {
+            for (const { inboxPath } of pending)
+                fs.unlinkSync(inboxPath);
         }
-        fs.unlinkSync(inboxPath);
-        fsyncDirectory(config.inboxDir);
+        finally {
+            fsyncDirectory(config.inboxDir);
+        }
     }
     return report;
 }

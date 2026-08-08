@@ -9,6 +9,7 @@ const starts = new Map();
 const DAEMON_START_TIMEOUT_MS = 5 * 60_000;
 const DAEMON_RELEASE_TIMEOUT_MS = 10_000;
 const DAEMON_REQUEST_TIMEOUT_MS = 5 * 60_000;
+const DAEMON_HEALTH_TIMEOUT_MS = 5_000;
 export async function ensureDaemon(config = loadConfig()) {
     const current = starts.get(config.home);
     if (current)
@@ -51,7 +52,7 @@ async function ensureDaemonOnce(config) {
         throw error;
     }
 }
-export async function daemonRequest(config, method, params) {
+export async function daemonRequest(config, method, params, responseTimeoutMs = method === "health" ? DAEMON_HEALTH_TIMEOUT_MS : DAEMON_REQUEST_TIMEOUT_MS) {
     const token = readToken(config);
     if (!token)
         throw new Error("agent-lcm daemon authentication token is unavailable.");
@@ -61,14 +62,14 @@ export async function daemonRequest(config, method, params) {
         id: `${process.pid}-${Date.now()}`,
         method,
         params,
-    }, method === "health" ? undefined : DAEMON_REQUEST_TIMEOUT_MS);
+    }, method === "health" ? undefined : DAEMON_REQUEST_TIMEOUT_MS, responseTimeoutMs);
     if (!response.ok)
         throw new Error(response.error);
     return response.result;
 }
-export async function daemonStatus(config = loadConfig()) {
+export async function daemonStatus(config = loadConfig(), responseTimeoutMs = DAEMON_HEALTH_TIMEOUT_MS) {
     try {
-        return await daemonRequest(config, "health", {});
+        return await daemonRequest(config, "health", {}, responseTimeoutMs);
     }
     catch {
         return {
@@ -93,7 +94,7 @@ export async function stopDaemon(config = loadConfig()) {
 async function waitForRelease(config, ownerPid, timeoutMs = DAEMON_RELEASE_TIMEOUT_MS) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
-        const status = await daemonStatus(config);
+        const status = await daemonStatus(config, 1_000);
         if (status.running && status.pid !== ownerPid)
             return;
         if (!status.running && ownershipIsAvailable(config))
@@ -122,7 +123,7 @@ function ownershipIsAvailable(config) {
 async function waitFor(config, predicate, timeoutMs = DAEMON_START_TIMEOUT_MS) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
-        const status = await daemonStatus(config);
+        const status = await daemonStatus(config, 1_000);
         if (predicate(status))
             return;
         if (Date.now() >= deadline)

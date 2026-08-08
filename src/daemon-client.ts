@@ -20,6 +20,7 @@ const starts = new Map<string, Promise<void>>();
 const DAEMON_START_TIMEOUT_MS = 5 * 60_000;
 const DAEMON_RELEASE_TIMEOUT_MS = 10_000;
 const DAEMON_REQUEST_TIMEOUT_MS = 5 * 60_000;
+const DAEMON_HEALTH_TIMEOUT_MS = 5_000;
 
 export async function ensureDaemon(config: LcmConfig = loadConfig()): Promise<void> {
   const current = starts.get(config.home);
@@ -65,6 +66,7 @@ export async function daemonRequest<T>(
   config: LcmConfig,
   method: DaemonRequest["method"],
   params: Record<string, unknown>,
+  responseTimeoutMs = method === "health" ? DAEMON_HEALTH_TIMEOUT_MS : DAEMON_REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const token = readToken(config);
   if (!token) throw new Error("agent-lcm daemon authentication token is unavailable.");
@@ -74,14 +76,14 @@ export async function daemonRequest<T>(
     id: `${process.pid}-${Date.now()}`,
     method,
     params,
-  }, method === "health" ? undefined : DAEMON_REQUEST_TIMEOUT_MS);
+  }, method === "health" ? undefined : DAEMON_REQUEST_TIMEOUT_MS, responseTimeoutMs);
   if (!response.ok) throw new Error(response.error);
   return response.result as T;
 }
 
-export async function daemonStatus(config: LcmConfig = loadConfig()): Promise<DaemonStatus> {
+export async function daemonStatus(config: LcmConfig = loadConfig(), responseTimeoutMs = DAEMON_HEALTH_TIMEOUT_MS): Promise<DaemonStatus> {
   try {
-    return await daemonRequest<DaemonStatus>(config, "health", {});
+    return await daemonRequest<DaemonStatus>(config, "health", {}, responseTimeoutMs);
   } catch {
     return {
       running: false,
@@ -105,7 +107,7 @@ export async function stopDaemon(config: LcmConfig = loadConfig()): Promise<void
 async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, timeoutMs = DAEMON_RELEASE_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
-    const status = await daemonStatus(config);
+    const status = await daemonStatus(config, 1_000);
     if (status.running && status.pid !== ownerPid) return;
     if (!status.running && ownershipIsAvailable(config)) return;
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for the agent-lcm daemon at ${ipcAddress(config)}.`);
@@ -134,7 +136,7 @@ async function waitFor(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
-    const status = await daemonStatus(config);
+    const status = await daemonStatus(config, 1_000);
     if (predicate(status)) return;
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for the agent-lcm daemon at ${ipcAddress(config)}.`);
     await new Promise((resolve) => setTimeout(resolve, 25));

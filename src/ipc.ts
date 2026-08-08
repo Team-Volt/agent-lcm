@@ -10,7 +10,7 @@ export type DaemonRequest = {
   version: 1;
   token: string;
   id: string;
-  method: "health" | "tool" | "cli" | "drain" | "shutdown" | "replace";
+  method: "health" | "tool" | "cli" | "drain" | "ingest" | "shutdown" | "replace";
   params: Record<string, unknown>;
 };
 
@@ -95,14 +95,15 @@ export function tokenMatches(actual: string, expected: string): boolean {
   return actualBytes.length === expectedBytes.length && crypto.timingSafeEqual(actualBytes, expectedBytes);
 }
 
-export function sendDaemonRequest(address: string, request: DaemonRequest, timeoutMs = 1_000): Promise<DaemonResponse> {
+export function sendDaemonRequest(address: string, request: DaemonRequest, timeoutMs = 1_000, responseTimeoutMs = timeoutMs): Promise<DaemonResponse> {
   return new Promise<DaemonResponse>((resolve, reject) => {
     const socket = net.createConnection(address);
     let buffer = "";
-    const timeout = setTimeout(() => {
+    let timeout = setTimeout(onTimeout, timeoutMs);
+    function onTimeout(): void {
       socket.destroy();
       reject(new Error("agent-lcm daemon request timed out."));
-    }, timeoutMs);
+    }
     socket.setEncoding("utf8");
     socket.once("error", finishReject);
     socket.on("data", (chunk) => {
@@ -115,7 +116,11 @@ export function sendDaemonRequest(address: string, request: DaemonRequest, timeo
         finishReject(error);
       }
     });
-    socket.once("connect", () => socket.write(`${JSON.stringify(request)}\n`));
+    socket.once("connect", () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(onTimeout, responseTimeoutMs);
+      socket.write(`${JSON.stringify(request)}\n`);
+    });
 
     function finishResolve(response: DaemonResponse): void {
       clearTimeout(timeout);

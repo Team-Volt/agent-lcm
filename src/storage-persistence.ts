@@ -24,7 +24,7 @@ const EVENT_METADATA_BACKFILL_KEY = "event_metadata_backfilled_v1";
 const EVENT_LOCATOR_METADATA_BACKFILL_KEY = "event_locator_metadata_backfilled_v1";
 const RAW_LOG_INDEX_STATE_KEY = "raw_log_index_state_v1";
 
-export type IndexEventResult = { readonly inserted: boolean; readonly summaryTouched: boolean };
+export type IndexEventResult = { readonly inserted: boolean; readonly summaryTouched: boolean; readonly summaryRebuildNeeded: boolean };
 export type RawEventIdCache = {
   readonly size: number;
   readonly mtimeMs: number;
@@ -280,7 +280,7 @@ export function indexEventInTransaction(
   rebuildSummary: boolean,
   location?: RawEventLocation,
 ): IndexEventResult {
-  if (!db) return { inserted: false, summaryTouched: false };
+  if (!db) return { inserted: false, summaryTouched: false, summaryRebuildNeeded: false };
   const metadata = extractEventMetadata(event);
   const sessionMetadata = extractSessionMetadata(event);
   const insert = db.prepare(`
@@ -295,7 +295,7 @@ export function indexEventInTransaction(
     location?.offset ?? null, location?.length ?? null, eventAgentId(event) ?? null,
     overflowReferenceFromEvent(event)?.sha256 ?? null,
   );
-  if (insert.changes === 0) return { inserted: false, summaryTouched: false };
+  if (insert.changes === 0) return { inserted: false, summaryTouched: false, summaryRebuildNeeded: false };
   db.prepare(`
     INSERT INTO sessions
       (session_id, harness, first_seen, last_seen, cwd, repo_root, git_branch, event_count,
@@ -336,8 +336,9 @@ export function indexEventInTransaction(
   }
   indexFileRefsForEvent(db, event);
   const summaryTouched = isSummarySourceEvent(event);
-  if (summaryTouched && rebuildSummary && shouldRebuildSessionMemorySummary(db, event)) rebuildSessionMemorySummary(db, event.session_id);
-  return { inserted: true, summaryTouched };
+  const summaryRebuildNeeded = summaryTouched && shouldRebuildSessionMemorySummary(db, event);
+  if (rebuildSummary && summaryRebuildNeeded) rebuildSessionMemorySummary(db, event.session_id);
+  return { inserted: true, summaryTouched, summaryRebuildNeeded };
 }
 
 export function clearVerifiedRawJson(db: DatabaseSync, segmentId: string, batchSize = 500): number {

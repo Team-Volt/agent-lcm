@@ -2,7 +2,9 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readCodexSessions } from "./codex-import.js";
 import { DAEMON_PROTOCOL_VERSION, LEGACY_COMPATIBLE_DAEMON_VERSION } from "./daemon-protocol.js";
+import { decodePersistedEvent } from "./event-codec.js";
 import { drainInbox } from "./inbox.js";
 import { callTool } from "./mcp-tools.js";
 import { maintenanceNeeded, runMaintenanceOnce } from "./maintenance.js";
@@ -14,6 +16,7 @@ const VERSION_FILE = "daemon.version";
 const OWNERSHIP_FILE = "daemon.lock.sqlite";
 const START_TIMEOUT_MS = 5_000;
 const START_POLL_MS = 25;
+const IMPORT_BATCH_SIZE = 5_000;
 export async function startDaemon(config) {
     const token = readOrCreateToken(config);
     if (await daemonIsRunning(config, token))
@@ -31,13 +34,12 @@ export async function startDaemon(config) {
             return;
         writePrivate(path.join(config.runtimeDir, PID_FILE), `${JSON.stringify({ pid: process.pid })}\n`);
         writePrivate(path.join(config.runtimeDir, VERSION_FILE), `${daemonVersion()}\n`);
-        drainStorageInbox(config, storage);
         await serve(config, server, storage, token, () => { orderly = true; });
     }
     finally {
         try {
             if (orderly)
-                drainStorageInbox(config, storage);
+                await drainStorageInboxFully(config, storage, async (operation) => operation());
         }
         finally {
             try {
@@ -67,11 +69,38 @@ export async function startDaemon(config) {
 }
 async function serve(config, server, storage, token, markOrderly) {
     let chain = Promise.resolve();
+    let draining;
     let shuttingDown = false;
     const sockets = new Set();
     const activeSockets = new Set();
     let resolveStopped;
     const stopped = new Promise((resolve) => { resolveStopped = resolve; });
+    const enqueue = (operation) => {
+        const result = chain.then(operation);
+        chain = result.then(() => undefined, () => undefined);
+        return result;
+    };
+    const requestDrain = () => {
+        if (draining)
+            return draining;
+        draining = (async () => {
+            const report = { ingested: 0, duplicates: 0, quarantined: 0 };
+            do {
+                mergeDrainReports(report, await drainStorageInbox(config, storage, enqueue));
+                if (shuttingDown || !hasInboxItems(config))
+                    break;
+                await new Promise((resolve) => setImmediate(resolve));
+            } while (hasInboxItems(config));
+            storage.drainError = undefined;
+            return report;
+        })().finally(() => { draining = undefined; });
+        return draining;
+    };
+    const scheduleDrain = () => {
+        void requestDrain().catch((error) => {
+            storage.drainError = error instanceof Error ? error.message : String(error);
+        });
+    };
     const scheduleShutdown = () => {
         if (shuttingDown)
             return;
@@ -132,11 +161,9 @@ async function serve(config, server, storage, token, markOrderly) {
                     return;
                 }
                 activeSockets.add(socket);
-                chain = chain.then(async () => {
+                const respond = async (operation) => {
                     try {
-                        if (request.method !== "drain")
-                            drainStorageInbox(config, storage);
-                        const result = await dispatchRequest(config, storage, request);
+                        const result = await operation;
                         await writeResponse(socket, { version: 1, id: request.id, ok: true, result }).catch(() => socket.destroy());
                         if (request.method === "shutdown" || request.method === "replace")
                             scheduleShutdown();
@@ -153,14 +180,28 @@ async function serve(config, server, storage, token, markOrderly) {
                         activeSockets.delete(socket);
                         socket.end();
                     }
-                });
+                };
+                if (request.method === "health") {
+                    void respond(Promise.resolve(dispatchRequest(config, storage, request)));
+                    scheduleDrain();
+                }
+                else if (request.method === "drain") {
+                    void respond(requestDrain());
+                }
+                else {
+                    if (request.method === "tool" || request.method === "cli" || request.method === "ingest")
+                        scheduleDrain();
+                    void respond(enqueue(() => dispatchRequest(config, storage, request)));
+                }
             }
         });
     });
     try {
         process.once("SIGINT", onSignal);
         process.once("SIGTERM", onSignal);
+        scheduleDrain();
         await stopped;
+        await draining?.catch(() => undefined);
         await chain;
     }
     finally {
@@ -179,9 +220,12 @@ async function dispatchRequest(config, storage, request) {
                 queue_depth: countFiles(config.inboxDir, (name) => name.endsWith(".json")),
                 quarantine_count: countFiles(config.quarantineDir),
                 ...(storage.maintenanceError ? { maintenance_error: storage.maintenanceError } : {}),
+                ...(storage.drainError ? { drain_error: storage.drainError } : {}),
             };
         case "drain":
-            return drainStorageInbox(config, storage, stringSet(request.params.eventIds));
+            return drainStorageInbox(config, storage, async (operation) => operation());
+        case "ingest":
+            return ingestImportedEvents(config, storage, request.params);
         case "tool":
             return withReadableStorage(config, storage, (reader) => callTool(reader, request.params));
         case "cli":
@@ -191,6 +235,23 @@ async function dispatchRequest(config, storage, request) {
         case "replace":
             return { replacing: true, version: request.params.version };
     }
+}
+function ingestImportedEvents(config, storage, params) {
+    const events = normalizedEvents(params.events);
+    const rebuildSessions = params.rebuildSessions === undefined ? undefined : stringSet(params.rebuildSessions);
+    if (!rebuildSessions && params.rebuildSessions !== undefined)
+        throw new Error("invalid daemon ingest sessions");
+    const writer = writableStorage(config, storage);
+    const result = writer.ingestMany(events, { rebuildSummaries: false });
+    return {
+        ...result,
+        rebuiltSessions: rebuildSessions ? writer.rebuildSessionMemorySummaries(rebuildSessions) : [],
+    };
+}
+function normalizedEvents(value) {
+    if (!Array.isArray(value))
+        throw new Error("invalid daemon ingest events");
+    return value.map((event) => decodePersistedEvent(JSON.stringify(event)));
 }
 async function callCli(config, daemonStorage, params) {
     if (params.command === "maintain")
@@ -242,23 +303,52 @@ function numberParam(value) {
 function booleanParam(value) {
     return typeof value === "boolean" ? value : undefined;
 }
-function drainStorageInbox(config, storage, reportEventIds) {
-    const importedSessions = new Set();
+async function drainStorageInbox(config, storage, enqueue) {
     const report = hasInboxItems(config)
-        ? drainInbox(config, (event) => {
-            const writer = writableStorage(config, storage);
-            if (reportEventIds)
-                importedSessions.add(event.session_id);
-            if (writer.hasEvent(event.event_id))
-                return "duplicate";
-            writer.ingest(event);
-            return "ingested";
-        }, reportEventIds)
+        ? await drainInbox(config, (events) => ingestInboxEvents(config, storage, events, enqueue))
         : { ingested: 0, duplicates: 0, quarantined: 0 };
-    if (importedSessions.size > 0)
-        storage.writer?.rebuildSessionMemorySummaries(importedSessions);
-    maintainStorage(config, storage);
+    if (!hasInboxItems(config))
+        maintainStorage(config, storage);
     return report;
+}
+async function ingestInboxEvents(config, storage, events, enqueue) {
+    const result = await enqueue(() => writableStorage(config, storage).ingestMany(events));
+    const transcriptPaths = new Set(events.flatMap((event) => {
+        const value = event.hook_event === "SubagentStop" ? event.payload.agent_transcript_path : undefined;
+        return typeof value === "string" && value.trim().length > 0 ? [value.trim()] : [];
+    }));
+    const imported = [];
+    for (const transcriptPath of transcriptPaths) {
+        const parsed = await readCodexSessions(transcriptPath, ({ event }) => imported.push(event));
+        for (const error of parsed.errors) {
+            process.stderr.write(`agent-lcm: failed to import subagent transcript: ${error.message}\n`);
+        }
+        const readError = parsed.errors.find((error) => error.line === undefined);
+        if (readError)
+            throw new Error(`failed to import subagent transcript: ${readError.message}`);
+    }
+    const touchedSessions = new Set(imported.map((event) => event.session_id));
+    for (let index = 0; index < imported.length; index += IMPORT_BATCH_SIZE) {
+        await new Promise((resolve) => setImmediate(resolve));
+        const batch = imported.slice(index, index + IMPORT_BATCH_SIZE);
+        await enqueue(() => writableStorage(config, storage).ingestMany(batch, { rebuildSummaries: false }));
+    }
+    if (touchedSessions.size > 0) {
+        await enqueue(() => writableStorage(config, storage).rebuildSessionMemorySummaries(touchedSessions));
+    }
+    return result;
+}
+async function drainStorageInboxFully(config, storage, enqueue) {
+    const report = { ingested: 0, duplicates: 0, quarantined: 0 };
+    do {
+        mergeDrainReports(report, await drainStorageInbox(config, storage, enqueue));
+    } while (hasInboxItems(config));
+    return report;
+}
+function mergeDrainReports(target, source) {
+    target.ingested += source.ingested;
+    target.duplicates += source.duplicates;
+    target.quarantined += source.quarantined;
 }
 function maintainStorage(config, storage, force = false) {
     if (!fs.existsSync(config.manifestPath) && fs.existsSync(config.rawLogPath)) {
@@ -325,7 +415,7 @@ function requestId(line) {
     }
 }
 function isMethod(value) {
-    return value === "health" || value === "tool" || value === "cli" || value === "drain"
+    return value === "health" || value === "tool" || value === "cli" || value === "drain" || value === "ingest"
         || value === "shutdown" || value === "replace";
 }
 function isRecord(value) {
