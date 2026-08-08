@@ -450,7 +450,7 @@ test("MCP context plan reports token pressure for a session", () => {
         name: "lcm_context_plan",
         arguments: {
           sessionId: "codex:mcp-context-plan-session",
-          modelContextWindow: 2_000,
+          modelContextWindow: 4_000,
           autoCompactTokenLimit: 200,
         },
       },

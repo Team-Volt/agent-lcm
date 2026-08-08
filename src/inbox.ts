@@ -12,6 +12,11 @@ export type DrainInboxReport = {
   quarantined: number;
 };
 
+type IngestInboxBatchResult = {
+  imported: number;
+  skippedDuplicate: number;
+};
+
 export function publishInboxEvent(config: LcmConfig, event: NormalizedEvent): string {
   ensureInboxDirectories(config);
   const targetPath = path.join(config.inboxDir, `${event.event_id}.json`);
@@ -36,29 +41,32 @@ export function publishInboxEvent(config: LcmConfig, event: NormalizedEvent): st
 
 export function drainInbox(
   config: LcmConfig,
-  ingest: (event: NormalizedEvent) => "ingested" | "duplicate",
-  reportEventIds?: ReadonlySet<string>,
+  ingest: (events: NormalizedEvent[]) => IngestInboxBatchResult,
+  limit = 100,
 ): DrainInboxReport {
   ensureInboxDirectories(config);
   const report: DrainInboxReport = { ingested: 0, duplicates: 0, quarantined: 0 };
-  for (const name of fs.readdirSync(config.inboxDir).filter((entry) => entry.endsWith(".json")).sort()) {
+  const pending: Array<{ event: NormalizedEvent; inboxPath: string }> = [];
+  for (const name of fs.readdirSync(config.inboxDir).filter((entry) => entry.endsWith(".json")).sort().slice(0, limit)) {
     const inboxPath = path.join(config.inboxDir, name);
-    let event: NormalizedEvent;
     try {
-      event = decodePersistedEvent(fs.readFileSync(inboxPath, "utf8"));
+      const event = decodePersistedEvent(fs.readFileSync(inboxPath, "utf8"));
       if (path.basename(inboxPath, ".json") !== event.event_id) throw new Error("Inbox filename does not match event ID.");
+      pending.push({ event, inboxPath });
     } catch {
       quarantine(config, inboxPath, name);
-      if (!reportEventIds || reportEventIds.has(path.basename(inboxPath, ".json"))) report.quarantined += 1;
-      continue;
+      report.quarantined += 1;
     }
-    const result = ingest(event);
-    if (!reportEventIds || reportEventIds.has(event.event_id)) {
-      if (result === "ingested") report.ingested += 1;
-      else report.duplicates += 1;
+  }
+  if (pending.length > 0) {
+    const result = ingest(pending.map(({ event }) => event));
+    report.ingested += result.imported;
+    report.duplicates += result.skippedDuplicate;
+    try {
+      for (const { inboxPath } of pending) fs.unlinkSync(inboxPath);
+    } finally {
+      fsyncDirectory(config.inboxDir);
     }
-    fs.unlinkSync(inboxPath);
-    fsyncDirectory(config.inboxDir);
   }
   return report;
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { loadConfig } from "../src/config.ts";
@@ -133,6 +134,67 @@ test("CLI reports progress while importing without corrupting JSON stdout", () =
   assert.match(result.stderr, /imported=2/u);
 });
 
+test("bulk import bypasses per-event inbox publication and remains idempotent", async (t) => {
+  const source = path.join(tempHome("agent-lcm-import-bulk-source-"), "session.jsonl");
+  writeCodexSession(source, "bulk-import", 2_000, "user");
+  const before = fs.readFileSync(source);
+  const config = loadConfig({ home: tempHome("agent-lcm-import-bulk-home-") });
+  t.after(() => stopDaemon(config));
+  const originalLinkSync = fs.linkSync;
+  let inboxPublications = 0;
+  fs.linkSync = ((existingPath: fs.PathLike, newPath: fs.PathLike) => {
+    if (path.dirname(String(newPath)) === config.inboxDir) inboxPublications += 1;
+    return originalLinkSync(existingPath, newPath);
+  }) as typeof fs.linkSync;
+
+  try {
+    const first = await importSessions({ harness: "codex", paths: [source], config });
+    const second = await importSessions({ harness: "codex", paths: [source], config });
+
+    assert.equal(first.events_imported, 2_001);
+    assert.equal(second.events_imported, 0);
+    assert.equal(second.events_skipped_duplicate, first.events_imported);
+    assert.equal(inboxPublications, 0);
+    const stored = readJsonl(config.rawLogPath) as Array<{ event_id: string }>;
+    assert.equal(new Set(stored.map((event) => event.event_id)).size, first.events_imported);
+    assert.deepEqual(fs.readFileSync(source), before);
+  } finally {
+    fs.linkSync = originalLinkSync;
+  }
+});
+
+test("bulk import rebuilds each touched session summary once", async (t) => {
+  const config = loadConfig({ home: tempHome("agent-lcm-import-summary-home-") });
+  t.after(() => stopDaemon(config));
+  await importSessions({ harness: "codex", paths: [fixtures("import/codex/session.jsonl")], config });
+  const audit = new DatabaseSync(config.indexPath);
+  try {
+    audit.exec(`
+      CREATE TABLE import_summary_audit (session_id TEXT NOT NULL);
+      CREATE TRIGGER import_summary_insert AFTER INSERT ON session_summaries BEGIN
+        INSERT INTO import_summary_audit (session_id) VALUES (NEW.session_id);
+      END;
+      CREATE TRIGGER import_summary_update AFTER UPDATE ON session_summaries BEGIN
+        INSERT INTO import_summary_audit (session_id) VALUES (NEW.session_id);
+      END;
+    `);
+  } finally {
+    audit.close();
+  }
+  const source = path.join(tempHome("agent-lcm-import-summary-source-"), "session.jsonl");
+  writeCodexSession(source, "summary-import", 8, "assistant");
+
+  const report = await importSessions({ harness: "codex", paths: [source], config });
+  const result = new DatabaseSync(config.indexPath, { readOnly: true });
+  try {
+    const row = result.prepare("SELECT COUNT(*) AS count FROM import_summary_audit WHERE session_id = ?1").get("codex:summary-import") as { count: number };
+    assert.equal(report.events_imported, 9);
+    assert.equal(row.count, 1);
+  } finally {
+    result.close();
+  }
+});
+
 test("reports only this import when draining a shared inbox", async (t) => {
   const config = loadConfig({ home: tempHome("agent-lcm-import-shared-inbox-") });
   t.after(() => stopDaemon(config));
@@ -158,3 +220,24 @@ test("CLI requires exactly one import selector", () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /exactly one/u);
 });
+
+function writeCodexSession(file: string, sessionId: string, messageCount: number, role: "user" | "assistant"): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const records = [JSON.stringify({
+    timestamp: "2026-08-01T10:00:00.000Z",
+    type: "session_meta",
+    payload: { id: sessionId, cwd: "/tmp/import-bulk" },
+  })];
+  for (let index = 0; index < messageCount; index += 1) {
+    records.push(JSON.stringify({
+      timestamp: new Date(Date.UTC(2026, 7, 1, 10, 0, index + 1)).toISOString(),
+      type: "response_item",
+      payload: {
+        type: "message",
+        role,
+        content: [{ type: role === "user" ? "input_text" : "output_text", text: `bulk import ${index}` }],
+      },
+    }));
+  }
+  fs.writeFileSync(file, `${records.join("\n")}\n`);
+}

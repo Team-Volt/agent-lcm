@@ -8,8 +8,8 @@ import type { LcmConfig } from "./config.ts";
 import { daemonRequest, ensureDaemon } from "./daemon-client.ts";
 import { harnessSessionId, type HarnessName, type NormalizedEvent } from "./events.ts";
 import { mapHarnessEvent, type CaptureHarness } from "./harnesses.ts";
-import { publishInboxEvent, type DrainInboxReport } from "./inbox.ts";
 import { sha256 } from "./redact.ts";
+import type { IngestManyResult } from "./storage-types.ts";
 
 export type ImportHarness = "codex" | "cursor" | "vscode" | "copilot" | "kiro";
 
@@ -32,6 +32,9 @@ export type ImportReport = {
 };
 
 const BATCH_SIZE = 5000;
+const DAEMON_REQUEST_OVERHEAD_BYTES = 1024;
+
+type ImportIngestReport = IngestManyResult & { rebuiltSessions: string[] };
 
 export async function importSessions(options: ImportOptions): Promise<ImportReport> {
   if ((options.all === true) === (options.harness !== undefined)) throw new Error("Pass exactly one of --all or --harness.");
@@ -47,17 +50,17 @@ export async function importSessions(options: ImportOptions): Promise<ImportRepo
   const selections = sourcesFor(options);
   if (!options.dryRun) await ensureDaemon(options.config);
   const pending: NormalizedEvent[] = [];
+  const touchedSessions = new Set<string>();
+  const maxBatchBytes = options.config.limits.maxInputBytes - DAEMON_REQUEST_OVERHEAD_BYTES;
+  let pendingBytes = 2;
 
   const flush = async (): Promise<void> => {
     if (pending.length === 0 || options.dryRun) return;
-    const batch = pending.splice(0, pending.length);
-    for (const [index, event] of batch.entries()) {
-      publishInboxEvent(options.config, event);
-      if ((index + 1) % 100 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    const drained = await daemonRequest<DrainInboxReport>(options.config, "drain", { eventIds: batch.map((event) => event.event_id) });
-    report.events_imported += drained.ingested;
-    report.events_skipped_duplicate += drained.duplicates;
+    const ingested = await daemonRequest<ImportIngestReport>(options.config, "ingest", { events: pending });
+    report.events_imported += ingested.imported;
+    report.events_skipped_duplicate += ingested.skippedDuplicate;
+    pending.length = 0;
+    pendingBytes = 2;
   };
 
   for (const selection of selections) {
@@ -68,21 +71,50 @@ export async function importSessions(options: ImportOptions): Promise<ImportRepo
     }
     for (const file of files) {
       report.sessions_scanned += 1;
+      let events: NormalizedEvent[];
       try {
-        const events = await parseSession(selection.harness, file, report);
-        if (events.length > 0) report.sessions_imported += 1;
-        for (const item of events) {
-          if (!options.dryRun) pending.push(item);
-          if (pending.length >= BATCH_SIZE) await flush();
-        }
+        events = await parseSession(selection.harness, file, report);
       } catch (error) {
         report.records_rejected += 1;
         addFailure(report, file, error instanceof Error ? error.message : String(error));
+        continue;
+      }
+      if (events.length > 0) report.sessions_imported += 1;
+      for (const item of events) {
+        if (options.dryRun) continue;
+        const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
+        if (itemBytes + 2 > maxBatchBytes) throw new Error("Imported event exceeds the daemon request limit.");
+        if (pending.length > 0 && (pending.length >= BATCH_SIZE || pendingBytes + 1 + itemBytes > maxBatchBytes)) {
+          await flush();
+        }
+        pendingBytes += (pending.length > 0 ? 1 : 0) + itemBytes;
+        pending.push(item);
+        touchedSessions.add(item.session_id);
       }
     }
   }
   await flush();
+  if (!options.dryRun) await rebuildImportedSessions(options.config, touchedSessions, maxBatchBytes);
   return report;
+}
+
+async function rebuildImportedSessions(config: LcmConfig, sessions: ReadonlySet<string>, maxBatchBytes: number): Promise<void> {
+  let batch: string[] = [];
+  let batchBytes = 2;
+  const flush = async (): Promise<void> => {
+    if (batch.length === 0) return;
+    await daemonRequest<ImportIngestReport>(config, "ingest", { events: [], rebuildSessions: batch });
+    batch = [];
+    batchBytes = 2;
+  };
+  for (const sessionId of sessions) {
+    const itemBytes = Buffer.byteLength(JSON.stringify(sessionId), "utf8");
+    if (itemBytes + 2 > maxBatchBytes) throw new Error("Imported session ID exceeds the daemon request limit.");
+    if (batch.length > 0 && batchBytes + 1 + itemBytes > maxBatchBytes) await flush();
+    batchBytes += (batch.length > 0 ? 1 : 0) + itemBytes;
+    batch.push(sessionId);
+  }
+  await flush();
 }
 
 function sourcesFor(options: ImportOptions): Array<{ harness: ImportHarness; paths: string[]; optional: boolean }> {

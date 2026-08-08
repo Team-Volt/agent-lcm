@@ -28,8 +28,8 @@ test("publishes a private durable event and drains it in order", () => {
   assert.equal(fs.readdirSync(config.inboxDir).some((name) => name.endsWith(".tmp")), false);
   const seen: string[] = [];
   const report = drainInbox(config, (drained) => {
-    seen.push(drained.event_id);
-    return "ingested";
+    seen.push(...drained.map((event) => event.event_id));
+    return { imported: drained.length, skippedDuplicate: 0 };
   });
   assert.deepEqual(seen, [event.event_id]);
   assert.deepEqual(report, { ingested: 1, duplicates: 0, quarantined: 0 });
@@ -73,8 +73,8 @@ test("quarantines malformed inbox data without blocking a valid sibling", () => 
   const seen: string[] = [];
 
   const report = drainInbox(config, (drained) => {
-    seen.push(drained.event_id);
-    return "ingested";
+    seen.push(...drained.map((event) => event.event_id));
+    return { imported: drained.length, skippedDuplicate: 0 };
   });
 
   assert.deepEqual(report, { ingested: 1, duplicates: 0, quarantined: 1 });
@@ -93,6 +93,18 @@ test("leaves an inbox item in place when ingestion throws", () => {
     throw new Error("storage unavailable");
   }), /storage unavailable/u);
   assert.equal(fs.existsSync(queued), true);
+});
+
+test("leaves every file in a failed storage batch available for retry", () => {
+  const config = loadConfig({ home: tempHome() });
+  const queued = Array.from({ length: 3 }, (_, index) => publishInboxEvent(config, {
+    ...sampleEvent(),
+    event_id: String(index).padStart(64, "0"),
+  }));
+  assert.throws(() => drainInbox(config, () => {
+    throw new Error("storage batch unavailable");
+  }), /storage batch unavailable/u);
+  assert.deepEqual(queued.map((file) => fs.existsSync(file)), [true, true, true]);
 });
 
 async function publishConcurrently(home: string, events: ReturnType<typeof sampleEvent>[]): Promise<void> {

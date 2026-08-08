@@ -166,8 +166,9 @@ export class LcmStorage {
                     continue;
                 indexSeen.add(event.event_id);
                 const result = this.indexEventInTransaction(event, { rebuildSummary: summaryRebuild === "event" }, rawWrite.locationsByEventId.get(event.event_id));
-                if (result.summaryTouched)
+                if (result.summaryTouched && (summaryRebuild !== "sessions" || result.summaryRebuildNeeded)) {
                     touchedSessions.add(event.session_id);
+                }
             }
             const rebuiltSessions = summaryRebuild === "sessions"
                 ? this.rebuildTouchedSummarySessions(touchedSessions)

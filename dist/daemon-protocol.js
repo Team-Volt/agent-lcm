@@ -1,4 +1,4 @@
-export const DAEMON_PROTOCOL_VERSION = 1;
+export const DAEMON_PROTOCOL_VERSION = 2;
 // Older clients compare only this value. Change it whenever the protocol becomes incompatible.
 export const LEGACY_COMPATIBLE_DAEMON_VERSION = "0.1.0";
 export function daemonProtocolCompatible(status) {

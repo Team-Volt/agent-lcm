@@ -84,14 +84,15 @@ export function tokenMatches(actual, expected) {
     const expectedBytes = Buffer.from(expected, "utf8");
     return actualBytes.length === expectedBytes.length && crypto.timingSafeEqual(actualBytes, expectedBytes);
 }
-export function sendDaemonRequest(address, request, timeoutMs = 1_000) {
+export function sendDaemonRequest(address, request, timeoutMs = 1_000, responseTimeoutMs = timeoutMs) {
     return new Promise((resolve, reject) => {
         const socket = net.createConnection(address);
         let buffer = "";
-        const timeout = setTimeout(() => {
+        let timeout = setTimeout(onTimeout, timeoutMs);
+        function onTimeout() {
             socket.destroy();
             reject(new Error("agent-lcm daemon request timed out."));
-        }, timeoutMs);
+        }
         socket.setEncoding("utf8");
         socket.once("error", finishReject);
         socket.on("data", (chunk) => {
@@ -106,7 +107,11 @@ export function sendDaemonRequest(address, request, timeoutMs = 1_000) {
                 finishReject(error);
             }
         });
-        socket.once("connect", () => socket.write(`${JSON.stringify(request)}\n`));
+        socket.once("connect", () => {
+            clearTimeout(timeout);
+            timeout = setTimeout(onTimeout, responseTimeoutMs);
+            socket.write(`${JSON.stringify(request)}\n`);
+        });
         function finishResolve(response) {
             clearTimeout(timeout);
             socket.end();

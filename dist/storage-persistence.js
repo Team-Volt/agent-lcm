@@ -227,7 +227,7 @@ export function initializeIndex(db) {
 }
 export function indexEventInTransaction(db, event, rebuildSummary, location) {
     if (!db)
-        return { inserted: false, summaryTouched: false };
+        return { inserted: false, summaryTouched: false, summaryRebuildNeeded: false };
     const metadata = extractEventMetadata(event);
     const sessionMetadata = extractSessionMetadata(event);
     const insert = db.prepare(`
@@ -237,7 +237,7 @@ export function indexEventInTransaction(db, event, rebuildSummary, location) {
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
   `).run(event.event_id, event.session_id, event.harness, event.timestamp, event.hook_event, event.cwd, event.repo_root ?? null, event.git_branch ?? null, metadata.turn_id ?? null, metadata.tool_use_id ?? null, "", JSON.stringify(event), location?.segmentId ?? null, location?.offset ?? null, location?.length ?? null, eventAgentId(event) ?? null, overflowReferenceFromEvent(event)?.sha256 ?? null);
     if (insert.changes === 0)
-        return { inserted: false, summaryTouched: false };
+        return { inserted: false, summaryTouched: false, summaryRebuildNeeded: false };
     db.prepare(`
     INSERT INTO sessions
       (session_id, harness, first_seen, last_seen, cwd, repo_root, git_branch, event_count,
@@ -271,9 +271,10 @@ export function indexEventInTransaction(db, event, rebuildSummary, location) {
     }
     indexFileRefsForEvent(db, event);
     const summaryTouched = isSummarySourceEvent(event);
-    if (summaryTouched && rebuildSummary && shouldRebuildSessionMemorySummary(db, event))
+    const summaryRebuildNeeded = summaryTouched && shouldRebuildSessionMemorySummary(db, event);
+    if (rebuildSummary && summaryRebuildNeeded)
         rebuildSessionMemorySummary(db, event.session_id);
-    return { inserted: true, summaryTouched };
+    return { inserted: true, summaryTouched, summaryRebuildNeeded };
 }
 export function clearVerifiedRawJson(db, segmentId, batchSize = 500) {
     if (segmentId.length === 0 || !Number.isSafeInteger(batchSize) || batchSize <= 0) {

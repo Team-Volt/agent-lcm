@@ -207,6 +207,18 @@ test("a responsive endpoint is never unlinked and its loser never opens storage"
   assert.equal(fs.existsSync(path.join(config.runtimeDir, "daemon.pid")), false);
 });
 
+test("daemon status does not declare a busy endpoint dead after one second", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  fs.mkdirSync(config.runtimeDir, { recursive: true, mode: 0o700 });
+  const owner = responsiveEndpoint(config, readOrCreateToken(config), 1_100);
+  await listenTestServer(owner, ipcAddress(config));
+  t.after(() => closeTestServer(owner));
+
+  const status = await daemonStatus(config);
+
+  assert.equal(status.running, true);
+});
+
 test("an ownership loser cannot clean a stale socket or open the main index", {
   skip: process.platform === "win32" ? "Windows named pipes do not leave filesystem socket entries" : false,
 }, async (t) => {
@@ -408,7 +420,7 @@ test("reuses a compatible daemon from another package version", async (t) => {
 
   const after = await daemonStatus(config);
   assert.equal(after.pid, before.pid);
-  assert.equal(after.protocol_version, 1);
+  assert.equal(after.protocol_version, 2);
   assert.equal(old.exitCode, null);
 });
 
@@ -453,19 +465,43 @@ test("daemon survives a client disconnect while finishing a drain", async (t) =>
 
   await waitUntil(async () => fs.readdirSync(config.inboxDir).every((name) => !name.endsWith(".json")), 10_000);
   assert.equal((await daemonStatus(config)).running, true);
+  const stored = readJsonl(config.rawLogPath) as Array<{ event_id: string }>;
+  assert.equal(stored.length, 100);
+  assert.equal(new Set(stored.map((event) => event.event_id)).size, 100);
 });
 
-test("daemon drain requests can exceed the health probe timeout", async (t) => {
+test("daemon keeps status and read requests responsive while bounded inbox batches drain", async (t) => {
   const config = loadConfig({ home: tempHome() });
-  t.after(() => stopDaemon(config));
+  let draining: Promise<{ ingested: number }> | undefined;
+  t.after(async () => {
+    await draining?.catch(() => undefined);
+    await stopDaemon(config);
+  });
   await ensureDaemon(config);
-  for (let index = 0; index < 1_000; index += 1) {
+  for (let index = 0; index < 2_000; index += 1) {
     publishInboxEvent(config, sampleEvent(`slow drain ${index}`));
   }
 
-  const result = await daemonRequest<{ ingested: number }>(config, "drain", {});
+  draining = daemonRequest<{ ingested: number }>(config, "drain", {});
+  await waitUntil(async () => fs.readdirSync(config.inboxDir).filter((name) => name.endsWith(".json")).length < 2_000);
+  const status = await daemonStatus(config);
+  const [stats, grep] = await Promise.all([
+    daemonRequest<{ event_count: number }>(config, "cli", { command: "stats" }),
+    daemonRequest<{ structuredContent: { matches: unknown[] } }>(config, "tool", {
+      name: "lcm_grep",
+      arguments: { query: "slow drain" },
+    }),
+  ]);
+  const during = await daemonStatus(config);
 
-  assert.equal(result.ingested, 1_000);
+  assert.equal(status.running, true);
+  assert.equal(stats.event_count > 0, true);
+  assert.equal(grep.structuredContent.matches.length > 0, true);
+  assert.equal(during.running, true);
+  assert.equal(during.queue_depth > 0, true);
+  const result = await draining;
+  assert.equal(result.ingested, 2_000);
+  assert.equal((await daemonStatus(config)).queue_depth, 0);
   assert.equal((await daemonStatus(config)).running, true);
 });
 
@@ -658,7 +694,7 @@ async function seedStaleSocket(config: ReturnType<typeof loadConfig>): Promise<v
   fs.renameSync(parkedPath, config.socketPath);
 }
 
-function responsiveEndpoint(config: ReturnType<typeof loadConfig>, token: string): net.Server {
+function responsiveEndpoint(config: ReturnType<typeof loadConfig>, token: string, delayMs = 0): net.Server {
   return net.createServer((socket) => {
     let buffer = "";
     socket.setEncoding("utf8");
@@ -667,12 +703,14 @@ function responsiveEndpoint(config: ReturnType<typeof loadConfig>, token: string
       const newline = buffer.indexOf("\n");
       if (newline === -1) return;
       const request = JSON.parse(buffer.slice(0, newline)) as { id: string; token: string };
-      socket.end(`${JSON.stringify(request.token === token ? {
+      const response = `${JSON.stringify(request.token === token ? {
         version: 1,
         id: request.id,
         ok: true,
         result: { running: true, pid: process.pid, version: CURRENT_DAEMON_VERSION, queue_depth: 0, quarantine_count: 0 },
-      } : { version: 1, id: request.id, ok: false, error: "authentication failed" })}\n`);
+      } : { version: 1, id: request.id, ok: false, error: "authentication failed" })}\n`;
+      if (delayMs === 0) socket.end(response);
+      else setTimeout(() => socket.end(response), delayMs);
     });
   });
 }
