@@ -5,7 +5,7 @@ import { runLongContextBenchmark, runRetrievalQualityBenchmark } from "./benchma
 import { buildDoctorReport } from "./doctor.ts";
 import { daemonRequest, daemonStatus, ensureDaemon, stopDaemon } from "./daemon-client.ts";
 import { startDaemon } from "./daemon.ts";
-import { importSessions, type ImportHarness, type ImportReport } from "./import.ts";
+import { importSessions, type ImportHarness, type ImportOptions, type ImportReport } from "./import.ts";
 import { runCapture, runHook } from "./hook.ts";
 import type { CaptureHarness } from "./harnesses.ts";
 import { readStatus } from "./installer.ts";
@@ -132,10 +132,8 @@ export async function main(argv: string[]): Promise<void> {
   if (command === "import-codex-sessions") {
     if (rest.includes("--batch-size")) throw new Error("--batch-size is not supported; imports use durable batches.");
     const dryRun = rest.includes("--dry-run");
-    const showProgress = rest.includes("--progress");
     const from = optionValue(rest, "--from");
-    const report = await importSessions({ harness: "codex", ...(from ? { paths: [from] } : {}), config: loadConfig(), dryRun });
-    if (showProgress) writeImportProgress(report);
+    const report = await importWithProgress({ harness: "codex", ...(from ? { paths: [from] } : {}), config: loadConfig(), dryRun });
     printObjectOrText(report);
     return;
   }
@@ -144,7 +142,7 @@ export async function main(argv: string[]): Promise<void> {
     if (all && rest.includes("--harness")) throw new Error("Pass exactly one of --all or --harness.");
     const harness = all ? undefined : importHarness(optionValue(rest, "--harness"));
     const source = rest.find((item, index) => index > 0 && !item.startsWith("--") && rest[index - 1] !== "--harness");
-    const report = await importSessions({
+    const report = await importWithProgress({
       ...(all ? { all: true } : { harness }),
       ...(source ? { paths: [source] } : {}),
       config: loadConfig(),
@@ -238,6 +236,19 @@ async function daemonCli<T = unknown>(config: ReturnType<typeof loadConfig>, par
 
 function writeImportProgress(report: ImportReport): void {
   process.stderr.write(`agent-lcm import: imported=${report.events_imported} duplicates=${report.events_skipped_duplicate} rejected=${report.records_rejected}\n`);
+}
+
+async function importWithProgress(options: ImportOptions): Promise<ImportReport> {
+  process.stderr.write("agent-lcm import: scanning sessions...\n");
+  const heartbeat = setInterval(() => process.stderr.write("agent-lcm import: still working...\n"), 10_000);
+  heartbeat.unref();
+  try {
+    const report = await importSessions(options);
+    writeImportProgress(report);
+    return report;
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 function printHelp(): void {

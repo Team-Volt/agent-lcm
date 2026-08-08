@@ -121,6 +121,18 @@ test("CLI imports one selected harness", () => {
   assert.equal(JSON.parse(result.stdout).events_imported, 2);
 });
 
+test("CLI reports progress while importing without corrupting JSON stdout", () => {
+  const home = tempHome("agent-lcm-import-cli-progress-");
+  const result = runCli(["import", "--harness", "copilot", fixtures("import/copilot"), "--json"], {
+    env: { AGENT_LCM_HOME: home },
+  });
+
+  assertCliOk(result);
+  assert.equal(JSON.parse(result.stdout).events_imported, 2);
+  assert.match(result.stderr, /agent-lcm import: scanning sessions/u);
+  assert.match(result.stderr, /imported=2/u);
+});
+
 test("reports only this import when draining a shared inbox", async (t) => {
   const config = loadConfig({ home: tempHome("agent-lcm-import-shared-inbox-") });
   t.after(() => stopDaemon(config));

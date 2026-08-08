@@ -51,7 +51,10 @@ export async function importSessions(options: ImportOptions): Promise<ImportRepo
   const flush = async (): Promise<void> => {
     if (pending.length === 0 || options.dryRun) return;
     const batch = pending.splice(0, pending.length);
-    for (const event of batch) publishInboxEvent(options.config, event);
+    for (const [index, event] of batch.entries()) {
+      publishInboxEvent(options.config, event);
+      if ((index + 1) % 100 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     const drained = await daemonRequest<DrainInboxReport>(options.config, "drain", { eventIds: batch.map((event) => event.event_id) });
     report.events_imported += drained.ingested;
     report.events_skipped_duplicate += drained.duplicates;

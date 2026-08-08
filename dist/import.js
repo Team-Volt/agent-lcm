@@ -29,8 +29,11 @@ export async function importSessions(options) {
         if (pending.length === 0 || options.dryRun)
             return;
         const batch = pending.splice(0, pending.length);
-        for (const event of batch)
+        for (const [index, event] of batch.entries()) {
             publishInboxEvent(options.config, event);
+            if ((index + 1) % 100 === 0)
+                await new Promise((resolve) => setImmediate(resolve));
+        }
         const drained = await daemonRequest(options.config, "drain", { eventIds: batch.map((event) => event.event_id) });
         report.events_imported += drained.ingested;
         report.events_skipped_duplicate += drained.duplicates;

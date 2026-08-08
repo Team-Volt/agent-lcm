@@ -92,11 +92,8 @@ export async function main(argv) {
         if (rest.includes("--batch-size"))
             throw new Error("--batch-size is not supported; imports use durable batches.");
         const dryRun = rest.includes("--dry-run");
-        const showProgress = rest.includes("--progress");
         const from = optionValue(rest, "--from");
-        const report = await importSessions({ harness: "codex", ...(from ? { paths: [from] } : {}), config: loadConfig(), dryRun });
-        if (showProgress)
-            writeImportProgress(report);
+        const report = await importWithProgress({ harness: "codex", ...(from ? { paths: [from] } : {}), config: loadConfig(), dryRun });
         printObjectOrText(report);
         return;
     }
@@ -106,7 +103,7 @@ export async function main(argv) {
             throw new Error("Pass exactly one of --all or --harness.");
         const harness = all ? undefined : importHarness(optionValue(rest, "--harness"));
         const source = rest.find((item, index) => index > 0 && !item.startsWith("--") && rest[index - 1] !== "--harness");
-        const report = await importSessions({
+        const report = await importWithProgress({
             ...(all ? { all: true } : { harness }),
             ...(source ? { paths: [source] } : {}),
             config: loadConfig(),
@@ -199,6 +196,19 @@ async function daemonCli(config, params) {
 }
 function writeImportProgress(report) {
     process.stderr.write(`agent-lcm import: imported=${report.events_imported} duplicates=${report.events_skipped_duplicate} rejected=${report.records_rejected}\n`);
+}
+async function importWithProgress(options) {
+    process.stderr.write("agent-lcm import: scanning sessions...\n");
+    const heartbeat = setInterval(() => process.stderr.write("agent-lcm import: still working...\n"), 10_000);
+    heartbeat.unref();
+    try {
+        const report = await importSessions(options);
+        writeImportProgress(report);
+        return report;
+    }
+    finally {
+        clearInterval(heartbeat);
+    }
 }
 function printHelp() {
     process.stdout.write(`agent-lcm
