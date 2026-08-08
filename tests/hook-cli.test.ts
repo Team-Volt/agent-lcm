@@ -288,8 +288,9 @@ test("tool hooks skip Git metadata probes", () => {
   assert.equal(toolEvents.every((event) => event.repo_root === undefined), true);
 });
 
-test("SubagentStop publishes only its normalized parent event", () => {
+test("SubagentStop imports its child transcript through the shared daemon", (t) => {
   const home = tempHome();
+  t.after(() => { runCli(["daemon", "stop"], { env: { AGENT_LCM_HOME: home } }); });
   const parentId = "019f482f-65a8-7a31-a79c-2cecf2e87c3e";
   const childId = "019f482f-c8cd-7b60-ac99-a302e7fdb5bf";
   const transcript = path.join(
@@ -328,19 +329,26 @@ test("SubagentStop publishes only its normalized parent event", () => {
   });
 
   assertCliOk(result);
-  const events = readInboxEvents(home) as Array<{
+  assert.equal(readInboxEvents(home).length, 1);
+  assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
+  assertCliOk(runCli(["daemon", "start", "--json"], { env: { AGENT_LCM_HOME: home } }));
+  assertCliOk(runCli(["daemon", "stop", "--json"], { env: { AGENT_LCM_HOME: home } }));
+  const events = readJsonl(path.join(home, "events.jsonl")) as Array<{
     session_id: string;
     hook_event: string;
     payload: Record<string, unknown>;
     repo_root?: string;
     git_branch?: string;
   }>;
-  assert.deepEqual(events.map((event) => [event.session_id, event.hook_event]), [[`codex:${parentId}`, "SubagentStop"]]);
-  assert.doesNotMatch(JSON.stringify(events), /child_prompt_needle|child_result_needle|inherited_parent_needle/u);
+  assert.equal(events.some((event) => event.session_id === `codex:${parentId}` && event.hook_event === "SubagentStop"), true);
+  assert.equal(events.some((event) => event.session_id === `codex:${childId}` && JSON.stringify(event.payload).includes("child_prompt_needle")), true);
+  assert.equal(events.some((event) => event.session_id === `codex:${childId}` && JSON.stringify(event.payload).includes("child_result_needle")), true);
+  assert.doesNotMatch(JSON.stringify(events), /inherited_parent_needle/u);
 });
 
-test("SubagentStop leaves transcript import to the daemon", () => {
+test("SubagentStop reports a missing child transcript after preserving its parent event", (t) => {
   const home = tempHome();
+  t.after(() => { runCli(["daemon", "stop"], { env: { AGENT_LCM_HOME: home } }); });
   const parentId = "019f482f-65a8-7a31-a79c-2cecf2e87c3e";
   const transcript = path.join(tempHome("codex-subagent-missing-"), "missing.jsonl");
   const result = runCli(["hook", "SubagentStop"], {
@@ -354,12 +362,20 @@ test("SubagentStop leaves transcript import to the daemon", () => {
   });
 
   assertCliOk(result);
-  assert.equal(result.stderr, "");
+  assert.match(result.stderr, /failed to import subagent transcript/u);
+  assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
   const events = readInboxEvents(home) as Array<{
     session_id: string;
     hook_event: string;
   }>;
   assert.deepEqual(events.map((event) => [event.session_id, event.hook_event]), [[`codex:${parentId}`, "SubagentStop"]]);
+  assertCliOk(runCli(["daemon", "start", "--json"], { env: { AGENT_LCM_HOME: home } }));
+  assertCliOk(runCli(["daemon", "stop", "--json"], { env: { AGENT_LCM_HOME: home } }));
+  const retryEvents = readInboxEvents(home) as Array<{ session_id: string; hook_event: string }>;
+  assert.deepEqual(
+    retryEvents.map((event) => [event.session_id, event.hook_event]),
+    [[`codex:${parentId}`, "SubagentStop"]],
+  );
 });
 
 test("PostCompact hook emits no unsupported response", () => {

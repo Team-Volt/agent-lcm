@@ -39,11 +39,11 @@ export function publishInboxEvent(config: LcmConfig, event: NormalizedEvent): st
   return targetPath;
 }
 
-export function drainInbox(
+export async function drainInbox(
   config: LcmConfig,
-  ingest: (events: NormalizedEvent[]) => IngestInboxBatchResult,
+  ingest: (events: NormalizedEvent[]) => IngestInboxBatchResult | Promise<IngestInboxBatchResult>,
   limit = 100,
-): DrainInboxReport {
+): Promise<DrainInboxReport> {
   ensureInboxDirectories(config);
   const report: DrainInboxReport = { ingested: 0, duplicates: 0, quarantined: 0 };
   const pending: Array<{ event: NormalizedEvent; inboxPath: string }> = [];
@@ -59,7 +59,7 @@ export function drainInbox(
     }
   }
   if (pending.length > 0) {
-    const result = ingest(pending.map(({ event }) => event));
+    const result = await ingest(pending.map(({ event }) => event));
     report.ingested += result.imported;
     report.duplicates += result.skippedDuplicate;
     try {

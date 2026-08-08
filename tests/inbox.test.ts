@@ -18,7 +18,7 @@ function sampleEvent() {
   });
 }
 
-test("publishes a private durable event and drains it in order", () => {
+test("publishes a private durable event and drains it in order", async () => {
   const config = loadConfig({ home: tempHome() });
   const event = sampleEvent();
 
@@ -27,7 +27,7 @@ test("publishes a private durable event and drains it in order", () => {
   assert.equal(fs.statSync(queued).mode & 0o777, 0o600);
   assert.equal(fs.readdirSync(config.inboxDir).some((name) => name.endsWith(".tmp")), false);
   const seen: string[] = [];
-  const report = drainInbox(config, (drained) => {
+  const report = await drainInbox(config, (drained) => {
     seen.push(...drained.map((event) => event.event_id));
     return { imported: drained.length, skippedDuplicate: 0 };
   });
@@ -63,7 +63,7 @@ test("three conflicting publishers quarantine every payload when the original di
   assert.deepEqual(hashes.sort(), events.map((item) => item.raw_input_sha256).sort());
 });
 
-test("quarantines malformed inbox data without blocking a valid sibling", () => {
+test("quarantines malformed inbox data without blocking a valid sibling", async () => {
   const config = loadConfig({ home: tempHome() });
   fs.mkdirSync(config.inboxDir, { recursive: true, mode: 0o700 });
   const secret = "do-not-leak-this-inbox-content";
@@ -72,7 +72,7 @@ test("quarantines malformed inbox data without blocking a valid sibling", () => 
   publishInboxEvent(config, event);
   const seen: string[] = [];
 
-  const report = drainInbox(config, (drained) => {
+  const report = await drainInbox(config, (drained) => {
     seen.push(...drained.map((event) => event.event_id));
     return { imported: drained.length, skippedDuplicate: 0 };
   });
@@ -85,23 +85,24 @@ test("quarantines malformed inbox data without blocking a valid sibling", () => 
   assert.doesNotMatch(JSON.stringify(report), new RegExp(secret, "u"));
 });
 
-test("leaves an inbox item in place when ingestion throws", () => {
+test("leaves an inbox item in place when ingestion throws", async () => {
   const config = loadConfig({ home: tempHome() });
   const queued = publishInboxEvent(config, sampleEvent());
 
-  assert.throws(() => drainInbox(config, () => {
+  await assert.rejects(() => drainInbox(config, () => {
     throw new Error("storage unavailable");
   }), /storage unavailable/u);
   assert.equal(fs.existsSync(queued), true);
 });
 
-test("leaves every file in a failed storage batch available for retry", () => {
+test("leaves every file in a failed storage batch available for retry", async () => {
   const config = loadConfig({ home: tempHome() });
   const queued = Array.from({ length: 3 }, (_, index) => publishInboxEvent(config, {
     ...sampleEvent(),
     event_id: String(index).padStart(64, "0"),
   }));
-  assert.throws(() => drainInbox(config, () => {
+  await assert.rejects(() => drainInbox(config, async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
     throw new Error("storage batch unavailable");
   }), /storage batch unavailable/u);
   assert.deepEqual(queued.map((file) => fs.existsSync(file)), [true, true, true]);

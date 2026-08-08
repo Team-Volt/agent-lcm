@@ -15,6 +15,7 @@ export async function runHook(args: string[]): Promise<void> {
   const config = loadConfig();
   const rawInput = await readStdinWithLimit(config.limits.maxOverflowInputBytes);
   const payloadCwd = extractStringField(rawInput, "cwd") ?? process.env.PWD ?? process.cwd();
+  const transcriptPath = hookEvent === "SubagentStop" ? extractStringField(rawInput, "agent_transcript_path") : undefined;
   const toolHook = hookEvent === "PreToolUse" || hookEvent === "PostToolUse";
   const repo = toolHook ? {} : resolveGitMetadata(payloadCwd);
   const event = normalizeHookEvent({
@@ -47,6 +48,9 @@ export async function runHook(args: string[]): Promise<void> {
     };
   }
   publishInboxEvent(config, event);
+  if (transcriptPath && !fs.existsSync(transcriptPath)) {
+    process.stderr.write(`agent-lcm: failed to import subagent transcript: no file exists at ${transcriptPath}\n`);
+  }
   const output = postCompactRecoveryOutput({
     home: config.home,
     hookEvent: event.hook_event,

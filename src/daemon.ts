@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { LcmConfig } from "./config.ts";
+import { readCodexSessions } from "./codex-import.ts";
 import { DAEMON_PROTOCOL_VERSION, LEGACY_COMPATIBLE_DAEMON_VERSION } from "./daemon-protocol.ts";
 import { decodePersistedEvent } from "./event-codec.ts";
 import type { NormalizedEvent } from "./events.ts";
@@ -20,8 +21,10 @@ const VERSION_FILE = "daemon.version";
 const OWNERSHIP_FILE = "daemon.lock.sqlite";
 const START_TIMEOUT_MS = 5_000;
 const START_POLL_MS = 25;
+const IMPORT_BATCH_SIZE = 5_000;
 
 type DaemonStorage = { writer?: LcmStorage; maintenanceError?: string; drainError?: string };
+type StorageEnqueue = <T>(operation: () => T | Promise<T>) => Promise<T>;
 
 export async function startDaemon(config: LcmConfig): Promise<void> {
   const token = readOrCreateToken(config);
@@ -40,7 +43,7 @@ export async function startDaemon(config: LcmConfig): Promise<void> {
     await serve(config, server, storage, token, () => { orderly = true; });
   } finally {
     try {
-      if (orderly) drainStorageInboxFully(config, storage);
+      if (orderly) await drainStorageInboxFully(config, storage, async (operation) => operation());
     } finally {
       try {
         storage.writer?.close();
@@ -89,7 +92,7 @@ async function serve(
     draining = (async () => {
       const report: DrainInboxReport = { ingested: 0, duplicates: 0, quarantined: 0 };
       do {
-        mergeDrainReports(report, await enqueue(() => drainStorageInbox(config, storage)));
+        mergeDrainReports(report, await drainStorageInbox(config, storage, enqueue));
         if (shuttingDown || !hasInboxItems(config)) break;
         await new Promise<void>((resolve) => setImmediate(resolve));
       } while (hasInboxItems(config));
@@ -196,6 +199,7 @@ async function serve(
     process.once("SIGTERM", onSignal);
     scheduleDrain();
     await stopped;
+    await draining?.catch(() => undefined);
     await chain;
   } finally {
     process.off("SIGINT", onSignal);
@@ -217,7 +221,7 @@ async function dispatchRequest(config: LcmConfig, storage: DaemonStorage, reques
         ...(storage.drainError ? { drain_error: storage.drainError } : {}),
       };
     case "drain":
-      return drainStorageInbox(config, storage);
+      return drainStorageInbox(config, storage, async (operation) => operation());
     case "ingest":
       return ingestImportedEvents(config, storage, request.params);
     case "tool":
@@ -302,21 +306,50 @@ function booleanParam(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function drainStorageInbox(config: LcmConfig, storage: DaemonStorage): DrainInboxReport {
+async function drainStorageInbox(config: LcmConfig, storage: DaemonStorage, enqueue: StorageEnqueue): Promise<DrainInboxReport> {
   const report = hasInboxItems(config)
-    ? drainInbox(config, (events) => {
-      const writer = writableStorage(config, storage);
-      return writer.ingestMany(events);
-    })
+    ? await drainInbox(config, (events) => ingestInboxEvents(config, storage, events, enqueue))
     : { ingested: 0, duplicates: 0, quarantined: 0 };
   if (!hasInboxItems(config)) maintainStorage(config, storage);
   return report;
 }
 
-function drainStorageInboxFully(config: LcmConfig, storage: DaemonStorage): DrainInboxReport {
+async function ingestInboxEvents(
+  config: LcmConfig,
+  storage: DaemonStorage,
+  events: NormalizedEvent[],
+  enqueue: StorageEnqueue,
+) {
+  const result = await enqueue(() => writableStorage(config, storage).ingestMany(events));
+  const transcriptPaths = new Set(events.flatMap((event) => {
+    const value = event.hook_event === "SubagentStop" ? event.payload.agent_transcript_path : undefined;
+    return typeof value === "string" && value.trim().length > 0 ? [value.trim()] : [];
+  }));
+  const imported: NormalizedEvent[] = [];
+  for (const transcriptPath of transcriptPaths) {
+    const parsed = await readCodexSessions(transcriptPath, ({ event }) => imported.push(event));
+    for (const error of parsed.errors) {
+      process.stderr.write(`agent-lcm: failed to import subagent transcript: ${error.message}\n`);
+    }
+    const readError = parsed.errors.find((error) => error.line === undefined);
+    if (readError) throw new Error(`failed to import subagent transcript: ${readError.message}`);
+  }
+  const touchedSessions = new Set(imported.map((event) => event.session_id));
+  for (let index = 0; index < imported.length; index += IMPORT_BATCH_SIZE) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const batch = imported.slice(index, index + IMPORT_BATCH_SIZE);
+    await enqueue(() => writableStorage(config, storage).ingestMany(batch, { rebuildSummaries: false }));
+  }
+  if (touchedSessions.size > 0) {
+    await enqueue(() => writableStorage(config, storage).rebuildSessionMemorySummaries(touchedSessions));
+  }
+  return result;
+}
+
+async function drainStorageInboxFully(config: LcmConfig, storage: DaemonStorage, enqueue: StorageEnqueue): Promise<DrainInboxReport> {
   const report: DrainInboxReport = { ingested: 0, duplicates: 0, quarantined: 0 };
   do {
-    mergeDrainReports(report, drainStorageInbox(config, storage));
+    mergeDrainReports(report, await drainStorageInbox(config, storage, enqueue));
   } while (hasInboxItems(config));
   return report;
 }

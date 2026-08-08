@@ -26,7 +26,7 @@ export function publishInboxEvent(config, event) {
     }
     return targetPath;
 }
-export function drainInbox(config, ingest, limit = 100) {
+export async function drainInbox(config, ingest, limit = 100) {
     ensureInboxDirectories(config);
     const report = { ingested: 0, duplicates: 0, quarantined: 0 };
     const pending = [];
@@ -44,7 +44,7 @@ export function drainInbox(config, ingest, limit = 100) {
         }
     }
     if (pending.length > 0) {
-        const result = ingest(pending.map(({ event }) => event));
+        const result = await ingest(pending.map(({ event }) => event));
         report.ingested += result.imported;
         report.duplicates += result.skippedDuplicate;
         try {
