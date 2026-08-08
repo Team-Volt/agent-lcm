@@ -13,7 +13,7 @@ test("root is an Agent Plugins 1.0 package", () => {
   assert.deepEqual(mcp.mcpServers["agent-lcm"], {
     type: "stdio",
     command: "node",
-    args: ["${CURSOR_PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+    args: ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
   });
 });
 
@@ -42,7 +42,12 @@ test("client hook manifests invoke explicit or detected harness capture", () => 
 
   const cursor = readJson(".cursor-plugin/plugin.json");
   assert.equal(cursor.hooks, "./hooks/cursor.json");
-  assert.equal(cursor.mcpServers, "./mcp.json");
+  assert.equal(cursor.mcpServers, "./mcp.cursor.json");
+  assert.deepEqual(readJson("mcp.cursor.json").mcpServers["agent-lcm"], {
+    type: "stdio",
+    command: "node",
+    args: ["${CURSOR_PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+  });
   const cursorHooks = JSON.stringify(readJson("hooks/cursor.json"));
   assert.match(cursorHooks, /capture --harness cursor UserPromptSubmit/u);
   assert.match(cursorHooks, /\$\{CURSOR_PLUGIN_ROOT\}/u);
