@@ -13,7 +13,7 @@ import { setupHarness, setupStatus } from "./setup.js";
 import { detectedHarnesses } from "./setup-targets.js";
 export async function main(argv) {
     const [command, ...rest] = argv;
-    if (command === "--version" || command === "-v") {
+    if (command === "version" || command === "--version" || command === "-v") {
         process.stdout.write(`${packageVersion()}\n`);
         return;
     }
@@ -248,6 +248,7 @@ function printHelp() {
     process.stdout.write(`agent-lcm
 
 Commands:
+  agent-lcm version
   agent-lcm daemon run|start|status|stop
   agent-lcm mcp
   agent-lcm hook <event>

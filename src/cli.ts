@@ -52,7 +52,7 @@ type DaemonCliParams =
 
 export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
-  if (command === "--version" || command === "-v") {
+  if (command === "version" || command === "--version" || command === "-v") {
     process.stdout.write(`${packageVersion()}\n`);
     return;
   }
@@ -291,6 +291,7 @@ function printHelp(): void {
   process.stdout.write(`agent-lcm
 
 Commands:
+  agent-lcm version
   agent-lcm daemon run|start|status|stop
   agent-lcm mcp
   agent-lcm hook <event>
