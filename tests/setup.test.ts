@@ -172,6 +172,9 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
       { type: "command", command: "\"/old/bin/agent-lcm\" hook PostCompact", timeout: 15 },
       { type: "command", command: "other-post-compact-hook", timeout: 30 },
     ] }],
+    PreToolUse: [{ matcher: "Read", hooks: [
+      { type: "command", command: "other-pre-tool-hook", timeout: 30 },
+    ] }],
     CustomEvent: [{ hooks: [{
       type: "command",
       command: 'node "/opt/custom/agent-lcm" capture --harness codex Stop',
@@ -204,6 +207,18 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
     { type: "command", command: 'node "/new/bin/agent-lcm" hook PostCompact', timeout: 15 },
     { type: "command", command: "other-post-compact-hook", timeout: 30 },
   ] }]);
+  assert.deepEqual(configuration.hooks.PreToolUse, [{ matcher: "Read", hooks: [
+    { type: "command", command: "other-pre-tool-hook", timeout: 30 },
+  ] }, { matcher: ".*", hooks: [
+    { type: "command", command: 'node "/new/bin/agent-lcm" hook PreToolUse' },
+  ] }]);
+  assert.deepEqual(configuration.hooks.PreCompact, [{ hooks: [
+    { type: "command", command: 'node "/new/bin/agent-lcm" hook PreCompact' },
+  ] }]);
+  assert.deepEqual(configuration.hooks.SubagentStop, [{ hooks: [
+    { type: "command", command: 'node "/new/bin/agent-lcm" hook SubagentStop' },
+  ] }]);
+  assert.equal(setupStatus({ home: clientHome }).codex.configured, true);
   const backups = fs.readdirSync(clientHome).filter((name) => name.startsWith("hooks-pre-agent-lcm-"));
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(clientHome, backups[0] ?? ""), "utf8"), original);

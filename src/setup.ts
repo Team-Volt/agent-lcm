@@ -10,6 +10,8 @@ export type SetupStatusOptions = { home?: string };
 
 export type HarnessSetupStatus = { configured: boolean; path: string };
 
+const CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "PostCompact", "SubagentStop", "Stop"] as const;
+
 export function setupHarness(harness: CaptureHarness, options: SetupOptions): SetupReport {
   const target = setupPath(harness, options.home);
   const command = options.command.trim();
@@ -49,13 +51,16 @@ function mergeCodexConfiguration(
   if (!isRecord(configuration.hooks)) throw invalidConfiguration(target);
   if (!Object.values(configuration.hooks).every(isCodexSelectors)) throw invalidConfiguration(target);
 
-  for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse", "PostCompact", "Stop"]) {
-    const expectedCommand = event === "PostCompact"
-      ? `node "${command}" hook PostCompact`
+  for (const event of CODEX_EVENTS) {
+    const expectedCommand = isCodexNativeHook(event)
+      ? `node "${command}" hook ${event}`
       : captureCommand(command, "codex", event);
     const selectors = configuration.hooks[event];
     if (selectors === undefined) {
-      configuration.hooks[event] = [{ hooks: [{ type: "command", command: expectedCommand }] }];
+      configuration.hooks[event] = [{
+        ...(event === "PreToolUse" ? { matcher: ".*" } : {}),
+        hooks: [{ type: "command", command: expectedCommand }],
+      }];
       continue;
     }
     if (!isCodexSelectors(selectors)) throw invalidConfiguration(target);
@@ -63,13 +68,16 @@ function mergeCodexConfiguration(
     for (const selector of selectors) {
       if (!Array.isArray(selector.hooks) || !selector.hooks.every(isRecord)) throw invalidConfiguration(target);
       for (const hook of selector.hooks) {
-        if (!(event === "PostCompact" ? isAgentLcmPostCompactHook(hook) : isAgentLcmHook(hook, event, "codex"))) continue;
+        if (!(isCodexNativeHook(event) ? isAgentLcmCodexHook(hook, event) : isAgentLcmHook(hook, event, "codex"))) continue;
         hook.type = "command";
         hook.command = expectedCommand;
         found = true;
       }
     }
-    if (!found) selectors.push({ hooks: [{ type: "command", command: expectedCommand }] });
+    if (!found) selectors.push({
+      ...(event === "PreToolUse" ? { matcher: ".*" } : {}),
+      hooks: [{ type: "command", command: expectedCommand }],
+    });
   }
   return configuration;
 }
@@ -204,12 +212,12 @@ function configured(harness: CaptureHarness, target: string): boolean {
   if (harness !== "codex" && configuration.version !== 1) return false;
   const hooksByEvent = configuration.hooks;
   if (!isRecord(hooksByEvent)) return false;
-  if (harness === "codex") return ["SessionStart", "UserPromptSubmit", "PostToolUse", "PostCompact", "Stop"].every((event) => {
+  if (harness === "codex") return CODEX_EVENTS.every((event) => {
     const selectors = hooksByEvent[event];
     return Array.isArray(selectors) && selectors.some((selector) => isRecord(selector)
       && Array.isArray(selector.hooks)
-      && selector.hooks.some((hook) => event === "PostCompact"
-        ? isAgentLcmPostCompactHook(hook)
+      && selector.hooks.some((hook) => isCodexNativeHook(event)
+        ? isAgentLcmCodexHook(hook, event)
         : isExpectedCommandHook(hook, harness, event)));
   });
   if (isSharedHookHarness(harness) && hasSharedPascalRegistration(hooksByEvent)) return false;
@@ -250,11 +258,16 @@ function isAgentLcmHook(value: Record<string, unknown>, event: string, harness: 
     : match[1] === harness;
 }
 
-function isAgentLcmPostCompactHook(value: unknown): boolean {
+function isAgentLcmCodexHook(value: unknown, event: string): boolean {
   if (!isRecord(value) || (value.type !== undefined && value.type !== "command") || typeof value.command !== "string") {
     return false;
   }
-  return /^(?:node )?"(?:[^"\\/]*[\\/])*agent-lcm(?:\.(?:cmd|exe))?" hook PostCompact$/u.test(value.command);
+  const match = /^(?:node )?"(?:[^"\\/]*[\\/])*agent-lcm(?:\.(?:cmd|exe))?" hook (PreToolUse|PreCompact|PostCompact|SubagentStop)$/u.exec(value.command);
+  return match?.[1] === event;
+}
+
+function isCodexNativeHook(event: string): boolean {
+  return event === "PreToolUse" || event === "PreCompact" || event === "PostCompact" || event === "SubagentStop";
 }
 
 function hasSharedPascalRegistration(hooksByEvent: Record<string, unknown>): boolean {

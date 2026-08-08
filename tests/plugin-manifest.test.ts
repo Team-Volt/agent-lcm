@@ -20,9 +20,24 @@ test("root is an Agent Plugins 1.0 package", () => {
 test("client hook manifests invoke explicit or detected harness capture", () => {
   const codex = readJson(".codex-plugin/plugin.json");
   assert.equal(codex.hooks, "./hooks/codex.json");
-  const codexHooks = JSON.stringify(readJson("hooks/codex.json"));
+  const codexManifest = readJson("hooks/codex.json");
+  const codexHooks = JSON.stringify(codexManifest);
+  assert.deepEqual(Object.keys(codexManifest.hooks).sort(), [
+    "PostCompact",
+    "PostToolUse",
+    "PreCompact",
+    "PreToolUse",
+    "SessionStart",
+    "Stop",
+    "SubagentStop",
+    "UserPromptSubmit",
+  ]);
   assert.match(codexHooks, /capture --harness codex SessionStart/u);
+  assert.equal(codexManifest.hooks.PreToolUse[0].matcher, ".*");
+  assert.match(codexHooks, /hook PreToolUse/u);
+  assert.match(codexHooks, /hook PreCompact/u);
   assert.match(codexHooks, /hook PostCompact/u);
+  assert.match(codexHooks, /hook SubagentStop/u);
   assert.match(codexHooks, /capture --harness codex Stop/u);
 
   const cursor = readJson(".cursor-plugin/plugin.json");
