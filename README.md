@@ -149,6 +149,7 @@ Hooks start the daemon on demand. You can also manage it directly:
 
 ```sh
 agent-lcm daemon start
+agent-lcm daemon restart
 agent-lcm daemon status
 agent-lcm daemon stop
 ```
@@ -159,8 +160,7 @@ it instead of replacing it:
 
 ```sh
 npm install --global @team-volt/agent-lcm@latest
-agent-lcm daemon stop
-agent-lcm daemon start
+agent-lcm daemon restart
 ```
 
 ## Import existing sessions

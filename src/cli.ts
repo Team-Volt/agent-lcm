@@ -99,7 +99,8 @@ export async function main(argv: string[]): Promise<void> {
       await startDaemon(config);
       return;
     }
-    if (rest[0] === "start") {
+    if (rest[0] === "start" || rest[0] === "restart") {
+      if (rest[0] === "restart") await stopDaemon(config);
       await ensureDaemon(config);
       printObjectOrText(await daemonStatus(config));
       return;
@@ -113,7 +114,7 @@ export async function main(argv: string[]): Promise<void> {
       printObjectOrText(await daemonStatus(config));
       return;
     }
-    throw new Error("Usage: agent-lcm daemon run|start|status|stop");
+    throw new Error("Usage: agent-lcm daemon run|start|restart|status|stop");
   }
   if (command === "status") {
     printObjectOrText(readStatus({ codexHome: optionValue(rest, "--codex-home"), root: pluginRoot() }));
@@ -292,7 +293,7 @@ function printHelp(): void {
 
 Commands:
   agent-lcm version
-  agent-lcm daemon run|start|status|stop
+  agent-lcm daemon run|start|restart|status|stop
   agent-lcm mcp
   agent-lcm hook <event>
   agent-lcm capture --harness codex|cursor|vscode|copilot|kiro|auto [event]

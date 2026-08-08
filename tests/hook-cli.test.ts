@@ -58,6 +58,25 @@ test("capture publishes a mapped harness event before starting the shared daemon
   assert.equal(JSON.parse(status.stdout).running, false);
 });
 
+test("daemon restart replaces the running daemon", (t) => {
+  // Given: an isolated home with a running daemon.
+  const home = tempHome();
+  const env = { AGENT_LCM_HOME: home };
+  t.after(() => { runCli(["daemon", "stop"], { env, timeout: 15_000 }); });
+  const started = runCli(["daemon", "start"], { env, timeout: 15_000 });
+  assertCliOk(started);
+  const first = JSON.parse(started.stdout) as { readonly pid: number };
+
+  // When: the CLI restarts that daemon.
+  const restarted = runCli(["daemon", "restart"], { env, timeout: 15_000 });
+
+  // Then: a new daemon owns the same home.
+  assertCliOk(restarted);
+  const second = JSON.parse(restarted.stdout) as { readonly running: boolean; readonly pid: number };
+  assert.equal(second.running, true);
+  assert.notEqual(second.pid, first.pid);
+});
+
 test("hook command reports inbox fsync failure and publishes on retry", () => {
   // Given: the real hook CLI loads a fault injector that fails inbox fsync.
   const home = tempHome();
