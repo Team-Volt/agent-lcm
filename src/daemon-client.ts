@@ -17,7 +17,9 @@ export type DaemonStatus = {
 };
 
 const starts = new Map<string, Promise<void>>();
-const DAEMON_TIMEOUT_MS = 10_000;
+const DAEMON_START_TIMEOUT_MS = 5 * 60_000;
+const DAEMON_RELEASE_TIMEOUT_MS = 10_000;
+const DAEMON_REQUEST_TIMEOUT_MS = 5 * 60_000;
 
 export async function ensureDaemon(config: LcmConfig = loadConfig()): Promise<void> {
   const current = starts.get(config.home);
@@ -72,7 +74,7 @@ export async function daemonRequest<T>(
     id: `${process.pid}-${Date.now()}`,
     method,
     params,
-  });
+  }, method === "health" ? undefined : DAEMON_REQUEST_TIMEOUT_MS);
   if (!response.ok) throw new Error(response.error);
   return response.result as T;
 }
@@ -100,7 +102,7 @@ export async function stopDaemon(config: LcmConfig = loadConfig()): Promise<void
   await waitForRelease(config, status.pid);
 }
 
-async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, timeoutMs = DAEMON_TIMEOUT_MS): Promise<void> {
+async function waitForRelease(config: LcmConfig, ownerPid: number | undefined, timeoutMs = DAEMON_RELEASE_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const status = await daemonStatus(config);
@@ -128,7 +130,7 @@ function ownershipIsAvailable(config: LcmConfig): boolean {
 async function waitFor(
   config: LcmConfig,
   predicate: (status: DaemonStatus) => boolean,
-  timeoutMs = DAEMON_TIMEOUT_MS,
+  timeoutMs = DAEMON_START_TIMEOUT_MS,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (true) {

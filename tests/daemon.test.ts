@@ -427,6 +427,48 @@ test("daemon tool requests use the daemon storage", async (t) => {
   assert.equal(readJsonl(config.rawLogPath).length, 1);
 });
 
+test("daemon survives a client disconnect while finishing a drain", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+  for (let index = 0; index < 100; index += 1) {
+    publishInboxEvent(config, sampleEvent(`disconnect ${index}`));
+  }
+  const socket = net.createConnection(ipcAddress(config));
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.once("connect", () => {
+      socket.write(`${JSON.stringify({
+        version: 1,
+        token: fs.readFileSync(config.tokenPath, "utf8").trim(),
+        id: "disconnect-drain",
+        method: "drain",
+        params: {},
+      })}\n`, () => {
+        socket.destroy();
+        resolve();
+      });
+    });
+  });
+
+  await waitUntil(async () => fs.readdirSync(config.inboxDir).every((name) => !name.endsWith(".json")), 10_000);
+  assert.equal((await daemonStatus(config)).running, true);
+});
+
+test("daemon drain requests can exceed the health probe timeout", async (t) => {
+  const config = loadConfig({ home: tempHome() });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+  for (let index = 0; index < 1_000; index += 1) {
+    publishInboxEvent(config, sampleEvent(`slow drain ${index}`));
+  }
+
+  const result = await daemonRequest<{ ingested: number }>(config, "drain", {});
+
+  assert.equal(result.ingested, 1_000);
+  assert.equal((await daemonStatus(config)).running, true);
+});
+
 test("daemon finalizes summaries after draining an import batch out of event order", async (t) => {
   const config = loadConfig({ home: tempHome() });
   t.after(() => stopDaemon(config));

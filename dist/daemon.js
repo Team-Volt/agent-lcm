@@ -96,6 +96,7 @@ async function serve(config, server, storage, token, markOrderly) {
         }
         sockets.add(socket);
         socket.once("close", () => sockets.delete(socket));
+        socket.on("error", () => socket.destroy());
         let buffer = "";
         let handled = false;
         socket.setEncoding("utf8");

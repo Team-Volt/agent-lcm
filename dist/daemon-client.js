@@ -6,7 +6,9 @@ import { loadConfig, pluginRoot } from "./config.js";
 import { DAEMON_PROTOCOL_VERSION, daemonProtocolCompatible } from "./daemon-protocol.js";
 import { ipcAddress, readToken, sendDaemonRequest } from "./ipc.js";
 const starts = new Map();
-const DAEMON_TIMEOUT_MS = 10_000;
+const DAEMON_START_TIMEOUT_MS = 5 * 60_000;
+const DAEMON_RELEASE_TIMEOUT_MS = 10_000;
+const DAEMON_REQUEST_TIMEOUT_MS = 5 * 60_000;
 export async function ensureDaemon(config = loadConfig()) {
     const current = starts.get(config.home);
     if (current)
@@ -59,7 +61,7 @@ export async function daemonRequest(config, method, params) {
         id: `${process.pid}-${Date.now()}`,
         method,
         params,
-    });
+    }, method === "health" ? undefined : DAEMON_REQUEST_TIMEOUT_MS);
     if (!response.ok)
         throw new Error(response.error);
     return response.result;
@@ -88,7 +90,7 @@ export async function stopDaemon(config = loadConfig()) {
     }
     await waitForRelease(config, status.pid);
 }
-async function waitForRelease(config, ownerPid, timeoutMs = DAEMON_TIMEOUT_MS) {
+async function waitForRelease(config, ownerPid, timeoutMs = DAEMON_RELEASE_TIMEOUT_MS) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
         const status = await daemonStatus(config);
@@ -117,7 +119,7 @@ function ownershipIsAvailable(config) {
         database.close();
     }
 }
-async function waitFor(config, predicate, timeoutMs = DAEMON_TIMEOUT_MS) {
+async function waitFor(config, predicate, timeoutMs = DAEMON_START_TIMEOUT_MS) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
         const status = await daemonStatus(config);
