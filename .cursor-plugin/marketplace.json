@@ -1,0 +1,13 @@
+{
+  "name": "agent-lcm",
+  "owner": {
+    "name": "Team Volt"
+  },
+  "plugins": [
+    {
+      "name": "agent-lcm",
+      "source": ".",
+      "description": "Shared local context memory for agent harnesses."
+    }
+  ]
+}
