@@ -5,6 +5,7 @@
   "author": {
     "name": "Team Volt"
   },
+  "homepage": "https://github.com/Team-Volt/agent-lcm",
   "license": "MIT",
   "skills": "./skills/",
   "mcpServers": "./mcp.json",

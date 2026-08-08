@@ -2,6 +2,7 @@
   "name": "agent-lcm",
   "version": "0.0.6",
   "description": "Shared local context memory for agent harnesses.",
+  "homepage": "https://github.com/Team-Volt/agent-lcm",
   "hooks": "./hooks/cursor.json",
   "mcpServers": "./mcp.cursor.json"
 }
