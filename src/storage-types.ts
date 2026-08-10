@@ -39,6 +39,8 @@ export type SearchOverflowArgs = {
   limit?: number;
   cwd?: string;
   repoRoot?: string;
+  excludeCurrentSession?: boolean;
+  excludeSessionIds?: string[];
   harnesses?: HarnessName[];
 };
 

@@ -56,7 +56,7 @@ export const TOOLS = [
     {
         name: "lcm_grep",
         title: "LCM Grep",
-        description: "Preferred standard workflow step 1 (grep): find relevant sessions in indexed memory, or search bounded sanitized overflow payloads when contentScope is overflow or both",
+        description: "Preferred standard workflow step 1 (grep): search the requested cwd or repo first, then retry globally when scoped memory and overflow results are both empty",
         inputSchema: {
             type: "object",
             properties: {
@@ -166,7 +166,7 @@ export const TOOLS = [
     {
         name: "lcm_search_sessions",
         title: "LCM Search Sessions",
-        description: "Compatibility tool; prefer lcm_grep with contentScope set to memory.",
+        description: "Strictly scoped compatibility search; prefer lcm_grep unless global fallback is unwanted.",
         inputSchema: {
             type: "object",
             properties: {

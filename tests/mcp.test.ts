@@ -46,6 +46,102 @@ function queuedEvent(eventId: string, harness: "codex" | "cursor", sessionId: st
   return { ...event, event_id: eventId, harness, session_id: sessionId };
 }
 
+test("lcm_grep retries globally without redefining the scoped current session", () => {
+  // Given
+  const home = tempHome();
+  const scopedHook = runCli(["hook", "UserPromptSubmit"], {
+    input: JSON.stringify({
+      session_id: "codex:scoped-current-session",
+      cwd: "/tmp/scoped-grep-miss",
+      prompt: "global grep fallback needle",
+    }),
+    env: { AGENT_LCM_HOME: home },
+  });
+  assert.equal(scopedHook.status, 0, scopedHook.stderr);
+  const globalHook = runCli(["hook", "UserPromptSubmit"], {
+    input: JSON.stringify({
+      session_id: "codex:global-grep-fallback",
+      cwd: "/tmp/global-grep-source",
+      prompt: "global grep fallback needle",
+    }),
+    env: { AGENT_LCM_HOME: home },
+  });
+  assert.equal(globalHook.status, 0, globalHook.stderr);
+
+  // When
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "lcm_grep",
+        arguments: {
+          query: "global grep fallback needle",
+          cwd: "/tmp/scoped-grep-miss",
+          excludeCurrentSession: true,
+        },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "lcm_search_sessions",
+        arguments: {
+          query: "global grep fallback needle",
+          cwd: "/tmp/scoped-grep-miss",
+          excludeCurrentSession: true,
+        },
+      },
+    },
+  ], { AGENT_LCM_HOME: home });
+
+  // Then
+  assert.deepEqual(
+    responses[1].result.structuredContent.matches.map((match: { session_id: string }) => match.session_id),
+    ["codex:global-grep-fallback"],
+  );
+  assert.equal(responses[1].result.structuredContent.search_scope, "global_fallback");
+  assert.deepEqual(responses[2].result.structuredContent.matches, []);
+});
+
+test("lcm_grep applies memory exclusions before the result limit", () => {
+  const home = tempHome();
+  const cwd = "/tmp/scoped-grep-memory-limit";
+  for (const sessionId of ["codex:scoped-memory-allowed", "codex:scoped-memory-current"]) {
+    const hook = runCli(["hook", "UserPromptSubmit"], {
+      input: JSON.stringify({ session_id: sessionId, cwd, prompt: "memory exclusion limit marker" }),
+      env: { AGENT_LCM_HOME: home },
+    });
+    assert.equal(hook.status, 0, hook.stderr);
+  }
+
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "lcm_grep",
+        arguments: {
+          query: "memory exclusion limit marker",
+          cwd,
+          limit: 1,
+          excludeCurrentSession: true,
+        },
+      },
+    },
+  ], { AGENT_LCM_HOME: home });
+
+  const result = responses[1].result.structuredContent;
+  assert.deepEqual(result.matches.map((match: { session_id: string }) => match.session_id), ["codex:scoped-memory-allowed"]);
+  assert.equal(result.search_scope, "scoped");
+});
+
 test("MCP server initializes and exposes a stable tool catalog", () => {
   const home = tempHome();
   const responses = runMcp([
@@ -805,6 +901,82 @@ test("MCP grep searches the full bounded sanitized overflow content", () => {
   assert.equal(result.overflow_matches[0].byte_offset > 512 * 1024, true);
   assert.match(result.overflow_matches[0].snippet, new RegExp(marker, "u"));
   assert.equal(result.overflow_matches[0].scan_truncated, false);
+});
+
+test("MCP grep preserves overflow exclusions during global fallback", () => {
+  const home = tempHome();
+  const marker = "OVERFLOW-GLOBAL-FALLBACK-MARKER";
+  const sourceCwd = "/tmp/overflow-global-fallback-source";
+  for (const sessionId of ["codex:overflow-included", "codex:overflow-excluded"]) {
+    const hook = runCli(["hook", "PostToolUse"], {
+      input: JSON.stringify({
+        session_id: sessionId,
+        cwd: sourceCwd,
+        tool_name: "test",
+        tool_response: `${"x".repeat(600 * 1024)}\n${marker}\n`,
+      }),
+      env: { AGENT_LCM_HOME: home },
+    });
+    assert.equal(hook.status, 0, hook.stderr);
+  }
+
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "lcm_grep",
+        arguments: {
+          query: marker,
+          cwd: sourceCwd,
+          contentScope: "overflow",
+          limit: 1,
+          excludeSessionIds: ["codex:overflow-excluded"],
+        },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "lcm_grep",
+        arguments: {
+          query: marker,
+          cwd: sourceCwd,
+          contentScope: "overflow",
+          limit: 1,
+          excludeCurrentSession: true,
+        },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "lcm_grep",
+        arguments: {
+          query: marker,
+          cwd: "/tmp/overflow-global-fallback-miss",
+          contentScope: "overflow",
+          excludeSessionIds: ["codex:overflow-excluded"],
+        },
+      },
+    },
+  ], { AGENT_LCM_HOME: home });
+
+  for (const [index, searchScope] of [[1, "scoped"], [2, "scoped"], [3, "global_fallback"]] as const) {
+    const result = responses[index].result.structuredContent;
+    assert.deepEqual(result.matches, []);
+    assert.deepEqual(
+      result.overflow_matches.map((match: { session_id: string }) => match.session_id),
+      ["codex:overflow-included"],
+    );
+    assert.equal(result.search_scope, searchScope);
+  }
 });
 
 test("MCP expand_query returns recursive evidence for a focused query", () => {
