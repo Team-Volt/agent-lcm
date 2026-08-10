@@ -297,23 +297,22 @@ export function searchStoredSessions(db, rawLogPath, args) {
     }
     const query = args.query?.trim() ?? "";
     if (query.length === 0) {
-        const searchLimit = excludedSessionIds.size > 0 ? Math.max(limit * 4, 20) : limit;
-        const harnessFilter = harnessSqlFragment("harness", args.harnesses, 4);
+        const harnessFilter = harnessSqlFragment("harness", args.harnesses, 5);
         return db.prepare(`
       SELECT *
       FROM sessions
       WHERE (?1 IS NULL OR cwd = ?1)
         AND (?2 IS NULL OR repo_root = ?2)
+        AND session_id NOT IN (SELECT value FROM json_each(?4))
         ${harnessFilter.sql}
       ORDER BY last_seen DESC
       LIMIT ?3
-    `).all(args.cwd ?? null, args.repoRoot ?? null, searchLimit, ...harnessFilter.values)
+    `).all(args.cwd ?? null, args.repoRoot ?? null, limit, JSON.stringify([...excludedSessionIds]), ...harnessFilter.values)
             .map(rowToSessionSummary)
-            .filter((session) => !excludedSessionIds.has(session.session_id))
             .slice(0, limit);
     }
     let rows = [];
-    const harnessFilter = harnessSqlFragment("s.harness", args.harnesses, 5);
+    const harnessFilter = harnessSqlFragment("s.harness", args.harnesses, 6);
     const eventStatement = db.prepare(`
     SELECT s.*,
            lcm_raw_json(e.raw_json, e.segment_id, e.raw_offset, e.raw_length) AS match_text,
@@ -325,6 +324,7 @@ export function searchStoredSessions(db, rawLogPath, args) {
     WHERE event_fts MATCH ?1
       AND (?2 IS NULL OR s.cwd = ?2)
       AND (?3 IS NULL OR s.repo_root = ?3)
+      AND s.session_id NOT IN (SELECT value FROM json_each(?5))
       AND e.hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')
       ${harnessFilter.sql}
     ORDER BY bm25(event_fts) ASC, e.timestamp DESC
@@ -341,6 +341,7 @@ export function searchStoredSessions(db, rawLogPath, args) {
     WHERE session_summary_fts MATCH ?1
       AND (?2 IS NULL OR s.cwd = ?2)
       AND (?3 IS NULL OR s.repo_root = ?3)
+      AND s.session_id NOT IN (SELECT value FROM json_each(?5))
       ${harnessFilter.sql}
     ORDER BY bm25(session_summary_fts) ASC, ss.updated_at DESC
     LIMIT ?4
@@ -358,15 +359,15 @@ export function searchStoredSessions(db, rawLogPath, args) {
     WHERE summary_node_fts MATCH ?1
       AND (?2 IS NULL OR s.cwd = ?2)
       AND (?3 IS NULL OR s.repo_root = ?3)
+      AND s.session_id NOT IN (SELECT value FROM json_each(?5))
       ${harnessFilter.sql}
     ORDER BY bm25(summary_node_fts) ASC, n.depth DESC, n.latest_at DESC
     LIMIT ?4
   `);
     for (const ftsQuery of toFtsQueries(query)) {
         const candidateRows = [summaryNodeStatement, summaryStatement, eventStatement]
-            .flatMap((statement) => statement.all(ftsQuery, args.cwd ?? null, args.repoRoot ?? null, Math.max(limit * 20, 50), ...harnessFilter.values));
+            .flatMap((statement) => statement.all(ftsQuery, args.cwd ?? null, args.repoRoot ?? null, Math.max(limit * 20, 50), JSON.stringify([...excludedSessionIds]), ...harnessFilter.values));
         rows = candidateRows
-            .filter((row) => !excludedSessionIds.has(String(recordValue(row).session_id)))
             .filter((row) => isSearchDiscoveryRow(row, query));
         if (rows.length > 0)
             break;
@@ -376,6 +377,7 @@ export function searchStoredSessions(db, rawLogPath, args) {
 export function searchStoredOverflow(db, rawLogPath, overflowDir, args) {
     const limit = clampLimit(args.limit, 10, 50);
     const selectedHarnesses = harnessSet(args.harnesses);
+    const excludedSessionIds = excludedSearchSessionIds(db, rawLogPath, args);
     const events = db
         ? db.prepare(`
         SELECT ${STORED_EVENT_JSON_SQL} AS raw_json
@@ -383,14 +385,16 @@ export function searchStoredOverflow(db, rawLogPath, overflowDir, args) {
         WHERE overflow_sha256 IS NOT NULL
           AND (?1 IS NULL OR cwd = ?1)
           AND (?2 IS NULL OR repo_root = ?2)
-          ${harnessSqlFragment("harness", args.harnesses, 4).sql}
+          AND session_id NOT IN (SELECT value FROM json_each(?4))
+          ${harnessSqlFragment("harness", args.harnesses, 5).sql}
         ORDER BY timestamp DESC, rowid DESC
         LIMIT ?3
-      `).all(args.cwd ?? null, args.repoRoot ?? null, MAX_OVERFLOW_SEARCH_REFERENCES, ...harnessSqlFragment("harness", args.harnesses, 4).values)
+      `).all(args.cwd ?? null, args.repoRoot ?? null, MAX_OVERFLOW_SEARCH_REFERENCES, JSON.stringify([...excludedSessionIds]), ...harnessSqlFragment("harness", args.harnesses, 5).values)
             .map((row) => decodePersistedEvent(String(recordValue(row).raw_json)))
         : readRawEvents(rawLogPath)
             .filter((event) => !args.cwd || event.cwd === args.cwd)
             .filter((event) => !args.repoRoot || event.repo_root === args.repoRoot)
+            .filter((event) => !excludedSessionIds.has(event.session_id))
             .filter((event) => matchesHarness(event, selectedHarnesses))
             .reverse()
             .slice(0, MAX_OVERFLOW_SEARCH_REFERENCES);

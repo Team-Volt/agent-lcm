@@ -33,7 +33,8 @@ so harnesses do not compete as independent database writers.
 Retrieval is global unless a caller passes a `harnesses` filter. The usual MCP
 flow is:
 
-1. `lcm_grep` finds matching sessions across harnesses.
+1. `lcm_grep` searches the current cwd or repository first, then retries globally
+   when the scoped search is empty.
 2. `lcm_describe` inspects a session or summary node.
 3. `lcm_expand` follows its source lineage, or `lcm_pack_context` returns a
    bounded context block ready for the agent.

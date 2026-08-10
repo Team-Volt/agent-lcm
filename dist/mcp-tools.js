@@ -42,27 +42,51 @@ export function callTool(storage, params) {
         case "lcm_grep": {
             const scope = contentScope(args.contentScope);
             const query = optionalString(args.query);
-            const matches = scope === "overflow"
+            const limit = optionalNumber(args.limit);
+            const cwd = optionalString(args.cwd);
+            const repoRoot = optionalString(args.repoRoot);
+            const excludeCurrentSession = optionalBoolean(args.excludeCurrentSession);
+            const excludeSessionIds = optionalStringArray(args.excludeSessionIds);
+            const harnesses = optionalHarnessArray(args.harnesses);
+            const scopedCurrentSessionId = excludeCurrentSession
+                ? storage.getCurrentSession({ cwd, repoRoot })?.session_id
+                : undefined;
+            const scopedExcludeSessionIds = scopedCurrentSessionId
+                ? [...new Set([...(excludeSessionIds ?? []), scopedCurrentSessionId])]
+                : excludeSessionIds;
+            let matches = scope === "overflow"
                 ? []
                 : storage.searchSessions({
                     query,
-                    limit: optionalNumber(args.limit),
-                    cwd: optionalString(args.cwd),
-                    repoRoot: optionalString(args.repoRoot),
-                    excludeCurrentSession: optionalBoolean(args.excludeCurrentSession),
-                    excludeSessionIds: optionalStringArray(args.excludeSessionIds),
-                    harnesses: optionalHarnessArray(args.harnesses),
+                    limit,
+                    cwd,
+                    repoRoot,
+                    excludeCurrentSession,
+                    excludeSessionIds,
+                    harnesses,
                 });
-            const overflowMatches = scope === "memory"
+            let overflowMatches = scope === "memory"
                 ? []
                 : storage.searchOverflow({
                     query: query ?? "",
-                    limit: optionalNumber(args.limit),
-                    cwd: optionalString(args.cwd),
-                    repoRoot: optionalString(args.repoRoot),
-                    harnesses: optionalHarnessArray(args.harnesses),
+                    limit,
+                    cwd,
+                    repoRoot,
+                    excludeCurrentSession,
+                    excludeSessionIds,
+                    harnesses,
                 });
-            return toolResult(`Found ${matches.length} LCM matches and ${overflowMatches.length} overflow matches.`, { matches, overflow_matches: overflowMatches });
+            const useGlobalFallback = matches.length === 0 && overflowMatches.length === 0 && Boolean(cwd || repoRoot);
+            if (useGlobalFallback) {
+                matches = scope === "overflow"
+                    ? []
+                    : storage.searchSessions({ query, limit, excludeSessionIds: scopedExcludeSessionIds, harnesses });
+                overflowMatches = scope === "memory"
+                    ? []
+                    : storage.searchOverflow({ query: query ?? "", limit, excludeSessionIds: scopedExcludeSessionIds, harnesses });
+            }
+            const searchScope = useGlobalFallback ? "global_fallback" : cwd || repoRoot ? "scoped" : "global";
+            return toolResult(`Found ${matches.length} LCM matches and ${overflowMatches.length} overflow matches. Search scope: ${searchScope}.`, { matches, overflow_matches: overflowMatches, search_scope: searchScope });
         }
         case "lcm_describe": {
             const description = storage.describeMemory({
