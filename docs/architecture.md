@@ -58,6 +58,11 @@ configuration is validated before native work. Unrelated entries and
 near-matching commands remain untouched; only an exact harness/event/command
 registration is changed.
 
+Native client state and local hook JSON cannot share one transaction. If the
+hook file changes after preflight while a native command runs, Agent LCM keeps
+the changed bytes and exits with an explicit partial-state error. Repair the
+file, then rerun the same setup or remove command.
+
 Setup files use an atomic `<target>.lock` directory (bounded to ten seconds).
 A short-lived helper changes into the checked target directory and verifies its
 device and inode before it reads, backs up, or publishes. Publication writes a

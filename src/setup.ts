@@ -41,7 +41,9 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
   validateSetupHooks(harness, existing, target);
   ensureSetupDirectory(path.dirname(target));
   const native = runHarnessLifecycle(harness, "setup", options.env ? { env: options.env, command } : { command });
-  const changed = updateHooks(harness, native.status, target, command, existing !== undefined);
+  const changed = finishHookUpdate("setup", harness, native.status, target, () => (
+    updateHooks(harness, native.status, target, command, existing !== undefined)
+  ));
   return {
     harness,
     action: "setup",
@@ -57,7 +59,9 @@ export function removeHarness(harness: CaptureHarness, options: RemoveOptions = 
   const existing = readSetupConfiguration(target);
   validateSetupHooks(harness, existing, target);
   const native = runHarnessLifecycle(harness, "remove", options.env ? { env: options.env } : {});
-  const changed = removeHooks(harness, target, existing !== undefined);
+  const changed = finishHookUpdate("remove", harness, native.status, target, () => (
+    removeHooks(harness, target, existing !== undefined)
+  ));
   return {
     harness,
     action: "remove",
@@ -101,6 +105,25 @@ function removeHooks(harness: CaptureHarness, target: string, targetExists: bool
   return mutateSetupConfiguration(target, (existing) => existing === undefined
     ? undefined
     : removeSetupHooks(existing, harness, target));
+}
+
+function finishHookUpdate(
+  action: "setup" | "remove",
+  harness: CaptureHarness,
+  nativeStatus: "native-complete" | "manual-required" | "shared-retained",
+  target: string,
+  update: () => boolean,
+): boolean {
+  try {
+    return update();
+  } catch (error) {
+    if (nativeStatus !== "native-complete") throw error;
+    throw new Error(
+      `Native ${harness} ${action} completed, but Agent LCM could not safely update ${target}. `
+      + `The file was not overwritten. Repair it, then rerun agent-lcm ${action} ${harness}.`,
+      { cause: error },
+    );
+  }
 }
 
 function readConfigurationForStatus(target: string): Record<string, unknown> | undefined {

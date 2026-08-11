@@ -114,6 +114,12 @@ temporary publication; a predictable temporary symlink cannot redirect the
 write. Hook commands must use an absolute shell-safe binary path. If validation
 fails, the original file and native CLI invocation remain unchanged.
 
+If another process changes the hook file after that preflight while a native
+command is running, Agent LCM does not overwrite the new bytes. It exits `1`
+and states that the native action completed but hook cleanup did not. Repair
+the named file, then rerun the same `agent-lcm setup <harness>` or
+`agent-lcm remove <harness>` command.
+
 If setup times out on `<target>.lock`, first confirm that no Agent LCM setup or
 remove process is running. You may then remove that empty lock directory and
 retry. Do not remove it while another process is active.

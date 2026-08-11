@@ -164,8 +164,10 @@ Setup and removal print one report per harness. Exit status `0` means the
 requested native work and hook work completed. Exit status `2` means a manual
 native step remains (`manual-required`) or a shared Copilot resource was
 deliberately retained (`shared-retained`). Exit status `1` means the command
-failed; inspect stderr before retrying. Add `--json` when a script needs the
-report fields.
+failed; inspect stderr before retrying. If stderr says the native action
+completed but the hook file could not be updated safely, repair that file and
+rerun the same command. Agent LCM leaves the changed bytes untouched. Add
+`--json` when a script needs the report fields.
 
 Native lifecycle support is limited to the commands that each client documents:
 
@@ -194,7 +196,9 @@ up, or publishes through a unique `wx` temporary file, `fsync`, and rename.
 Symlinked directory components, lock paths, targets, and non-regular files are
 refused. Hook commands must be absolute paths without shell metacharacters. These rules make
 repeated setup and removal safe while avoiding a second user-level hook copy
-after native installation.
+after native installation. A native client and a hook file cannot share one
+transaction. If another process changes the hook file during native work,
+Agent LCM reports that recoverable partial state instead of overwriting it.
 
 Hooks start the daemon on demand. You can also manage it directly:
 

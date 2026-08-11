@@ -48,6 +48,7 @@
 - Native Codex setup removes exact legacy fallback hooks after install and never creates a user hook file.
 - Generate the Copilot-format package at setup time so hooks and MCP use the validated absolute Agent LCM command. Keep its source basename `agent-lcm` so repeat direct installs update one native plugin.
 - Validate existing setup JSON before starting a native process. Match owned hooks by harness, event, and command shape; preserve unrelated and near-matching entries.
+- Native lifecycle state and hook JSON are not one transaction. If the file changes during native work, preserve its bytes and throw an explicit error that says the native action completed and tells the user to repair and rerun.
 - Keep setup-file reads, backups, locks, and publication inside the helper process anchored to the validated target directory. A later path identity check does not make a path-based write safe. Refuse symlinked directory components, lock paths, targets, and non-regular files. Use a unique `wx` temporary file, restrictive permissions, fsync, rename, and directory fsync. Backups use the collision-safe `-pre-agent-lcm-` name.
 - Build native plugin sources only from the current local package, never from a mutable remote ref. Treat only `ENOENT` as an unavailable CLI; all other native probe or command failures must stop before hook mutation and must not echo client stderr.
 - Require an absolute hook binary path and reject shell metacharacters before writing configuration.

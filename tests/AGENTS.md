@@ -70,6 +70,8 @@ framework, fixture library, or custom runner.
 - For setup-file symlink races, swap the path at the old path-check/read or
   chmod boundary and prove descriptor-bound I/O neither reads nor changes the
   victim.
+- For lifecycle/config races, change the target from a fake native probe and
+  assert the native argv, untouched new bytes, and explicit repair message.
 - Prefer direct assertions on counts, IDs, paths, and JSON fields over broad
   snapshots; preserve security checks that prove secrets are absent.
 

@@ -12,7 +12,7 @@ export function setupHarness(harness, options) {
     validateSetupHooks(harness, existing, target);
     ensureSetupDirectory(path.dirname(target));
     const native = runHarnessLifecycle(harness, "setup", options.env ? { env: options.env, command } : { command });
-    const changed = updateHooks(harness, native.status, target, command, existing !== undefined);
+    const changed = finishHookUpdate("setup", harness, native.status, target, () => (updateHooks(harness, native.status, target, command, existing !== undefined)));
     return {
         harness,
         action: "setup",
@@ -27,7 +27,7 @@ export function removeHarness(harness, options = {}) {
     const existing = readSetupConfiguration(target);
     validateSetupHooks(harness, existing, target);
     const native = runHarnessLifecycle(harness, "remove", options.env ? { env: options.env } : {});
-    const changed = removeHooks(harness, target, existing !== undefined);
+    const changed = finishHookUpdate("remove", harness, native.status, target, () => (removeHooks(harness, target, existing !== undefined)));
     return {
         harness,
         action: "remove",
@@ -63,6 +63,17 @@ function removeHooks(harness, target, targetExists) {
     return mutateSetupConfiguration(target, (existing) => existing === undefined
         ? undefined
         : removeSetupHooks(existing, harness, target));
+}
+function finishHookUpdate(action, harness, nativeStatus, target, update) {
+    try {
+        return update();
+    }
+    catch (error) {
+        if (nativeStatus !== "native-complete")
+            throw error;
+        throw new Error(`Native ${harness} ${action} completed, but Agent LCM could not safely update ${target}. `
+            + `The file was not overwritten. Repair it, then rerun agent-lcm ${action} ${harness}.`, { cause: error });
+    }
 }
 function readConfigurationForStatus(target) {
     try {

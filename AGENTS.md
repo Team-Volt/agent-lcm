@@ -54,6 +54,9 @@ docs/                       architecture and troubleshooting
   near-matching hooks, reject symlinked or non-regular targets, and publish
   changes under an atomic `<target>.lock` directory through a unique fsynced
   temporary file and rename.
+- If a hook file changes during native work, preserve the new bytes and report
+  the completed native action as recoverable partial state; never hide it behind
+  a generic file error.
 
 See `src/AGENTS.md` and `tests/AGENTS.md` for more specific rules.
 
