@@ -44,6 +44,7 @@
 ## Harness setup safety
 
 - Probe and invoke only documented commands: Codex uses `codex plugin`; Copilot and VS Code use the shared `copilot plugin` store; Cursor and Kiro use version-only probes and keep plugin changes manual.
+- Spawn native executables directly. On Windows only, resolve npm `.cmd` or `.bat` shims from `PATH`, reject command-shell metacharacters, and pass the resolved shim through `cmd.exe` with the shell option still disabled.
 - Codex and Cursor native hooks depend on the packed npm artifact omitting the repository-root Agent Plugins manifest. Never add `plugin.json` back to `package.json#files` without redesigning native package selection.
 - Native Codex setup removes exact legacy fallback hooks after install and never creates a user hook file.
 - Generate the Copilot-format package at setup time so hooks and MCP use the validated absolute Agent LCM command. Keep its source basename `agent-lcm` so repeat direct installs update one native plugin.

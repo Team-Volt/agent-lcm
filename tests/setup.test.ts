@@ -797,7 +797,7 @@ function fakeSetupCli(
   const bin = fs.mkdtempSync(path.join(tempHome("agent-lcm-setup-cli-parent-"), "bin-"));
   const log = path.join(bin, "calls.jsonl");
   const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst argv = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(argv) + "\\n");\nif (process.env.AGENT_LCM_FAKE_MUTATE_TARGET && (JSON.stringify(argv) === JSON.stringify(["plugin", "list"]) || JSON.stringify(argv) === JSON.stringify(["--version"]))) fs.writeFileSync(process.env.AGENT_LCM_FAKE_MUTATE_TARGET, process.env.AGENT_LCM_FAKE_MUTATE_CONTENT);\n`;
-  fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
+  writeFakeSetupCli(bin, name, script);
   t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
   return {
     env: { AGENT_LCM_FAKE_LOG: log, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
@@ -818,12 +818,22 @@ if (!fs.existsSync(process.env.CODEX_HOME)) process.exit(24);
 fs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify({ argv: process.argv.slice(2), env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME, COPILOT_HOME: process.env.COPILOT_HOME, AGENT_LCM_HOME: process.env.AGENT_LCM_HOME } }) + "\\n");
 if (${String(failProbe)} && JSON.stringify(process.argv.slice(2)) === JSON.stringify(["plugin", "list"])) { process.stderr.write("secret-token\\n"); process.exit(23); }
 `;
-  fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
+  writeFakeSetupCli(bin, name, script);
   t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
   return {
     path: `${bin}${path.delimiter}${path.dirname(process.execPath)}`,
     log,
   };
+}
+
+function writeFakeSetupCli(bin: string, name: string, script: string): void {
+  if (process.platform === "win32") {
+    const source = path.join(bin, `${name}.cjs`);
+    fs.writeFileSync(source, script.replace(/^#![^\n]*\n/u, ""));
+    fs.writeFileSync(path.join(bin, `${name}.cmd`), `@"${process.execPath}" "${source}" %*\r\n`);
+    return;
+  }
+  fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
 }
 
 function readSetupCalls(log: string): unknown[] {

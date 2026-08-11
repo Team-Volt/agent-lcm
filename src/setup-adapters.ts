@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import type { SpawnSyncOptionsWithStringEncoding } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -120,7 +122,7 @@ function runNative(
   env: NodeJS.ProcessEnv | undefined,
   command?: string,
 ): HarnessLifecycleOutcome {
-  const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+  const probe = spawnLifecycleCommand(adapter.executable, adapter.probeArgv, env);
   if (isEnoent(probe.error)) {
     return outcome(harness, action, "manual-required", null, adapter.guide);
   }
@@ -147,7 +149,7 @@ function manualOutcome(
   adapter: ManualLifecycleAdapter,
   env: NodeJS.ProcessEnv | undefined,
 ): HarnessLifecycleOutcome {
-  const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+  const probe = spawnLifecycleCommand(adapter.executable, adapter.probeArgv, env);
   if (isEnoent(probe.error)) return outcome(harness, action, "manual-required", null, adapter.guide);
   if (probe.error !== undefined || probe.status !== 0) {
     throw new NativeLifecycleCommandError(adapter.executable, adapter.probeArgv, probe.status, SUPPRESSED_STDERR);
@@ -156,9 +158,48 @@ function manualOutcome(
 }
 
 function runNativeCommand(executable: "codex" | "copilot", argv: readonly string[], env: NodeJS.ProcessEnv | undefined): void {
-  const result = spawnSync(executable, argv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+  const result = spawnLifecycleCommand(executable, argv, env);
   if (result.status === 0) return;
   throw new NativeLifecycleCommandError(executable, argv, result.status, SUPPRESSED_STDERR);
+}
+
+function spawnLifecycleCommand(executable: HarnessCli, argv: readonly string[], env: NodeJS.ProcessEnv | undefined) {
+  const options: SpawnSyncOptionsWithStringEncoding = { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] };
+  const direct = spawnSync(executable, argv, options);
+  if (process.platform !== "win32" || !needsWindowsShim(direct.error)) return direct;
+
+  const shim = resolveWindowsShim(executable, env);
+  if (shim === null) return direct;
+  const command = quoteWindowsCommand([shim, ...argv], executable, argv);
+  const result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command], options);
+  if (isEnoent(result.error)) {
+    throw new NativeLifecycleCommandError(executable, argv, result.status, SUPPRESSED_STDERR);
+  }
+  return result;
+}
+
+function resolveWindowsShim(executable: HarnessCli, env: NodeJS.ProcessEnv | undefined): string | null {
+  const commandEnv = env ?? process.env;
+  const searchPath = Object.entries(commandEnv).find(([key]) => key.toUpperCase() === "PATH")?.[1];
+  if (searchPath === undefined) return null;
+  for (const entry of searchPath.split(path.delimiter)) {
+    const directory = entry.startsWith('"') && entry.endsWith('"') ? entry.slice(1, -1) : entry;
+    if (directory.length === 0) continue;
+    for (const extension of [".cmd", ".bat"] as const) {
+      const candidate = path.join(directory, `${executable}${extension}`);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {}
+    }
+  }
+  return null;
+}
+
+function quoteWindowsCommand(values: readonly string[], executable: HarnessCli, argv: readonly string[]): string {
+  if (values.some((value) => /["&|<>^%!\r\n]/u.test(value))) {
+    throw new NativeLifecycleCommandError(executable, argv, null, SUPPRESSED_STDERR);
+  }
+  return `"${values.map((value) => `"${value}"`).join(" ")}"`;
 }
 
 function outcome(
@@ -173,6 +214,10 @@ function outcome(
 
 function isEnoent(error: Error | undefined): boolean {
   return error !== undefined && "code" in error && error.code === "ENOENT";
+}
+
+function needsWindowsShim(error: Error | undefined): boolean {
+  return error !== undefined && "code" in error && (error.code === "ENOENT" || error.code === "EINVAL");
 }
 
 function assertNever(value: never): never {

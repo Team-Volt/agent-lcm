@@ -41,7 +41,8 @@ framework, fixture library, or custom runner.
   scenarios.
 - Fake `codex`, `copilot`, `cursor-agent`, and `kiro-cli` executables must record
   argv and fail on demand; use them to prove the exact documented command
-  vectors without touching a user's installed clients.
+  vectors without touching a user's installed clients. Write `.cmd` shims on
+  Windows so tests exercise the same npm CLI boundary as users.
 - Distribution tests must prove the npm artifact omits root `plugin.json`, keeps
   both native manifests, and runs bundled Codex hooks without creating a user
   hook file.

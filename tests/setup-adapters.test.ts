@@ -243,7 +243,7 @@ function fakeCli(
   const pluginLog = path.join(bin, "plugins.jsonl");
   const failure = fails ? JSON.stringify(fails) : "";
   const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst path = require("node:path");\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(args) + "\\n");\nif (args[0] === "plugin" && args[1] === "install" && args[2]) { const root = args[2]; fs.appendFileSync(process.env.AGENT_LCM_FAKE_PLUGIN_LOG, JSON.stringify({ plugin: JSON.parse(fs.readFileSync(path.join(root, "plugin.json"), "utf8")), hooks: JSON.parse(fs.readFileSync(path.join(root, "hooks.json"), "utf8")), mcp: JSON.parse(fs.readFileSync(path.join(root, ".mcp.json"), "utf8")), skill: fs.existsSync(path.join(root, "skills/lcm-recall/SKILL.md")) }) + "\\n"); }\nif (${JSON.stringify(failure)} && JSON.stringify(args) === ${JSON.stringify(failure)}) { process.stderr.write("mutation failed\\n"); process.exit(23); }\n`;
-  fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
+  writeFakeCli(bin, name, script);
   t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
   return {
     env: {
@@ -254,6 +254,16 @@ function fakeCli(
     log,
     pluginLog,
   };
+}
+
+function writeFakeCli(bin: string, name: string, script: string): void {
+  if (process.platform === "win32") {
+    const source = path.join(bin, `${name}.cjs`);
+    fs.writeFileSync(source, script.replace(/^#![^\n]*\n/u, ""));
+    fs.writeFileSync(path.join(bin, `${name}.cmd`), `@"${process.execPath}" "${source}" %*\r\n`);
+    return;
+  }
+  fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
 }
 
 type PluginSnapshot = {

@@ -54,6 +54,9 @@ docs/                       architecture and troubleshooting
   near-matching hooks, reject symlinked or non-regular targets, and publish
   changes under an atomic `<target>.lock` directory through a unique fsynced
   temporary file and rename.
+- Keep native CLI argv shell-free. On Windows, resolve npm `.cmd` or `.bat`
+  shims from `PATH`, reject command-shell metacharacters, and invoke only that
+  resolved shim through `cmd.exe`.
 - If a hook file changes during native work, preserve the new bytes and report
   whether the native action completed or setup stopped; never hide it behind a
   generic file error.
