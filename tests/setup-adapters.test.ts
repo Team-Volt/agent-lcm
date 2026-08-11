@@ -181,6 +181,26 @@ test("a native probe permission error is not treated as a missing CLI", { skip: 
   });
 });
 
+test("a Windows shim lookup error cannot fall through to a later PATH entry", { skip: process.platform !== "win32" }, (t) => {
+  const blocked = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-blocked-cli-"));
+  const fake = fakeCli(t, "codex");
+  t.after(() => fs.rmSync(blocked, { recursive: true, force: true }));
+  t.mock.method(fs, "statSync", () => {
+    throw Object.assign(new Error("denied"), { code: "EACCES" });
+  });
+
+  assert.throws(
+    () => runHarnessLifecycle("codex", "setup", { env: { ...fake.env, PATH: `${blocked}${path.delimiter}${fake.env.PATH ?? ""}` } }),
+    (error: unknown) => {
+      assert.ok(error instanceof NativeLifecycleCommandError);
+      assert.equal(error.status, null);
+      assert.equal(error.stderr, "suppressed");
+      return true;
+    },
+  );
+  assert.equal(fs.existsSync(fake.log), false);
+});
+
 test("shared-retained removal does not spawn Copilot uninstall", (t) => {
   // Given: a fake Copilot CLI that would record any spawned process.
   const fake = fakeCli(t, "copilot");
