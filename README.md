@@ -71,22 +71,25 @@ you never need to find or reference a harness cache path.
 
 ## Install in each harness
 
-Agent Plugins 1.0 defines the package, not one shared installer. Use the native
-flow for each harness:
+Agent Plugins 1.0 defines the package, not one shared installer. Run the setup
+command for each harness you use, then follow its guide for native installation,
+trust, and removal:
 
-| Harness | Install |
-| --- | --- |
-| Codex | `codex plugin marketplace add Team-Volt/agent-lcm`, then `codex plugin add agent-lcm@agent-lcm` |
-| GitHub Copilot CLI | `copilot plugin install Team-Volt/agent-lcm` |
-| VS Code | Run `Chat: Install Plugin From Source` and enter `https://github.com/Team-Volt/agent-lcm`; VS Code also discovers the Copilot CLI install |
-| Cursor | Use `/add-plugin` after Agent LCM is listed in the Cursor Marketplace, or ask an admin to add the repository to your Team Marketplace |
-| Kiro IDE | Open Powers, choose the GitHub import option, and enter `https://github.com/Team-Volt/agent-lcm` |
+| Harness | Setup command | Guide |
+| --- | --- | --- |
+| Codex | `agent-lcm setup codex` | [Codex guide](docs/install/codex.md) |
+| Cursor | `agent-lcm setup cursor` | [Cursor guide](docs/install/cursor.md) |
+| VS Code | `agent-lcm setup vscode` | [VS Code guide](docs/install/vscode.md) |
+| GitHub Copilot CLI | `agent-lcm setup copilot` | [Copilot guide](docs/install/copilot.md) |
+| Kiro IDE | `agent-lcm setup kiro` | [Kiro guide](docs/install/kiro.md) |
 
-These flows follow the current [Codex plugin](https://help.openai.com/en/articles/20001256-plugins-in-codex/),
-[Copilot CLI plugin](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing),
+The guides follow the current [Codex plugin](https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/installing-and-updating.md),
+[Copilot CLI plugin](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference),
 [VS Code agent plugin](https://code.visualstudio.com/docs/agent-customization/agent-plugins),
-[Cursor marketplace](https://cursor.com/blog/marketplace), and
-[Kiro Powers](https://kiro.dev/docs/powers/) documentation.
+[Cursor Marketplace](https://cursor.com/marketplace), and
+[Kiro Powers](https://kiro.dev/docs/powers/) documentation. If setup cannot run a
+supported native command, it reports the guide and uses the manual hook path
+when that harness needs one.
 
 Compatible clients discover the same portable components:
 
@@ -105,14 +108,16 @@ layouts. If a client cannot install the plugin, add this stdio MCP server:
 
 The harness must inherit a `PATH` that contains the npm global binary. Native
 plugin installation is more reliable for GUI apps because it uses the bundled
-command. Restart the harness after installation.
+command. Use the relevant guide's trust or refresh note after installation; a
+restart is not a general requirement documented by every harness.
 
 ## Enable automatic capture
 
 `agent-lcm setup all` detects the harnesses installed under your home directory
-and installs or repairs hooks only for those harnesses. It does not create
-configuration directories for clients you do not use. To configure a harness
-that setup cannot detect, run its command directly:
+and completes native setup where supported, with manual hook wiring only where
+that harness needs it. It does not create configuration directories for clients
+you do not use. To configure a harness that setup cannot detect, run its
+command directly:
 
 ```sh
 agent-lcm setup codex
@@ -122,14 +127,15 @@ agent-lcm setup copilot
 agent-lcm setup kiro
 ```
 
-Run only the commands for the harnesses you use. VS Code and GitHub Copilot
-share `~/.copilot/hooks/agent-lcm.json`; either setup command installs the same
-auto-detecting hooks. Setup preserves unrelated hook entries, is safe to run
-again, and writes private files containing the absolute Agent LCM command. If a
-target file already exists and needs changes, setup first saves a timestamped
-`-pre-agent-lcm-` backup beside it.
+Run only the commands for the harnesses you use. The manual VS Code and GitHub
+Copilot fallback shares `~/.copilot/hooks/agent-lcm.json`; native plugin hooks
+are loaded from the plugin store instead of being duplicated there. Setup
+preserves unrelated hook entries, is safe to run again, and writes private
+files containing the absolute Agent LCM command when manual wiring is needed.
+If a target file already exists and needs changes, setup first saves a
+timestamped `-pre-agent-lcm-` backup beside it.
 
-The user hook locations are:
+Setup-managed and legacy user hook locations are:
 
 | Harness | Hook file |
 | --- | --- |
@@ -139,7 +145,10 @@ The user hook locations are:
 | GitHub Copilot | `~/.copilot/hooks/agent-lcm.json` |
 | Kiro | `~/.kiro/hooks/agent-lcm.json` |
 
-Check the result, then restart each harness:
+Cursor, Copilot, and VS Code native plugins carry their own hooks. Setup does
+not add a second user-level copy after native installation.
+
+Check the result:
 
 ```sh
 agent-lcm setup status
