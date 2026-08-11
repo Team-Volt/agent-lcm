@@ -46,9 +46,9 @@ home, configure it explicitly and pass that directory:
 agent-lcm setup codex --home /path/to/codex-home
 ```
 
-Codex loads setup-managed hooks from `~/.codex/hooks.json`; Kiro uses
-`~/.kiro/hooks/agent-lcm.json`. Cursor, VS Code, and GitHub Copilot native
-plugins carry their own hooks. Cursor setup preserves an older
+Codex loads hooks from its native plugin; `~/.codex/hooks.json` is only an older
+fallback. Kiro uses `~/.kiro/hooks/agent-lcm.json`. Cursor, VS Code, and GitHub
+Copilot native plugins carry their own hooks. Cursor setup preserves an older
 `~/.cursor/hooks.json` fallback until native installation is complete. A
 successful Copilot or VS Code native setup removes only exact older Agent LCM
 entries from the shared fallback so capture does not run twice. Setup refuses
@@ -93,7 +93,9 @@ suppressed-stderr marker so a client cannot leak secrets into logs. Use
 `--json` for stable automation fields.
 
 Codex setup probes `codex plugin list`, then runs the marketplace-add and
-plugin-add commands. Removal runs `codex plugin remove agent-lcm@agent-lcm`.
+plugin-add commands against the installed npm package. That package omits the
+portable root manifest so Codex selects its native hook manifest. Removal runs
+`codex plugin remove agent-lcm@agent-lcm`.
 Copilot and VS Code probe and install through `copilot plugin`; they share the
 same native plugin store, so either `agent-lcm remove copilot` or `agent-lcm
 remove vscode` is intentionally conservative and does not uninstall the shared

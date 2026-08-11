@@ -17,7 +17,9 @@ step, so setup reports `manual-required` for that step.
 Open [Kiro Powers](https://kiro.dev/docs/powers/) in Kiro or on kiro.dev. Use
 the Powers UI to browse the marketplace or install from a GitHub repository,
 enter `https://github.com/Team-Volt/agent-lcm`, and click Install. The same
-Powers UI shows the installed Power state.
+Powers UI shows the installed Power state. For Kiro, the repository root is
+intentional: its `plugin.json`, `skills/`, and `mcp.json` form the Power. Hooks
+remain in Kiro's separate hook file because Agent Plugins does not define them.
 
 The official Powers guide does not define a command-line install or a required
 restart. If the Power or hooks look stale, close and reopen Kiro as

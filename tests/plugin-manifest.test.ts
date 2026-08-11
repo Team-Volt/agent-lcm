@@ -20,7 +20,7 @@ test("root is an Agent Plugins 1.0 package", () => {
 
 test("client hook manifests invoke explicit or detected harness capture", () => {
   const codex = readJson(".codex-plugin/plugin.json");
-  assert.equal(codex.hooks, undefined);
+  assert.equal(codex.hooks, "./hooks/codex.json");
   assert.equal(codex.mcpServers, "./.mcp.json");
   assert.equal(codex.homepage, "https://github.com/Team-Volt/agent-lcm");
   assert.deepEqual(codex.interface, {

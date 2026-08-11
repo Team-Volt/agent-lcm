@@ -2,10 +2,11 @@
 
 ## Package surfaces
 
-The repository root is an Agent Plugins 1.0 package:
+The repository contains one shared implementation with client-specific package
+surfaces:
 
 ```text
-plugin.json                   portable package manifest
+plugin.json                   Kiro and portable skills/MCP manifest
 mcp.json                      portable MCP server configuration
 skills/lcm-recall/            portable recall skill
 hooks.json                    shared lower-camel hook shape for client adapters
@@ -16,9 +17,11 @@ bin/agent-lcm                 source and npm CLI entry point
 dist/                         generated npm runtime
 ```
 
-Agent Plugins 1.0 standardizes skills and MCP servers. Hooks remain
-client-specific, so `agent-lcm setup <harness>` installs the matching capture
-configuration when a client does not load a bundled hook manifest.
+Agent Plugins 1.0 standardizes skills and MCP servers, not hooks. The npm
+artifact therefore omits the root `plugin.json`: Codex and Cursor then select
+their native manifests and load bundled hooks. The GitHub repository keeps the
+root manifest for Kiro Powers. Copilot and VS Code receive a generated native
+package with absolute local commands.
 
 The npm package and each native plugin copy can start the same per-user daemon.
 Daemon protocol compatibility, not package release version, decides whether a
@@ -30,14 +33,18 @@ incompatible protocol.
 
 `agent-lcm setup <harness>` probes and, where supported, runs the client's native
 plugin commands before updating legacy capture hooks. Codex uses `codex plugin
-list`, adds the installed package directory as a local marketplace, then runs
-`codex plugin add agent-lcm@agent-lcm`. Copilot CLI and VS Code use the shared
+list`, adds the installed npm package as a local marketplace, then runs `codex
+plugin add agent-lcm@agent-lcm`. Its native manifest includes hooks; successful
+setup removes only exact older Agent LCM entries from `~/.codex/hooks.json`.
+Copilot CLI and VS Code use the shared
 Copilot store. Setup generates a private Copilot-format package whose hooks and
 MCP config contain the absolute installed Agent LCM command, then installs it
 after `copilot plugin list` succeeds.
 Cursor and Kiro run version-only probes for `cursor-agent` and `kiro-cli`.
 Their Marketplace or Powers steps remain manual, so their native result is
-`manual-required`.
+`manual-required`. Cursor loads `.cursor-plugin/plugin.json` from the npm
+package; Kiro loads the repository-root Agent Plugin and uses a separate Kiro
+hook file because hooks are not portable.
 
 `agent-lcm remove <harness>` removes only exact Agent LCM-owned legacy hooks.
 Codex runs `codex plugin remove agent-lcm@agent-lcm`. Copilot and VS Code share a

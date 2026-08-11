@@ -42,6 +42,9 @@ framework, fixture library, or custom runner.
 - Fake `codex`, `copilot`, `cursor-agent`, and `kiro-cli` executables must record
   argv and fail on demand; use them to prove the exact documented command
   vectors without touching a user's installed clients.
+- Distribution tests must prove the npm artifact omits root `plugin.json`, keeps
+  both native manifests, and runs bundled Codex hooks without creating a user
+  hook file.
 - Copilot setup tests must inspect the generated package during the fake
   install, assert its stable `agent-lcm` source basename and absolute hook/MCP
   command, and then confirm the temporary source was removed.

@@ -44,8 +44,13 @@ export function setupStatus(options = {}) {
     }));
 }
 function updateHooks(harness, nativeStatus, target, command, targetExists) {
-    if (harness === "codex" || harness === "kiro") {
+    if (harness === "kiro") {
         return mutateSetupConfiguration(target, (existing) => mergeSetupHooks(existing, harness, command, target));
+    }
+    if (harness === "codex" && nativeStatus === "native-complete" && targetExists) {
+        return mutateSetupConfiguration(target, (existing) => existing === undefined
+            ? undefined
+            : removeSetupHooks(existing, harness, target));
     }
     if ((harness === "copilot" || harness === "vscode") && nativeStatus === "native-complete" && targetExists) {
         return mutateSetupConfiguration(target, (existing) => removeSharedSetupHooks(existing ?? {}, harness, target));

@@ -17,5 +17,6 @@
     "capabilities": [],
     "defaultPrompt": "Recall relevant work from earlier coding sessions."
   },
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/codex.json"
 }

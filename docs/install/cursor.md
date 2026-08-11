@@ -9,32 +9,38 @@ agent-lcm setup cursor
 ```
 
 Cursor plugins package their hooks. Setup probes `cursor-agent --version`, then
-validates and preserves any legacy
-capture file at `~/.cursor/hooks.json`, but it does not add another copy of the
-same hooks. Cursor has no stable native install or remove CLI in the supported
-documentation, so setup reports `manual-required` for the native step.
+validates and preserves any legacy capture file at `~/.cursor/hooks.json`, but
+it does not add another copy. Cursor has no documented noninteractive plugin
+install or remove command, so setup reports `manual-required` for the native
+step.
 
 ## Native install and inspection
 
 Open Cursor's Customize page and install Agent LCM if it is available in a
-marketplace you trust. Until it is listed, Cursor documents this local plugin
-path for development installs:
+marketplace you trust. Until it is listed, Cursor documents loading a plugin
+from `~/.cursor/plugins/local`. First run `npm root --global` and confirm the
+Agent LCM package exists below the printed directory. Then, only if the target
+does not already exist, link it on macOS or Linux:
 
 ```sh
 mkdir -p ~/.cursor/plugins/local
-git clone https://github.com/Team-Volt/agent-lcm.git ~/.cursor/plugins/local/agent-lcm
+ln -s <global-node-modules>/@team-volt/agent-lcm ~/.cursor/plugins/local/agent-lcm
 ```
 
-On Windows, use `%USERPROFILE%\.cursor\plugins\local\agent-lcm` as the target.
-If the target already exists, inspect it instead of replacing it. Run
-`Developer: Reload Window`, then verify Agent LCM under Customize. Cursor's
-[plugin guide](https://cursor.com/docs/plugins) documents the local path and
-reload step.
+Do not type the angle-bracket placeholder as written. On Windows, copy the
+installed npm package into
+`%USERPROFILE%\.cursor\plugins\local\agent-lcm` only after confirming the
+target does not exist. Do not clone the repository root for this step: its
+portable manifest contains skills and MCP only, so Cursor would not load the
+native hook manifest. Run `Developer: Reload Window`, then verify Agent LCM
+under Customize. Cursor's [plugin guide](https://cursor.com/docs/plugins)
+documents the local path, both supported manifest formats, and the reload step.
 
 If Cursor shows a trust prompt, review the plugin source before accepting it.
 The Marketplace documentation does not establish a required restart. If the
 plugin or hooks look stale, close and reopen Cursor as troubleshooting, then
-check `agent-lcm setup status`.
+check the plugin in Customize. `agent-lcm setup status` reports only legacy
+hook-file state.
 
 If an older Agent LCM version already configured `~/.cursor/hooks.json`, run
 `agent-lcm remove cursor` immediately before installing the native plugin. That

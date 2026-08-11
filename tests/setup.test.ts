@@ -141,7 +141,7 @@ test("setup validates an existing hook schema before starting the native CLI", (
   assert.equal(fs.existsSync(fake.log), false);
 });
 
-test("Codex setup runs native setup and still installs user hooks", (t) => {
+test("Codex setup uses native plugin hooks without creating user hooks", (t) => {
   // Given: a capable native Codex CLI and an empty Codex home.
   const fake = fakeSetupCli(t, "codex");
   const clientHome = tempHome("agent-lcm-codex-native-");
@@ -153,13 +153,13 @@ test("Codex setup runs native setup and still installs user hooks", (t) => {
     env: fake.env,
   });
 
-  // Then: the stable report records both native and user-hook completion.
+  // Then: the native plugin owns hooks and no duplicate user hook file is created.
   assert.deepEqual(report, {
     harness: "codex",
     action: "setup",
     status: "complete",
     nativeCli: "codex",
-    hooks: { path: path.join(clientHome, "hooks.json"), changed: true },
+    hooks: { path: path.join(clientHome, "hooks.json"), changed: false },
     guide: `${GUIDE_ROOT}/codex.md`,
   });
   assert.deepEqual(readSetupCalls(fake.log), [
@@ -167,7 +167,7 @@ test("Codex setup runs native setup and still installs user hooks", (t) => {
     ["plugin", "marketplace", "add", PACKAGE_ROOT],
     ["plugin", "add", "agent-lcm@agent-lcm"],
   ]);
-  assert.equal(fs.existsSync(path.join(clientHome, "hooks.json")), true);
+  assert.equal(fs.existsSync(path.join(clientHome, "hooks.json")), false);
 });
 
 test("successful Copilot setup removes only legacy shared Agent LCM hooks", (t) => {
@@ -395,7 +395,7 @@ test("native shared setup removes older Agent LCM registrations without touching
   }]);
 });
 
-test("Codex setup replaces its old Agent LCM commands and preserves unrelated hooks", (t) => {
+test("Codex setup removes old Agent LCM commands and preserves unrelated hooks", (t) => {
   const clientHome = tempHome("agent-lcm-codex-legacy-");
   const fake = fakeSetupCli(t, "codex");
   const setupPath = path.join(clientHome, "hooks.json");
@@ -433,11 +433,6 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
   assert.equal(second.hooks.changed, false);
   assert.equal(configuration.owner, "user");
   assert.deepEqual(configuration.hooks.SessionStart, [{ matcher: "*", hooks: [
-    {
-      type: "command",
-      command: "node \"/new/bin/agent-lcm\" capture --harness codex SessionStart",
-      timeout: 15,
-    },
     { type: "command", command: "other-hook", timeout: 30 },
   ] }]);
   assert.deepEqual(configuration.hooks.CustomEvent, [{ hooks: [{
@@ -446,7 +441,6 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
     owner: "user",
   }] }]);
   assert.deepEqual(configuration.hooks.PostCompact, [{ matcher: "*", hooks: [
-    { type: "command", command: 'node "/new/bin/agent-lcm" hook PostCompact', timeout: 15 },
     { type: "command", command: "other-post-compact-hook", timeout: 30 },
   ] }]);
   assert.deepEqual(configuration.hooks.PreToolUse, [{ matcher: "Read", hooks: [
@@ -456,16 +450,10 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
       timeout: 30,
       metadata: { owner: "user" },
     },
-  ] }, { matcher: ".*", hooks: [
-    { type: "command", command: 'node "/new/bin/agent-lcm" hook PreToolUse' },
   ] }]);
-  assert.deepEqual(configuration.hooks.PreCompact, [{ hooks: [
-    { type: "command", command: 'node "/new/bin/agent-lcm" hook PreCompact' },
-  ] }]);
-  assert.deepEqual(configuration.hooks.SubagentStop, [{ hooks: [
-    { type: "command", command: 'node "/new/bin/agent-lcm" hook SubagentStop' },
-  ] }]);
-  assert.equal(setupStatus({ home: clientHome }).codex.hooksConfigured, true);
+  assert.equal(configuration.hooks.PreCompact, undefined);
+  assert.equal(configuration.hooks.SubagentStop, undefined);
+  assert.equal(setupStatus({ home: clientHome }).codex.hooksConfigured, false);
   const backups = fs.readdirSync(clientHome).filter((name) => name.startsWith("hooks-pre-agent-lcm-"));
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(clientHome, backups[0] ?? ""), "utf8"), original);
@@ -500,7 +488,7 @@ test("setup all configures only harnesses already installed for the user", () =>
     action: "setup",
     status: "manual-required",
     nativeCli: null,
-    hooks: { path: path.join(userHome, ".codex", "hooks.json"), changed: true },
+    hooks: { path: path.join(userHome, ".codex", "hooks.json"), changed: false },
     guide: `${GUIDE_ROOT}/codex.md`,
   }]);
   assert.equal(fs.existsSync(path.join(userHome, ".cursor")), false);
@@ -544,7 +532,7 @@ test("CLI setup and remove use native Codex with an isolated explicit home", (t)
     action: "remove",
     status: "complete",
     nativeCli: "codex",
-    hooks: { path: path.join(home, "hooks.json"), changed: true },
+    hooks: { path: path.join(home, "hooks.json"), changed: false },
     guide: `${GUIDE_ROOT}/codex.md`,
   });
 
@@ -598,7 +586,7 @@ test("setup never overwrites an existing timestamped backup", (t) => {
   const clientHome = tempHome("agent-lcm-backup-collision-");
   const fake = fakeSetupCli(t, "codex");
   const setupPath = path.join(clientHome, "hooks.json");
-  const original = '{"hooks":{}}\n';
+  const original = '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node \\\"/old/bin/agent-lcm\\\" capture --harness codex SessionStart"}]}]}}\n';
   const timestamp = "2026-08-07T12-34-56-789Z";
   const firstBackup = path.join(clientHome, `hooks-pre-agent-lcm-${timestamp}.json`);
   const nextBackup = path.join(clientHome, `hooks-pre-agent-lcm-${timestamp}-1.json`);

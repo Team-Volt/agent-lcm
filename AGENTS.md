@@ -41,9 +41,13 @@ docs/                       architecture and troubleshooting
   `shared-retained` use exit `2`; command errors use exit `1`.
 - Copilot and VS Code share the native plugin store. Single-harness removal
   must retain that plugin and leave any legacy fallback hook file unchanged.
-- The root manifest declares Agent Plugins 1.0, whose portable components do
-  not include hooks. Copilot/VS Code setup must install the generated native
-  package whose hook and MCP commands use the absolute Agent LCM executable.
+- The repository root manifest declares Agent Plugins 1.0 for Kiro and portable
+  skills/MCP clients. The npm artifact must omit it so Codex and Cursor select
+  their native hook manifests. Copilot/VS Code setup installs the generated
+  native package whose hook and MCP commands use the absolute Agent LCM
+  executable.
+- Successful native Codex setup must not create `~/.codex/hooks.json`; it may
+  remove only exact Agent LCM fallback entries from an existing file.
 - Setup-file mutation runs through the directory-anchored helper. Do not
   replace it with path checks followed by later path-based writes.
 - Validate existing setup JSON before native work. Preserve unrelated and

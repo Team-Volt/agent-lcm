@@ -29,10 +29,10 @@ agent-lcm setup vscode
 copilot plugin list
 ```
 
-Do not use a package-root install from the VS Code command palette as a
-substitute for setup. VS Code detects that manifest as Agent Plugins 1.0, whose
-portable components do not include hooks. Setup creates the Copilot-format
-package that includes capture hooks and absolute local commands. You can
+Do not use the repository root from the VS Code command palette as a substitute
+for setup. VS Code detects its Agent Plugins manifest, whose portable
+components do not include hooks. Setup creates the Copilot-format package that
+includes capture hooks and absolute local commands. You can
 inspect, enable, disable, or uninstall it in VS Code's Agent Plugins view. See
 the [VS Code agent plugin guide](https://code.visualstudio.com/docs/agent-customization/agent-plugins).
 
