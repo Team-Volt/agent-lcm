@@ -7,6 +7,131 @@ import { writeSetupConfiguration } from "../src/setup-files.ts";
 import { setupHarness, setupStatus } from "../src/setup.ts";
 import { assertCliOk, runCli, tempHome } from "./helpers.ts";
 
+const GUIDE_ROOT = "https://github.com/Team-Volt/agent-lcm/blob/main/docs/install";
+
+test("setup validates an existing hook schema before starting the native CLI", (t) => {
+  // Given: malformed Codex hooks and a fake CLI that records every process start.
+  const fake = fakeSetupCli(t, "codex");
+  const clientHome = tempHome("agent-lcm-setup-order-");
+  fs.writeFileSync(path.join(clientHome, "hooks.json"), '{"hooks":{"CustomEvent":"invalid"}}\n');
+
+  // When: Codex setup is requested.
+  const run = () => setupHarness("codex", {
+    home: clientHome,
+    command: "/opt/agent-lcm/bin/agent-lcm",
+    env: fake.env,
+  });
+
+  // Then: validation fails and no native process starts.
+  assert.throws(run, /invalid setup configuration/u);
+  assert.equal(fs.existsSync(fake.log), false);
+});
+
+test("Codex setup runs native setup and still installs user hooks", (t) => {
+  // Given: a capable native Codex CLI and an empty Codex home.
+  const fake = fakeSetupCli(t, "codex");
+  const clientHome = tempHome("agent-lcm-codex-native-");
+
+  // When: Codex setup completes.
+  const report = setupHarness("codex", {
+    home: clientHome,
+    command: "/opt/agent-lcm/bin/agent-lcm",
+    env: fake.env,
+  });
+
+  // Then: the stable report records both native and user-hook completion.
+  assert.deepEqual(report, {
+    harness: "codex",
+    action: "setup",
+    status: "complete",
+    nativeCli: "codex",
+    hooks: { path: path.join(clientHome, "hooks.json"), changed: true },
+    guide: `${GUIDE_ROOT}/codex.md`,
+  });
+  assert.deepEqual(readSetupCalls(fake.log), [
+    ["plugin", "list"],
+    ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+    ["plugin", "add", "agent-lcm@agent-lcm"],
+  ]);
+  assert.equal(fs.existsSync(path.join(clientHome, "hooks.json")), true);
+});
+
+test("successful Copilot setup removes only legacy shared Agent LCM hooks", (t) => {
+  // Given: a capable Copilot CLI and a shared hook file with owned and unrelated hooks.
+  const fake = fakeSetupCli(t, "copilot");
+  const clientHome = tempHome("agent-lcm-copilot-native-");
+  const hooksPath = path.join(clientHome, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+  fs.writeFileSync(hooksPath, JSON.stringify({ version: 1, hooks: {
+    sessionStart: [
+      { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness auto sessionStart' },
+      { type: "command", command: "keep-me" },
+    ],
+    userPromptSubmitted: [
+      { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness auto userPromptSubmitted' },
+    ],
+    PostToolUse: [
+      { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness vscode PostToolUse' },
+    ],
+    custom: [{ type: "command", command: "also-keep-me" }],
+  } }));
+
+  // When: native Copilot setup succeeds.
+  const report = setupHarness("copilot", {
+    home: clientHome,
+    command: "/opt/agent-lcm/bin/agent-lcm",
+    env: fake.env,
+  });
+
+  // Then: the legacy registration is removed without touching sibling hooks.
+  assert.deepEqual(report, {
+    harness: "copilot",
+    action: "setup",
+    status: "complete",
+    nativeCli: "copilot",
+    hooks: { path: hooksPath, changed: true },
+    guide: `${GUIDE_ROOT}/copilot.md`,
+  });
+  assert.deepEqual(JSON.parse(fs.readFileSync(hooksPath, "utf8")), { version: 1, hooks: {
+    sessionStart: [{ type: "command", command: "keep-me" }],
+    userPromptSubmitted: [],
+    PostToolUse: [],
+    custom: [{ type: "command", command: "also-keep-me" }],
+  } });
+});
+
+test("manual setup preserves legacy shared hooks and creates no target", (t) => {
+  // Given: an empty PATH, one existing shared target, and one absent Cursor target.
+  const emptyBin = fs.mkdtempSync(path.join(tempHome("agent-lcm-empty-cli-"), "bin"));
+  t.after(() => fs.rmSync(path.dirname(emptyBin), { recursive: true, force: true }));
+  const clientHome = tempHome("agent-lcm-manual-shared-");
+  const hooksPath = path.join(clientHome, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+  const original = '{"version":1,"hooks":{"sessionStart":[{"command":"node \\"/old/bin/agent-lcm\\" capture --harness auto sessionStart"}]}}\n';
+  fs.writeFileSync(hooksPath, original);
+
+  // When: shared and Cursor setup both require manual work.
+  const shared = setupHarness("vscode", {
+    home: clientHome,
+    command: "/opt/agent-lcm/bin/agent-lcm",
+    env: { PATH: emptyBin },
+  });
+  const cursorHome = tempHome("agent-lcm-manual-cursor-");
+  const cursor = setupHarness("cursor", {
+    home: cursorHome,
+    command: "/opt/agent-lcm/bin/agent-lcm",
+    env: { PATH: emptyBin },
+  });
+
+  // Then: both report manual work, preserving or omitting files as found.
+  assert.equal(shared.status, "manual-required");
+  assert.deepEqual(shared.hooks, { path: hooksPath, changed: false });
+  assert.equal(fs.readFileSync(hooksPath, "utf8"), original);
+  assert.equal(cursor.status, "manual-required");
+  assert.deepEqual(cursor.hooks, { path: path.join(cursorHome, "hooks.json"), changed: false });
+  assert.equal(fs.existsSync(path.join(cursorHome, "hooks.json")), false);
+});
+
 test("Kiro setup uses the native array schema, is repeatable, and leaves sibling hooks unchanged", () => {
   const kiroHome = tempHome("agent-lcm-kiro-");
   const unrelatedKiroHook = path.join(kiroHome, "hooks", "other.json");
@@ -17,11 +142,11 @@ test("Kiro setup uses the native array schema, is repeatable, and leaves sibling
   const first = setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" });
   const second = setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" });
 
-  assert.equal(first.changed, true);
-  assert.equal(second.changed, false);
-  assert.equal(first.path, path.join(kiroHome, "hooks", "agent-lcm.json"));
+  assert.equal(first.hooks.changed, true);
+  assert.equal(second.hooks.changed, false);
+  assert.equal(first.hooks.path, path.join(kiroHome, "hooks", "agent-lcm.json"));
   assert.deepEqual(fs.readFileSync(unrelatedKiroHook), original);
-  const configuration = JSON.parse(fs.readFileSync(first.path, "utf8"));
+  const configuration = JSON.parse(fs.readFileSync(first.hooks.path, "utf8"));
   assert.equal(configuration.version, "v1");
   assert.equal(Array.isArray(configuration.hooks), true);
   assert.equal(configuration.hooks.length, 4);
@@ -44,7 +169,7 @@ test("setup leaves invalid owned configuration untouched", () => {
     new RegExp(setupPath.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"), "u"),
   );
   assert.deepEqual(fs.readFileSync(setupPath), original);
-  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)).sort(), ["agent-lcm.json", "agent-lcm.json.lock.sqlite"]);
+  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)).sort(), ["agent-lcm.json"]);
 });
 
 test("setup rejects malformed Kiro schema without changing the owned file", () => {
@@ -56,7 +181,7 @@ test("setup rejects malformed Kiro schema without changing the owned file", () =
 
   assert.throws(() => setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" }), /invalid setup configuration/u);
   assert.deepEqual(fs.readFileSync(setupPath), original);
-  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)).sort(), ["agent-lcm.json", "agent-lcm.json.lock.sqlite"]);
+  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)).sort(), ["agent-lcm.json"]);
 });
 
 test("setup rejects malformed Codex custom events without changing or backing up the file", () => {
@@ -70,34 +195,26 @@ test("setup rejects malformed Codex custom events without changing or backing up
     /invalid setup configuration/u,
   );
   assert.deepEqual(fs.readFileSync(setupPath), original);
-  assert.deepEqual(fs.readdirSync(clientHome).sort(), ["hooks.json", "hooks.json.lock.sqlite"]);
+  assert.deepEqual(fs.readdirSync(clientHome).sort(), ["hooks.json"]);
 });
 
-test("Copilot and VS Code converge on one lower-camel shared user hook configuration", () => {
+test("manual Copilot and VS Code setup creates no shared user hook configuration", () => {
   const clientHome = tempHome("agent-lcm-copilot-");
-  const copilot = setupHarness("copilot", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
-  const vscode = setupHarness("vscode", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+  const env = { PATH: path.join(clientHome, "empty-bin") };
+  const copilot = setupHarness("copilot", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm", env });
+  const vscode = setupHarness("vscode", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm", env });
 
-  assert.equal(copilot.path, path.join(clientHome, "hooks", "agent-lcm.json"));
-  assert.equal(vscode.path, copilot.path);
-  assert.equal(vscode.changed, false);
-  const configuration = JSON.parse(fs.readFileSync(copilot.path, "utf8"));
-  assert.equal(configuration.version, 1);
-  assert.equal(configuration.hooks.userPromptSubmitted[0].type, "command");
-  assert.equal(
-    configuration.hooks.userPromptSubmitted[0].command,
-    'node "/opt/agent-lcm/bin/agent-lcm" capture --harness auto userPromptSubmitted',
-  );
-  assert.deepEqual(Object.keys(configuration.hooks).sort(), ["postToolUse", "sessionEnd", "sessionStart", "userPromptSubmitted"]);
-  assert.equal(setupStatus({ home: clientHome }).copilot.configured, true);
-  assert.equal(setupStatus({ home: clientHome }).vscode.configured, true);
-
-  fs.writeFileSync(copilot.path, '{"version":1,"hooks":{"userPromptSubmitted":[{"command":"agent-lcm"}]}}\n');
-  assert.equal(setupStatus({ home: clientHome }).copilot.configured, false);
+  assert.equal(copilot.status, "manual-required");
+  assert.equal(vscode.status, "manual-required");
+  assert.equal(copilot.hooks.path, path.join(clientHome, "hooks", "agent-lcm.json"));
+  assert.equal(vscode.hooks.path, copilot.hooks.path);
+  assert.equal(vscode.hooks.changed, false);
+  assert.equal(fs.existsSync(copilot.hooks.path), false);
 });
 
-test("shared setup replaces older Agent LCM registrations after a binary move without touching sibling hooks", () => {
+test("native shared setup removes older Agent LCM registrations without touching sibling hooks", (t) => {
   const clientHome = tempHome("agent-lcm-copilot-legacy-");
+  const fake = fakeSetupCli(t, "copilot");
   const setupPath = path.join(clientHome, "hooks", "agent-lcm.json");
   fs.mkdirSync(path.dirname(setupPath), { recursive: true });
   fs.writeFileSync(setupPath, JSON.stringify({
@@ -134,12 +251,12 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
     },
   }));
 
-  const first = setupHarness("vscode", { home: clientHome, command: "/new-location/bin/agent-lcm" });
-  const second = setupHarness("copilot", { home: clientHome, command: "/new-location/bin/agent-lcm" });
+  const first = setupHarness("vscode", { home: clientHome, command: "/new-location/bin/agent-lcm", env: fake.env });
+  const second = setupHarness("copilot", { home: clientHome, command: "/new-location/bin/agent-lcm", env: fake.env });
   const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
 
-  assert.equal(first.changed, true);
-  assert.equal(second.changed, false);
+  assert.equal(first.hooks.changed, true);
+  assert.equal(second.hooks.changed, false);
   assert.equal(configuration.owner, "user");
   assert.deepEqual(configuration.hooks.UserPromptSubmit, [
     { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
@@ -150,19 +267,8 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
     timeout: 30,
     metadata: { owner: "user" },
   });
-  assert.equal(configuration.hooks.sessionStart[1].command, "node \"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
-  assert.deepEqual(configuration.hooks.userPromptSubmitted[0], {
-    type: "command",
-    command: 'node "/new-location/bin/agent-lcm" capture --harness auto userPromptSubmitted',
-    timeout: 45,
-    metadata: { keep: true },
-  });
-  assert.deepEqual(configuration.hooks.userPromptSubmitted[1], {
-    type: "command",
-    command: 'node "/new-location/bin/agent-lcm" capture --harness auto userPromptSubmitted',
-    timeout: 60,
-    metadata: { keep: "duplicate" },
-  });
+  assert.equal(configuration.hooks.sessionStart.length, 1);
+  assert.equal(configuration.hooks.userPromptSubmitted, undefined);
   assert.deepEqual(configuration.hooks.customEvent, [{ type: "command", command: "custom-hook", custom: true }]);
   assert.deepEqual(configuration.hooks.customCaptureEvent, [{
     type: "command",
@@ -171,8 +277,9 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
   }]);
 });
 
-test("Codex setup replaces its old Agent LCM commands and preserves unrelated hooks", () => {
+test("Codex setup replaces its old Agent LCM commands and preserves unrelated hooks", (t) => {
   const clientHome = tempHome("agent-lcm-codex-legacy-");
+  const fake = fakeSetupCli(t, "codex");
   const setupPath = path.join(clientHome, "hooks.json");
   fs.mkdirSync(path.dirname(setupPath), { recursive: true });
   const original = JSON.stringify({ owner: "user", hooks: {
@@ -200,12 +307,12 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
   } });
   fs.writeFileSync(setupPath, original);
 
-  const first = setupHarness("codex", { home: clientHome, command: "/new/bin/agent-lcm" });
-  const second = setupHarness("codex", { home: clientHome, command: "/new/bin/agent-lcm" });
+  const first = setupHarness("codex", { home: clientHome, command: "/new/bin/agent-lcm", env: fake.env });
+  const second = setupHarness("codex", { home: clientHome, command: "/new/bin/agent-lcm", env: fake.env });
   const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
 
-  assert.equal(first.changed, true);
-  assert.equal(second.changed, false);
+  assert.equal(first.hooks.changed, true);
+  assert.equal(second.hooks.changed, false);
   assert.equal(configuration.owner, "user");
   assert.deepEqual(configuration.hooks.SessionStart, [{ matcher: "*", hooks: [
     {
@@ -246,7 +353,7 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
   assert.equal(fs.readFileSync(path.join(clientHome, backups[0] ?? ""), "utf8"), original);
 });
 
-test("Cursor setup writes the user hooks file in Cursor's native schema", () => {
+test("Cursor setup validates and preserves its legacy user hooks", () => {
   const clientHome = tempHome("agent-lcm-cursor-");
   const hooksPath = path.join(clientHome, "hooks.json");
   fs.writeFileSync(hooksPath, JSON.stringify({ version: 1, owner: "user", hooks: {
@@ -256,38 +363,27 @@ test("Cursor setup writes the user hooks file in Cursor's native schema", () => 
       metadata: { owner: "user" },
     }],
   } }));
+  const original = fs.readFileSync(hooksPath);
   const report = setupHarness("cursor", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
 
-  assert.equal(report.path, path.join(clientHome, "hooks.json"));
-  assert.deepEqual(JSON.parse(fs.readFileSync(report.path, "utf8")), {
-    version: 1,
-    owner: "user",
-    hooks: {
-      sessionStart: [{ command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor SessionStart' }],
-      beforeSubmitPrompt: [{ command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor UserPromptSubmit' }],
-      postToolUse: [{ command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor PostToolUse' }],
-      stop: [
-        {
-          command: 'node "/opt/not-agent-lcm" capture --harness cursor Stop',
-          timeout: 30,
-          metadata: { owner: "user" },
-        },
-        { command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor Stop' },
-      ],
-    },
-  });
+  assert.equal(report.hooks.path, path.join(clientHome, "hooks.json"));
+  assert.equal(report.hooks.changed, false);
+  assert.deepEqual(fs.readFileSync(report.hooks.path), original);
 });
 
 test("setup all configures only harnesses already installed for the user", () => {
   const userHome = tempHome("agent-lcm-detected-");
   fs.mkdirSync(path.join(userHome, ".codex"));
 
-  const result = runCli(["setup", "all", "--json"], { env: { HOME: userHome, USERPROFILE: userHome } });
+  const result = runCli(["setup", "all", "--json"], { env: { HOME: userHome, USERPROFILE: userHome, PATH: "" } });
   assertCliOk(result);
   assert.deepEqual(JSON.parse(result.stdout), [{
     harness: "codex",
-    path: path.join(userHome, ".codex", "hooks.json"),
-    changed: true,
+    action: "setup",
+    status: "manual-required",
+    nativeCli: "codex",
+    hooks: { path: path.join(userHome, ".codex", "hooks.json"), changed: true },
+    guide: `${GUIDE_ROOT}/codex.md`,
   }]);
   assert.equal(fs.existsSync(path.join(userHome, ".cursor")), false);
   assert.equal(fs.existsSync(path.join(userHome, ".copilot")), false);
@@ -296,21 +392,25 @@ test("setup all configures only harnesses already installed for the user", () =>
 
 test("setup prints a clear result for people and keeps JSON output for scripts", () => {
   const userHome = tempHome("agent-lcm-output-");
-  const text = runCli(["setup", "codex", "--home", userHome]);
+  const text = runCli(["setup", "codex", "--home", userHome], { env: { PATH: "" } });
   assertCliOk(text);
   assert.equal(text.stdout, `codex hooks have been configured: ${path.join(userHome, "hooks.json")}\n`);
 
-  const json = runCli(["setup", "codex", "--home", userHome, "--json"]);
+  const json = runCli(["setup", "codex", "--home", userHome, "--json"], { env: { PATH: "" } });
   assertCliOk(json);
   assert.deepEqual(JSON.parse(json.stdout), {
     harness: "codex",
-    path: path.join(userHome, "hooks.json"),
-    changed: false,
+    action: "setup",
+    status: "manual-required",
+    nativeCli: "codex",
+    hooks: { path: path.join(userHome, "hooks.json"), changed: false },
+    guide: `${GUIDE_ROOT}/codex.md`,
   });
 });
 
-test("setup never overwrites an existing timestamped backup", () => {
+test("setup never overwrites an existing timestamped backup", (t) => {
   const clientHome = tempHome("agent-lcm-backup-collision-");
+  const fake = fakeSetupCli(t, "codex");
   const setupPath = path.join(clientHome, "hooks.json");
   const original = '{"hooks":{}}\n';
   const timestamp = "2026-08-07T12-34-56-789Z";
@@ -321,7 +421,7 @@ test("setup never overwrites an existing timestamped backup", () => {
   const originalToISOString = Date.prototype.toISOString;
   Date.prototype.toISOString = () => "2026-08-07T12:34:56.789Z";
   try {
-    setupHarness("codex", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+    setupHarness("codex", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm", env: fake.env });
   } finally {
     Date.prototype.toISOString = originalToISOString;
   }
@@ -433,3 +533,22 @@ test("setup requires an absolute installed binary path", () => {
   );
   assert.equal(fs.existsSync(path.join(clientHome, "hooks", "agent-lcm.json")), false);
 });
+
+function fakeSetupCli(
+  t: test.TestContext,
+  name: "codex" | "copilot",
+): { readonly env: NodeJS.ProcessEnv; readonly log: string } {
+  const bin = fs.mkdtempSync(path.join(tempHome("agent-lcm-setup-cli-parent-"), "bin-"));
+  const log = path.join(bin, "calls.jsonl");
+  const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");\n`;
+  fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
+  t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
+  return {
+    env: { AGENT_LCM_FAKE_LOG: log, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+    log,
+  };
+}
+
+function readSetupCalls(log: string): unknown[] {
+  return fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+}

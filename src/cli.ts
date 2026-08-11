@@ -357,7 +357,7 @@ function printSetupReports(value: SetupReport | SetupReport[], json: boolean): v
     return;
   }
   for (const report of reports) {
-    const state = report.changed ? "have been configured" : "are already configured";
-    process.stdout.write(`${report.harness} hooks ${state}: ${report.path}\n`);
+    const state = report.hooks.changed ? "have been configured" : "are already configured";
+    process.stdout.write(`${report.harness} hooks ${state}: ${report.hooks.path}\n`);
   }
 }
