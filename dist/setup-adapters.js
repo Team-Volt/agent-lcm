@@ -105,7 +105,7 @@ function spawnLifecycleCommand(executable, argv, env) {
     const direct = spawnSync(executable, argv, options);
     if (process.platform !== "win32" || !needsWindowsShim(direct.error))
         return direct;
-    const shim = resolveWindowsShim(executable, env);
+    const shim = resolveWindowsShim(executable, argv, env);
     if (shim === null)
         return direct;
     assertSafeWindowsCommand([shim, ...argv], executable, argv);
@@ -115,7 +115,7 @@ function spawnLifecycleCommand(executable, argv, env) {
     }
     return result;
 }
-function resolveWindowsShim(executable, env) {
+function resolveWindowsShim(executable, argv, env) {
     const commandEnv = env ?? process.env;
     const searchPath = Object.entries(commandEnv).find(([key]) => key.toUpperCase() === "PATH")?.[1];
     if (searchPath === undefined)
@@ -130,7 +130,11 @@ function resolveWindowsShim(executable, env) {
                 if (fs.statSync(candidate).isFile())
                     return candidate;
             }
-            catch { }
+            catch (error) {
+                if (isMissingPathError(error))
+                    continue;
+                throw new NativeLifecycleCommandError(executable, argv, null, SUPPRESSED_STDERR);
+            }
         }
     }
     return null;
@@ -148,6 +152,9 @@ function isEnoent(error) {
 }
 function needsWindowsShim(error) {
     return error !== undefined && "code" in error && (error.code === "ENOENT" || error.code === "EINVAL");
+}
+function isMissingPathError(error) {
+    return typeof error === "object" && error !== null && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
 }
 function assertNever(value) {
     throw new Error(`Unexpected lifecycle adapter: ${JSON.stringify(value)}`);

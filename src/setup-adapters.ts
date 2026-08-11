@@ -168,7 +168,7 @@ function spawnLifecycleCommand(executable: HarnessCli, argv: readonly string[], 
   const direct = spawnSync(executable, argv, options);
   if (process.platform !== "win32" || !needsWindowsShim(direct.error)) return direct;
 
-  const shim = resolveWindowsShim(executable, env);
+  const shim = resolveWindowsShim(executable, argv, env);
   if (shim === null) return direct;
   assertSafeWindowsCommand([shim, ...argv], executable, argv);
   const result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", shim, ...argv], options);
@@ -178,7 +178,7 @@ function spawnLifecycleCommand(executable: HarnessCli, argv: readonly string[], 
   return result;
 }
 
-function resolveWindowsShim(executable: HarnessCli, env: NodeJS.ProcessEnv | undefined): string | null {
+function resolveWindowsShim(executable: HarnessCli, argv: readonly string[], env: NodeJS.ProcessEnv | undefined): string | null {
   const commandEnv = env ?? process.env;
   const searchPath = Object.entries(commandEnv).find(([key]) => key.toUpperCase() === "PATH")?.[1];
   if (searchPath === undefined) return null;
@@ -189,7 +189,10 @@ function resolveWindowsShim(executable: HarnessCli, env: NodeJS.ProcessEnv | und
       const candidate = path.join(directory, `${executable}${extension}`);
       try {
         if (fs.statSync(candidate).isFile()) return candidate;
-      } catch {}
+      } catch (error) {
+        if (isMissingPathError(error)) continue;
+        throw new NativeLifecycleCommandError(executable, argv, null, SUPPRESSED_STDERR);
+      }
     }
   }
   return null;
@@ -217,6 +220,10 @@ function isEnoent(error: Error | undefined): boolean {
 
 function needsWindowsShim(error: Error | undefined): boolean {
   return error !== undefined && "code" in error && (error.code === "ENOENT" || error.code === "EINVAL");
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
 }
 
 function assertNever(value: never): never {
