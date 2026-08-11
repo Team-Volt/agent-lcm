@@ -20,8 +20,23 @@ test("root is an Agent Plugins 1.0 package", () => {
 
 test("client hook manifests invoke explicit or detected harness capture", () => {
   const codex = readJson(".codex-plugin/plugin.json");
-  assert.equal(codex.hooks, "./hooks/codex.json");
+  assert.equal(codex.hooks, undefined);
+  assert.equal(codex.mcpServers, "./.mcp.json");
   assert.equal(codex.homepage, "https://github.com/Team-Volt/agent-lcm");
+  assert.deepEqual(codex.interface, {
+    displayName: "Agent LCM",
+    shortDescription: "Use shared local context memory in Codex.",
+    longDescription: "Agent LCM captures and recalls coding-agent sessions from one local store.",
+    developerName: "Team Volt",
+    category: "Developer Tools",
+    capabilities: [],
+    defaultPrompt: "Recall relevant work from earlier coding sessions.",
+  });
+  assert.deepEqual(readJson(".mcp.json").mcpServers["agent-lcm"], {
+    type: "stdio",
+    command: "node",
+    args: ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+  });
   const codexManifest = readJson("hooks/codex.json");
   const codexHooks = JSON.stringify(codexManifest);
   assert.deepEqual(Object.keys(codexManifest.hooks).sort(), [

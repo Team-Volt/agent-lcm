@@ -29,6 +29,7 @@
     ".agents/plugins/marketplace.json",
     ".codex-plugin/",
     ".cursor-plugin/",
+    ".mcp.json",
     "bin/",
     "dist/",
     "hooks/",

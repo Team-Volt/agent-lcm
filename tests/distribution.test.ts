@@ -25,6 +25,7 @@ test("the npm package contains the complete plugin and no development files", (t
     ".codex-plugin/plugin.json",
     ".cursor-plugin/marketplace.json",
     ".cursor-plugin/plugin.json",
+    ".mcp.json",
     "LICENSE",
     "README.md",
     "bin/agent-lcm",
