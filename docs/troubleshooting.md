@@ -95,21 +95,26 @@ suppressed-stderr marker so a client cannot leak secrets into logs. Use
 Codex setup probes `codex plugin list`, then runs the marketplace-add and
 plugin-add commands. Removal runs `codex plugin remove agent-lcm@agent-lcm`.
 Copilot and VS Code probe and install through `copilot plugin`; they share the
-same plugin store and `~/.copilot/hooks/agent-lcm.json`, so either
-`agent-lcm remove copilot` or `agent-lcm remove vscode` is intentionally
-conservative and does not uninstall the shared plugin. Review both clients
-before using the documented Copilot uninstall command. Cursor Marketplace and
-Kiro Powers installation/removal stay manual.
+same native plugin store, so either `agent-lcm remove copilot` or `agent-lcm
+remove vscode` is intentionally conservative and does not uninstall the shared
+plugin. A legacy `~/.copilot/hooks/agent-lcm.json` fallback is separate and is
+left unchanged. Review both clients before using the documented Copilot
+uninstall command. Cursor Marketplace and Kiro Powers installation/removal
+stay manual.
 
 Setup validates the existing JSON before starting a native CLI. It changes only
 exact Agent LCM-owned hook entries and preserves unrelated or near-matching
 entries. A changed file gets a collision-safe `-pre-agent-lcm-` backup. Setup
-also refuses symlinked directory components, lock files, targets, and
-non-regular files. It uses a per-file SQLite lock at `<target>.lock.sqlite`,
-with a ten-second bound, plus unique, fsynced
+also refuses symlinked directory components, lock paths, targets, and
+non-regular files. It uses an atomic lock directory at `<target>.lock`, with a
+ten-second bound, plus unique, fsynced
 temporary publication; a predictable temporary symlink cannot redirect the
 write. Hook commands must use an absolute shell-safe binary path. If validation
 fails, the original file and native CLI invocation remain unchanged.
+
+If setup times out on `<target>.lock`, first confirm that no Agent LCM setup or
+remove process is running. You may then remove that empty lock directory and
+retry. Do not remove it while another process is active.
 
 ## Isolate a storage problem
 

@@ -50,8 +50,8 @@ configuration is validated before native work. Unrelated entries and
 near-matching commands remain untouched; only an exact harness/event/command
 registration is changed.
 
-Setup files use `<target>.lock.sqlite` with a SQLite `BEGIN IMMEDIATE` lock
-(bounded to ten seconds). Publication writes a unique `wx` temporary file with
+Setup files use an atomic `<target>.lock` directory (bounded to ten seconds).
+Publication writes a unique `wx` temporary file with
 restrictive permissions, fsyncs it, renames it, and fsyncs the parent directory.
 Symlinked or non-regular targets are refused, hook commands must be absolute and
 shell-safe, and changed files receive a collision-safe `-pre-agent-lcm-` backup.

@@ -179,13 +179,13 @@ Native lifecycle support is limited to the commands that each client documents:
 
 Setup validates an existing hook file before invoking a native CLI, preserves
 unrelated entries, and changes only exact Agent LCM-owned registrations. It
-backs up a changed file as `*-pre-agent-lcm-*.json`, uses a per-file SQLite
-lock at `<target>.lock.sqlite`, and publishes through a unique `wx` temporary
-file, `fsync`, and rename. Symlinked directory components, lock files, targets,
-and non-regular files are refused. Hook commands must be absolute paths without
-shell metacharacters. These rules
-make repeated setup and removal safe while avoiding a second user-level hook
-copy after native installation.
+backs up a changed file as `*-pre-agent-lcm-*.json`, holds an atomic lock
+directory at `<target>.lock` for at most ten seconds, and publishes through a
+unique `wx` temporary file, `fsync`, and rename. Symlinked directory
+components, lock paths, targets, and non-regular files are refused. Hook
+commands must be absolute paths without shell metacharacters. These rules make
+repeated setup and removal safe while avoiding a second user-level hook copy
+after native installation.
 
 Hooks start the daemon on demand. You can also manage it directly:
 

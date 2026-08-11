@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { writeSetupConfiguration } from "../src/setup-files.ts";
+import { mutateSetupConfiguration } from "../src/setup-files.ts";
 import { removeHarness, setupHarness, setupStatus } from "../src/setup.ts";
 import { assertCliOk, runCli, tempHome } from "./helpers.ts";
 
@@ -623,7 +623,7 @@ test("setup writes never follow a predictable temporary symlink", { skip: proces
   fs.writeFileSync(victim, "do not overwrite");
   fs.symlinkSync(victim, `${setupPath}.${process.pid}.tmp`);
 
-  writeSetupConfiguration(setupPath, { hooks: {} });
+  mutateSetupConfiguration(setupPath, () => ({ hooks: {} }));
 
   assert.equal(fs.readFileSync(victim, "utf8"), "do not overwrite");
   assert.deepEqual(JSON.parse(fs.readFileSync(setupPath, "utf8")), { hooks: {} });

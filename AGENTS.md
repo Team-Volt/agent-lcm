@@ -39,12 +39,12 @@ docs/                       architecture and troubleshooting
   entries.
 - Setup reports `complete` with exit `0`; `manual-required` and
   `shared-retained` use exit `2`; command errors use exit `1`.
-- Copilot and VS Code share native plugin and hook resources. Single-harness
-  removal must retain those resources and must not invoke an uninstall.
+- Copilot and VS Code share the native plugin store. Single-harness removal
+  must retain that plugin and leave any legacy fallback hook file unchanged.
 - Validate existing setup JSON before native work. Preserve unrelated and
   near-matching hooks, reject symlinked or non-regular targets, and publish
-  changes under the per-file SQLite lock through a unique fsynced temporary
-  file and rename.
+  changes under an atomic `<target>.lock` directory through a unique fsynced
+  temporary file and rename.
 
 See `src/AGENTS.md` and `tests/AGENTS.md` for more specific rules.
 

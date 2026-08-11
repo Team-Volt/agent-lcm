@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 const SETUP_LOCK_TIMEOUT_MS = 10_000;
 const SETUP_LOCK_POLL_MS = 10;
@@ -21,15 +20,22 @@ export function mutateSetupConfiguration(
   target: string,
   transform: (configuration: Record<string, unknown> | undefined) => Record<string, unknown> | undefined,
 ): boolean {
-  ensureSetupDirectory(path.dirname(target));
-  return withSetupFileLock(target, () => {
+  const directory = path.dirname(target);
+  ensureSetupDirectory(directory);
+  const directoryIdentity = fs.lstatSync(directory);
+  if (!directoryIdentity.isDirectory()) throw new Error(`Setup directory changed while updating: ${directory}`);
+  return withSetupFileLock(target, directoryIdentity, () => {
+    assertDirectoryIdentity(directory, directoryIdentity);
     const current = readSetupFile(target);
     const existing = current ? parseSetupConfiguration(current, target) : undefined;
     const next = transform(existing);
     if (next === undefined) return false;
     if (existing && JSON.stringify(existing) === JSON.stringify(next)) return false;
+    assertDirectoryIdentity(directory, directoryIdentity);
     if (current) backupSetupBytes(target, current);
+    assertDirectoryIdentity(directory, directoryIdentity);
     writeSetupBytes(target, Buffer.from(`${JSON.stringify(next, null, 2)}\n`));
+    assertDirectoryIdentity(directory, directoryIdentity);
     return true;
   });
 }
@@ -49,11 +55,6 @@ function parseSetupConfiguration(bytes: Buffer, target: string): Record<string, 
   }
   if (!isRecord(value)) throw new Error(`Cannot update invalid setup configuration: ${target}`);
   return value;
-}
-
-export function writeSetupConfiguration(target: string, configuration: Record<string, unknown>): void {
-  ensureSetupDirectory(path.dirname(target));
-  writeSetupBytes(target, Buffer.from(`${JSON.stringify(configuration, null, 2)}\n`));
 }
 
 function writeSetupBytes(target: string, bytes: Buffer): void {
@@ -77,10 +78,6 @@ function writeSetupBytes(target: string, bytes: Buffer): void {
     }
     throw error;
   }
-}
-
-export function backupSetupConfiguration(target: string): void {
-  backupSetupBytes(target, fs.readFileSync(target));
 }
 
 function backupSetupBytes(target: string, bytes: Buffer): void {
@@ -114,45 +111,57 @@ function backupSetupBytes(target: string, bytes: Buffer): void {
   }
 }
 
-function withSetupFileLock<T>(target: string, callback: () => T): T {
-  const lockPath = `${target}.lock.sqlite`;
+function withSetupFileLock<T>(target: string, directoryIdentity: fs.Stats, callback: () => T): T {
+  const lockPath = `${target}.lock`;
   const deadline = Date.now() + SETUP_LOCK_TIMEOUT_MS;
-  const lockDescriptor = openRegularLockFile(lockPath);
-  let coordinator: DatabaseSync | undefined;
-  let transactionOpen = false;
+  let acquired = false;
+  // ponytail: a crashed setup leaves this empty directory; recover it manually
+  // rather than guessing whether another setup process is still alive.
   try {
-    coordinator = new DatabaseSync(lockPath, { timeout: SETUP_LOCK_POLL_MS });
-    assertSameFile(lockPath, fs.fstatSync(lockDescriptor));
-    while (!transactionOpen) {
+    while (!acquired) {
+      assertDirectoryIdentity(path.dirname(target), directoryIdentity);
       try {
-        coordinator.exec("BEGIN IMMEDIATE");
-        transactionOpen = true;
+        fs.mkdirSync(lockPath, { mode: 0o700 });
+        acquired = true;
       } catch (error) {
-        if (!isSqliteBusy(error)) throw error;
+        if (!hasCode(error, "EEXIST")) throw error;
+        const status = fs.lstatSync(lockPath);
+        if (status.isSymbolicLink()) throw new Error(`Refusing setup lock symlink: ${lockPath}`);
+        if (!status.isDirectory()) throw new Error(`Cannot use setup lock that is not a directory: ${lockPath}`);
         if (Date.now() >= deadline) throw new SetupFileLockTimeoutError(lockPath);
         Atomics.wait(SETUP_LOCK_WAIT, 0, 0, SETUP_LOCK_POLL_MS);
       }
     }
+    assertDirectoryIdentity(path.dirname(target), directoryIdentity);
     return callback();
   } finally {
-    if (transactionOpen) coordinator?.exec("ROLLBACK");
-    coordinator?.close();
-    fs.closeSync(lockDescriptor);
+    if (acquired) fs.rmdirSync(lockPath);
   }
 }
 
 function readSetupFile(target: string): Buffer | undefined {
+  let pathStatus: fs.Stats;
+  try {
+    pathStatus = fs.lstatSync(target);
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return undefined;
+    throw error;
+  }
+  if (pathStatus.isSymbolicLink()) throw new Error(`Refusing setup configuration symlink: ${target}`);
+  if (!pathStatus.isFile()) throw new Error(`Cannot update setup configuration that is not a regular file: ${target}`);
   let descriptor: number;
   try {
     descriptor = fs.openSync(target, fs.constants.O_RDONLY | noFollowFlag());
   } catch (error) {
-    if (hasCode(error, "ENOENT")) return undefined;
     if (hasCode(error, "ELOOP")) throw new Error(`Refusing setup configuration symlink: ${target}`);
     throw error;
   }
   try {
-    const status = fs.fstatSync(descriptor);
-    if (!status.isFile()) throw new Error(`Cannot update setup configuration that is not a regular file: ${target}`);
+    const opened = fs.fstatSync(descriptor);
+    const current = fs.lstatSync(target);
+    if (!opened.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
+      throw new Error(`Setup configuration path changed while opening: ${target}`);
+    }
     return fs.readFileSync(descriptor);
   } finally {
     fs.closeSync(descriptor);
@@ -161,52 +170,19 @@ function readSetupFile(target: string): Buffer | undefined {
 
 export function ensureSetupDirectory(directory: string): void {
   assertSafeDirectoryPath(directory);
-  const created = fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertSafeDirectoryPath(directory);
-  if (created !== undefined) fs.chmodSync(directory, 0o700);
-}
-
-function openRegularLockFile(lockPath: string): number {
-  let descriptor: number | undefined;
-  try {
-    try {
-      descriptor = fs.openSync(lockPath, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollowFlag(), 0o600);
-    } catch (error) {
-      if (!hasCode(error, "EEXIST")) throw error;
-      descriptor = fs.openSync(lockPath, fs.constants.O_RDWR | noFollowFlag());
-    }
-    const status = fs.fstatSync(descriptor);
-    if (!status.isFile()) throw new Error(`Cannot use setup lock that is not a regular file: ${lockPath}`);
-    fs.fchmodSync(descriptor, 0o600);
-    fs.fsyncSync(descriptor);
-    return descriptor;
-  } catch (error) {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
-    if (hasCode(error, "ELOOP")) throw new Error(`Refusing setup lock symlink: ${lockPath}`);
-    throw error;
-  }
-}
-
-function assertSameFile(target: string, expected: fs.Stats): void {
-  let descriptor: number;
-  try {
-    descriptor = fs.openSync(target, fs.constants.O_RDONLY | noFollowFlag());
-  } catch (error) {
-    if (hasCode(error, "ELOOP")) throw new Error(`Setup lock path changed while opening: ${target}`);
-    throw error;
-  }
-  try {
-    const actual = fs.fstatSync(descriptor);
-    if (!actual.isFile() || actual.dev !== expected.dev || actual.ino !== expected.ino) {
-      throw new Error(`Setup lock path changed while opening: ${target}`);
-    }
-  } finally {
-    fs.closeSync(descriptor);
-  }
 }
 
 function noFollowFlag(): number {
-  return fs.constants.O_NOFOLLOW ?? 0;
+  return process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW;
+}
+
+function assertDirectoryIdentity(directory: string, expected: fs.Stats): void {
+  const actual = fs.lstatSync(directory);
+  if (!actual.isDirectory() || actual.dev !== expected.dev || actual.ino !== expected.ino) {
+    throw new Error(`Setup directory changed while updating: ${directory}`);
+  }
 }
 
 function assertSafeDirectoryPath(directory: string): void {
@@ -241,10 +217,6 @@ function fsyncPath(target: string): void {
   } finally {
     fs.closeSync(descriptor);
   }
-}
-
-function isSqliteBusy(error: unknown): boolean {
-  return error instanceof Error && Reflect.get(error, "errcode") === 5;
 }
 
 function hasCode(error: unknown, code: string): boolean {

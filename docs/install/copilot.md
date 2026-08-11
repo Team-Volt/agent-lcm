@@ -39,19 +39,19 @@ run `copilot plugin list` again.
 native plugin health. `false` is expected after a successful native install;
 use `copilot plugin list` for the native check.
 
-> Warning: GitHub Copilot CLI and VS Code share the Copilot plugin store and the hook file `~/.copilot/hooks/agent-lcm.json`. A deliberate native uninstall affects both harnesses. Do not uninstall the shared plugin when you mean to remove only Copilot CLI.
+> Warning: GitHub Copilot CLI and VS Code share the native Copilot plugin store. A deliberate native uninstall affects both harnesses. Do not uninstall the shared plugin when you mean to remove only Copilot CLI. A legacy `~/.copilot/hooks/agent-lcm.json` fallback, if present, is separate.
 
 ## Remove Agent LCM
 
-The safe single-harness command retains the shared plugin and hook resources:
+The safe single-harness command retains the shared native plugin:
 
 ```sh
 agent-lcm remove copilot
 ```
 
-It reports `shared-retained` and leaves the shared store and hook file
-unchanged. To deliberately remove the shared native installation from both
-harnesses, run:
+It reports `shared-retained`, leaves the shared store unchanged, and does not
+edit a legacy fallback hook file. To deliberately remove the shared native
+installation from both harnesses, run:
 
 ```sh
 copilot plugin uninstall agent-lcm

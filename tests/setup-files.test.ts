@@ -33,15 +33,14 @@ test("setup refuses a target symlink without changing the victim", { skip: proce
 test("setup refuses a symlinked lock without changing the victim", { skip: process.platform === "win32" }, () => {
   const home = tempHome("agent-lcm-setup-lock-symlink-");
   const target = path.join(home, "hooks.json");
-  const victim = path.join(home, "victim.sqlite");
-  fs.writeFileSync(victim, "");
-  fs.chmodSync(victim, 0o644);
-  fs.symlinkSync(victim, `${target}.lock.sqlite`);
+  const victim = path.join(home, "victim");
+  fs.mkdirSync(victim);
+  fs.symlinkSync(victim, `${target}.lock`);
 
   assert.throws(() => mutateSetupConfiguration(target, () => ({ hooks: {} })), /lock.*symlink/u);
 
-  assert.equal(fs.lstatSync(`${target}.lock.sqlite`).isSymbolicLink(), true);
-  assert.equal(fs.statSync(victim).mode & 0o777, 0o644);
+  assert.equal(fs.lstatSync(`${target}.lock`).isSymbolicLink(), true);
+  assert.deepEqual(fs.readdirSync(victim), []);
   assert.equal(fs.existsSync(target), false);
 });
 
@@ -57,36 +56,39 @@ test("setup refuses a symlinked parent directory", { skip: process.platform === 
   assert.deepEqual(fs.readdirSync(victim), []);
 });
 
-test("a lock-path swap cannot change a symlink victim", { skip: process.platform === "win32" }, () => {
-  const home = tempHome("agent-lcm-setup-lock-race-");
-  const target = path.join(home, "hooks.json");
-  const lock = `${target}.lock.sqlite`;
-  const victim = path.join(home, "victim.sqlite");
-  fs.writeFileSync(lock, "");
-  fs.writeFileSync(victim, "");
-  fs.chmodSync(victim, 0o644);
-  const originalOpen = fs.openSync;
-  let lockOpens = 0;
-  const swappedOpen = ((candidate: fs.PathLike, flags: string | number, mode?: fs.Mode) => {
-    if (candidate.toString() === lock && (lockOpens += 1) === 2) {
-      fs.unlinkSync(lock);
-      fs.symlinkSync(victim, lock);
+test("a parent swap during lock acquisition cannot redirect setup", { skip: process.platform === "win32" }, () => {
+  const home = tempHome("agent-lcm-setup-parent-race-");
+  const safe = path.join(home, "safe");
+  const originalSafe = path.join(home, "safe-original");
+  const outside = path.join(home, "outside");
+  const target = path.join(safe, "hooks.json");
+  const lock = `${target}.lock`;
+  fs.mkdirSync(safe);
+  fs.mkdirSync(outside);
+  const originalMkdir = fs.mkdirSync;
+  let swapped = false;
+  const swappedMkdir = ((candidate: fs.PathLike, options?: fs.MakeDirectoryOptions & { recursive?: false }) => {
+    if (!swapped && candidate.toString() === lock) {
+      swapped = true;
+      fs.renameSync(safe, originalSafe);
+      fs.symlinkSync(outside, safe);
     }
-    return originalOpen(candidate, flags, mode);
-  }) as typeof fs.openSync;
-  Object.defineProperty(fs, "openSync", { configurable: true, value: swappedOpen });
+    return originalMkdir(candidate, options);
+  }) as typeof fs.mkdirSync;
+  Object.defineProperty(fs, "mkdirSync", { configurable: true, value: swappedMkdir });
   try {
-    assert.throws(() => mutateSetupConfiguration(target, () => ({ hooks: {} })), /lock (?:path changed|symlink)/u);
+    assert.throws(() => mutateSetupConfiguration(target, () => ({ hooks: {} })), /directory changed/u);
   } finally {
-    Object.defineProperty(fs, "openSync", { configurable: true, value: originalOpen });
+    Object.defineProperty(fs, "mkdirSync", { configurable: true, value: originalMkdir });
   }
-  assert.equal(fs.statSync(victim).mode & 0o777, 0o644);
+  assert.equal(fs.existsSync(path.join(outside, "hooks.json")), false);
+  assert.deepEqual(fs.readdirSync(outside), []);
 });
 
 test("a lock swap after a path check cannot chmod the victim", { skip: process.platform === "win32" }, () => {
   const home = tempHome("agent-lcm-setup-lock-chmod-race-");
   const target = path.join(home, "hooks.json");
-  const lock = `${target}.lock.sqlite`;
+  const lock = `${target}.lock`;
   const victim = path.join(home, "victim.sqlite");
   fs.writeFileSync(lock, "");
   fs.writeFileSync(victim, "");
@@ -104,39 +106,42 @@ test("a lock swap after a path check cannot chmod the victim", { skip: process.p
   }) as typeof fs.lstatSync;
   Object.defineProperty(fs, "lstatSync", { configurable: true, value: swappedLstat });
   try {
-    mutateSetupConfiguration(target, () => ({ hooks: {} }));
+    assert.throws(() => mutateSetupConfiguration(target, () => ({ hooks: {} })), /not a directory/u);
   } finally {
     Object.defineProperty(fs, "lstatSync", { configurable: true, value: originalLstat });
   }
   assert.equal(fs.statSync(victim).mode & 0o777, 0o644);
 });
 
-test("a target-path swap cannot copy symlink-victim bytes", { skip: process.platform === "win32" }, () => {
+test("a target swap after opening cannot copy symlink-victim bytes", { skip: process.platform === "win32" }, () => {
   const home = tempHome("agent-lcm-setup-target-race-");
   const target = path.join(home, "hooks.json");
   const victim = path.join(home, "victim.json");
   fs.writeFileSync(target, '{"hooks":{}}\n');
   fs.writeFileSync(victim, '{"isolated-secret":true}\n');
-  const originalRead = fs.readFileSync;
+  const originalOpen = fs.openSync;
   let swapped = false;
-  const swappedRead = ((candidate: fs.PathOrFileDescriptor, ...args: unknown[]) => {
-    if (!swapped && typeof candidate === "string" && candidate === target) {
+  const swappedOpen = ((candidate: fs.PathLike, flags: string | number, mode?: fs.Mode) => {
+    const descriptor = originalOpen(candidate, flags, mode);
+    if (!swapped && candidate.toString() === target) {
       swapped = true;
       fs.unlinkSync(target);
       fs.symlinkSync(victim, target);
     }
-    return Reflect.apply(originalRead, fs, [candidate, ...args]);
-  }) as typeof fs.readFileSync;
-  Object.defineProperty(fs, "readFileSync", { configurable: true, value: swappedRead });
+    return descriptor;
+  }) as typeof fs.openSync;
+  Object.defineProperty(fs, "openSync", { configurable: true, value: swappedOpen });
   try {
-    mutateSetupConfiguration(target, (configuration) => ({ ...configuration, added: true }));
+    assert.throws(
+      () => mutateSetupConfiguration(target, (configuration) => ({ ...configuration, added: true })),
+      /path changed/u,
+    );
   } finally {
-    Object.defineProperty(fs, "readFileSync", { configurable: true, value: originalRead });
+    Object.defineProperty(fs, "openSync", { configurable: true, value: originalOpen });
   }
   const backups = fs.readdirSync(home).filter((name) => name.startsWith("hooks-pre-agent-lcm-"));
-  assert.equal(backups.length, 1);
-  assert.doesNotMatch(fs.readFileSync(path.join(home, backups[0] ?? ""), "utf8"), /isolated-secret/u);
-  assert.deepEqual(JSON.parse(fs.readFileSync(target, "utf8")), { hooks: {}, added: true });
+  assert.deepEqual(backups, []);
+  assert.equal(fs.lstatSync(target).isSymbolicLink(), true);
   assert.deepEqual(JSON.parse(fs.readFileSync(victim, "utf8")), { "isolated-secret": true });
 });
 
