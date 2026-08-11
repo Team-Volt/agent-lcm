@@ -17,7 +17,7 @@ export function readStatus(options: InstallerOptions = {}) {
   const hooksText = readOptional(hooksPath);
   const pluginManifestText = readOptional(path.join(root, ".codex-plugin", "plugin.json"));
   const pluginManifestAvailable = pluginManifestText !== undefined;
-  const mcpManifestAvailable = fs.existsSync(path.join(root, "mcp.json"));
+  const mcpManifestAvailable = fs.existsSync(path.join(root, ".mcp.json"));
   const hookManifestAvailable = fs.existsSync(path.join(root, "hooks", "codex.json"));
   const pluginDeclaresMcp = pluginManifestText !== undefined && /"mcpServers"\s*:/u.test(pluginManifestText);
   const pluginDeclaresHooks = pluginManifestText !== undefined && /"hooks"\s*:/u.test(pluginManifestText);
@@ -41,7 +41,7 @@ export function readStatus(options: InstallerOptions = {}) {
     manual_mcp_configured: manualMcpConfigured,
     manual_hooks_configured: manualHooksConfigured,
     mcp_configured: manualMcpConfigured || (pluginOwnedWiringAvailable && pluginDeclaresMcp && mcpManifestAvailable),
-    hooks_configured: manualHooksConfigured || (pluginOwnedWiringAvailable && pluginDeclaresHooks && hookManifestAvailable),
+    hooks_configured: manualHooksConfigured,
     recall_skill_available: fs.existsSync(path.join(root, "skills", "lcm-recall", "SKILL.md")),
   };
 }

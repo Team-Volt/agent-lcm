@@ -1,5 +1,5 @@
 import type { CaptureHarness } from "./harnesses.ts";
-import { runHarnessLifecycle } from "./setup-adapters.ts";
+import { runHarnessLifecycle, type HarnessCli } from "./setup-adapters.ts";
 import { mutateSetupConfiguration, readSetupConfiguration } from "./setup-files.ts";
 import { assertSafeSetupCommand, setupHooksConfigured } from "./setup-hook-status.ts";
 import {
@@ -15,7 +15,7 @@ export type SetupReport = {
   readonly harness: CaptureHarness;
   readonly action: "setup";
   readonly status: "complete" | "manual-required";
-  readonly nativeCli: "codex" | "copilot" | null;
+  readonly nativeCli: HarnessCli | null;
   readonly hooks: { readonly path: string; readonly changed: boolean };
   readonly guide: string;
 };
@@ -24,7 +24,7 @@ export type RemoveReport = {
   readonly harness: CaptureHarness;
   readonly action: "remove";
   readonly status: "complete" | "manual-required" | "shared-retained";
-  readonly nativeCli: "codex" | "copilot" | null;
+  readonly nativeCli: HarnessCli | null;
   readonly hooks: { readonly path: string; readonly changed: boolean };
   readonly guide: string;
 };

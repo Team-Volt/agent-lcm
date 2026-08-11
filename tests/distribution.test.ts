@@ -36,6 +36,9 @@ test("the npm package contains the complete plugin and no development files", (t
     "plugin.json",
     "skills/lcm-recall/SKILL.md",
     "dist/cli.js",
+    "dist/setup-adapters.js",
+    "dist/setup-hook-status.js",
+    "dist/setup-hooks.js",
   ]) assert.ok(names.includes(required), `missing ${required}`);
   assert.equal(names.some((name) => /^(?:\.github|docs|scripts|tests)\//u.test(name)), false);
   assert.equal(fs.existsSync(path.join(root, filename)), true);
@@ -135,7 +138,24 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   assert.equal(install.status, 0, install.stderr);
   const executable = process.platform === "win32" ? path.join(prefix, "agent-lcm.cmd") : path.join(prefix, "bin", "agent-lcm");
   const home = path.join(root, "home");
-  const env = { ...process.env, HOME: home, USERPROFILE: home, AGENT_LCM_HOME: path.join(home, ".agent-lcm") };
+  const fakeBin = path.join(root, "fake-bin");
+  const fakeLog = path.join(root, "codex-calls.jsonl");
+  const fakeScript = path.join(root, "fake-codex.cjs");
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(fakeScript, 'require("node:fs").appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");\n');
+  if (process.platform === "win32") {
+    fs.writeFileSync(path.join(fakeBin, "codex.cmd"), `@"${process.execPath}" "${fakeScript}" %*\r\n`);
+  } else {
+    fs.writeFileSync(path.join(fakeBin, "codex"), `#!${process.execPath}\nrequire(${JSON.stringify(fakeScript)});\n`, { mode: 0o755 });
+  }
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    AGENT_LCM_HOME: path.join(home, ".agent-lcm"),
+    AGENT_LCM_FAKE_LOG: fakeLog,
+    PATH: `${fakeBin}${path.delimiter}${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`,
+  };
   const runInstalled = (args: string[], input?: string) => spawnSync(executable, args, {
     cwd: root,
     encoding: "utf8",
@@ -218,5 +238,15 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   assert.equal(JSON.parse(daemon.stdout).running, true);
   const stopped = runInstalled(["daemon", "stop", "--json"]);
   assert.equal(stopped.status, 0, stopped.stderr);
+  const removed = runInstalled(["remove", "codex", "--json"]);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.equal(JSON.parse(removed.stdout).hooks.changed, true);
+  assert.deepEqual(fs.readFileSync(fakeLog, "utf8").trim().split("\n").map((line) => JSON.parse(line)), [
+    ["plugin", "list"],
+    ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+    ["plugin", "add", "agent-lcm@agent-lcm"],
+    ["plugin", "list"],
+    ["plugin", "remove", "agent-lcm@agent-lcm"],
+  ]);
   assert.equal(JSON.parse(stopped.stdout).running, false);
 });

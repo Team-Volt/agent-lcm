@@ -21,7 +21,7 @@ test("status reads Codex home and reports absent wiring", () => {
   assert.equal(status.plugin_configured, false);
   assert.equal(status.plugin_manifest_available, true);
   assert.equal(status.plugin_declares_mcp, true);
-  assert.equal(status.plugin_declares_hooks, true);
+  assert.equal(status.plugin_declares_hooks, false);
   assert.equal(status.mcp_manifest_available, true);
   assert.equal(status.hook_manifest_available, true);
   assert.equal(status.manual_mcp_configured, false);
@@ -59,13 +59,13 @@ test("status recognizes Codex-native plugin wiring", () => {
   assert.equal(status.plugin_configured, true);
   assert.equal(status.plugin_manifest_available, true);
   assert.equal(status.plugin_declares_mcp, true);
-  assert.equal(status.plugin_declares_hooks, true);
+  assert.equal(status.plugin_declares_hooks, false);
   assert.equal(status.mcp_manifest_available, true);
   assert.equal(status.hook_manifest_available, true);
   assert.equal(status.manual_mcp_configured, false);
   assert.equal(status.manual_hooks_configured, false);
   assert.equal(status.mcp_configured, true);
-  assert.equal(status.hooks_configured, true);
+  assert.equal(status.hooks_configured, false);
   assert.equal(status.recall_skill_available, true);
 });
 

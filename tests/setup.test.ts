@@ -8,6 +8,7 @@ import { removeHarness, setupHarness, setupStatus } from "../src/setup.ts";
 import { assertCliOk, runCli, tempHome } from "./helpers.ts";
 
 const GUIDE_ROOT = "https://github.com/Team-Volt/agent-lcm/blob/main/docs/install";
+const NO_CLI_ENV = { PATH: "" };
 
 test("remove Codex deletes only exact owned hooks and is repeatable", (t) => {
   const fake = fakeSetupCli(t, "codex");
@@ -67,7 +68,7 @@ test("remove Cursor and Kiro preserves adversarial near matches", () => {
       { command: 'node "/old/bin/agent-lcm" capture --harness codex SessionStart', keep: true },
     ],
   } }));
-  const cursor = removeHarness("cursor", { home: cursorHome });
+  const cursor = removeHarness("cursor", { home: cursorHome, env: NO_CLI_ENV });
   assert.equal(cursor.status, "manual-required");
   assert.equal(cursor.hooks.changed, true);
   assert.deepEqual(JSON.parse(fs.readFileSync(cursorTarget, "utf8")).hooks.sessionStart, [
@@ -82,7 +83,7 @@ test("remove Cursor and Kiro preserves adversarial near matches", () => {
     { name: "agent-lcm-kiro-SessionStart", trigger: "Stop", action: { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness kiro SessionStart' }, keep: true },
     { name: "agent-lcm-kiro-Stop", trigger: "Stop", action: { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness kiro Stop extra' }, keep: true },
   ] }));
-  const kiro = removeHarness("kiro", { home: kiroHome });
+  const kiro = removeHarness("kiro", { home: kiroHome, env: NO_CLI_ENV });
   assert.equal(kiro.status, "manual-required");
   assert.equal(kiro.hooks.changed, true);
   assert.equal(JSON.parse(fs.readFileSync(kiroTarget, "utf8")).hooks.length, 2);
@@ -116,7 +117,7 @@ test("remove validates before native work and missing targets stay missing", (t)
   assert.deepEqual(fs.readdirSync(invalidHome), ["hooks.json"]);
 
   const missingHome = tempHome("agent-lcm-remove-missing-");
-  const missing = removeHarness("kiro", { home: missingHome });
+  const missing = removeHarness("kiro", { home: missingHome, env: NO_CLI_ENV });
   assert.equal(missing.hooks.changed, false);
   assert.equal(fs.existsSync(path.join(missingHome, "hooks")), false);
 });
@@ -251,8 +252,8 @@ test("Kiro setup uses the native array schema, is repeatable, and leaves sibling
   fs.writeFileSync(unrelatedKiroHook, '{"version":"v1","hooks":[{"name":"other","trigger":"SessionStart","action":{"type":"command","command":"other"}}]}\n');
   const original = fs.readFileSync(unrelatedKiroHook);
 
-  const first = setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" });
-  const second = setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+  const first = setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm", env: NO_CLI_ENV });
+  const second = setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm", env: NO_CLI_ENV });
 
   assert.equal(first.hooks.changed, true);
   assert.equal(second.hooks.changed, false);
@@ -277,7 +278,7 @@ test("setup leaves invalid owned configuration untouched", () => {
   const original = fs.readFileSync(setupPath);
 
   assert.throws(
-    () => setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" }),
+    () => setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm", env: NO_CLI_ENV }),
     new RegExp(setupPath.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"), "u"),
   );
   assert.deepEqual(fs.readFileSync(setupPath), original);
@@ -291,7 +292,7 @@ test("setup rejects malformed Kiro schema without changing the owned file", () =
   fs.writeFileSync(setupPath, '{"version":"v1","hooks":{}}\n');
   const original = fs.readFileSync(setupPath);
 
-  assert.throws(() => setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" }), /invalid setup configuration/u);
+  assert.throws(() => setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm", env: NO_CLI_ENV }), /invalid setup configuration/u);
   assert.deepEqual(fs.readFileSync(setupPath), original);
   assert.deepEqual(fs.readdirSync(path.dirname(setupPath)).sort(), ["agent-lcm.json"]);
 });
@@ -476,7 +477,7 @@ test("Cursor setup validates and preserves its legacy user hooks", () => {
     }],
   } }));
   const original = fs.readFileSync(hooksPath);
-  const report = setupHarness("cursor", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
+  const report = setupHarness("cursor", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm", env: NO_CLI_ENV });
 
   assert.equal(report.hooks.path, path.join(clientHome, "hooks.json"));
   assert.equal(report.hooks.changed, false);
@@ -493,7 +494,7 @@ test("setup all configures only harnesses already installed for the user", () =>
     harness: "codex",
     action: "setup",
     status: "manual-required",
-    nativeCli: "codex",
+    nativeCli: null,
     hooks: { path: path.join(userHome, ".codex", "hooks.json"), changed: true },
     guide: `${GUIDE_ROOT}/codex.md`,
   }]);
@@ -507,6 +508,7 @@ test("setup prints a clear result for people and keeps JSON output for scripts",
   const text = runCli(["setup", "codex", "--home", userHome], { env: { PATH: "" } });
   assert.equal(text.status, 2, text.stderr);
   assert.match(text.stdout, /codex setup: manual-required/u);
+  assert.match(text.stdout, /Native CLI unavailable/u);
   assert.match(text.stdout, new RegExp(`${GUIDE_ROOT}/codex\\.md`, "u"));
 
   const json = runCli(["setup", "codex", "--home", userHome, "--json"], { env: { PATH: "" } });
@@ -515,7 +517,7 @@ test("setup prints a clear result for people and keeps JSON output for scripts",
     harness: "codex",
     action: "setup",
     status: "manual-required",
-    nativeCli: "codex",
+    nativeCli: null,
     hooks: { path: path.join(userHome, "hooks.json"), changed: false },
     guide: `${GUIDE_ROOT}/codex.md`,
   });
@@ -651,7 +653,7 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
     },
   ] }));
 
-  setupHarness("kiro", { home: clientHome, command: "/new/bin/agent-lcm" });
+  setupHarness("kiro", { home: clientHome, command: "/new/bin/agent-lcm", env: NO_CLI_ENV });
   const configuration = JSON.parse(fs.readFileSync(setupPath, "utf8"));
   assert.equal(configuration.owner, "user");
   assert.equal(configuration.hooks[0].action.command, "node \"/new/bin/agent-lcm\" capture --harness kiro SessionStart");

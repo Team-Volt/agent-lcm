@@ -3,12 +3,13 @@ import { spawnSync } from "node:child_process";
 import type { CaptureHarness } from "./harnesses.ts";
 
 export type HarnessLifecycleAction = "setup" | "remove";
+export type HarnessCli = "codex" | "copilot" | "cursor-agent" | "kiro-cli";
 
 export type HarnessLifecycleOutcome = {
   readonly harness: CaptureHarness;
   readonly action: HarnessLifecycleAction;
   readonly status: "native-complete" | "manual-required" | "shared-retained";
-  readonly nativeCli: "codex" | "copilot" | null;
+  readonly nativeCli: HarnessCli | null;
   readonly guide: string;
 };
 
@@ -52,6 +53,8 @@ type CopilotLifecycleAdapter = {
 
 type ManualLifecycleAdapter = {
   readonly kind: "manual";
+  readonly executable: "cursor-agent" | "kiro-cli";
+  readonly probeArgv: readonly string[];
   readonly guide: string;
 };
 
@@ -72,7 +75,7 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
     ],
     removeArgv: ["plugin", "remove", "agent-lcm@agent-lcm"],
   },
-  cursor: { kind: "manual", guide: `${GUIDE_ROOT}/cursor.md` },
+  cursor: { kind: "manual", executable: "cursor-agent", probeArgv: ["--version"], guide: `${GUIDE_ROOT}/cursor.md` },
   vscode: {
     kind: "copilot",
     executable: "copilot",
@@ -87,7 +90,7 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
     probeArgv: ["plugin", "list"],
     setupArgv: [["plugin", "install", "Team-Volt/agent-lcm"]],
   },
-  kiro: { kind: "manual", guide: `${GUIDE_ROOT}/kiro.md` },
+  kiro: { kind: "manual", executable: "kiro-cli", probeArgv: ["--version"], guide: `${GUIDE_ROOT}/kiro.md` },
 } satisfies Record<CaptureHarness, HarnessLifecycleAdapter>;
 
 export function runHarnessLifecycle(
@@ -98,9 +101,9 @@ export function runHarnessLifecycle(
   const adapter = HARNESS_LIFECYCLE_ADAPTERS[harness];
   switch (adapter.kind) {
     case "manual":
-      return outcome(harness, action, "manual-required", null, adapter.guide);
+      return manualOutcome(harness, action, adapter, options.env);
     case "copilot":
-      if (action === "remove") return outcome(harness, action, "shared-retained", "copilot", adapter.guide);
+      if (action === "remove") return outcome(harness, action, "shared-retained", null, adapter.guide);
       return runNative(harness, action, adapter, options.env);
     case "codex":
       return runNative(harness, action, adapter, options.env);
@@ -117,7 +120,7 @@ function runNative(
 ): HarnessLifecycleOutcome {
   const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
   if (isEnoent(probe.error) || probe.status !== 0) {
-    return outcome(harness, action, "manual-required", adapter.executable, adapter.guide);
+    return outcome(harness, action, "manual-required", null, adapter.guide);
   }
 
   const commands = action === "setup"
@@ -125,6 +128,17 @@ function runNative(
     : adapter.kind === "codex" ? [adapter.removeArgv] : [];
   for (const argv of commands) runNativeCommand(adapter.executable, argv, env);
   return outcome(harness, action, "native-complete", adapter.executable, adapter.guide);
+}
+
+function manualOutcome(
+  harness: CaptureHarness,
+  action: HarnessLifecycleAction,
+  adapter: ManualLifecycleAdapter,
+  env: NodeJS.ProcessEnv | undefined,
+): HarnessLifecycleOutcome {
+  const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+  const nativeCli = isEnoent(probe.error) || probe.status !== 0 ? null : adapter.executable;
+  return outcome(harness, action, "manual-required", nativeCli, adapter.guide);
 }
 
 function runNativeCommand(executable: "codex" | "copilot", argv: readonly string[], env: NodeJS.ProcessEnv | undefined): void {

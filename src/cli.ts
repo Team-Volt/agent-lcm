@@ -370,6 +370,11 @@ function printSetupReports(value: SetupReport | RemoveReport | SetupReport[], js
     for (const report of reports) {
       process.stdout.write(`${report.harness} ${report.action}: ${report.status}\n`);
       process.stdout.write(`Hooks ${report.hooks.changed ? "changed" : "unchanged"}: ${report.hooks.path}\n`);
+      if (report.status === "manual-required") {
+        process.stdout.write(report.nativeCli === null
+          ? "Native CLI unavailable or its capability probe failed.\n"
+          : `${report.nativeCli} is installed, but it has no supported noninteractive plugin ${report.action} command.\n`);
+      }
       if (report.status !== "complete") process.stdout.write(`Manual steps: ${report.guide}\n`);
     }
   }

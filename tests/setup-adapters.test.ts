@@ -71,14 +71,17 @@ test("Copilot and VS Code setup send the exact Copilot argv", (t) => {
   ]);
 });
 
-test("manual-required outcomes do not probe unsupported harnesses", (t) => {
-  // Given: an empty PATH with no harness CLIs.
+test("manual-required outcomes probe only documented harness version commands", (t) => {
+  // Given: installed Cursor and Kiro CLIs, plus unavailable Codex and Copilot CLIs.
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-empty-bin-"));
   t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+  const cursorCli = fakeCli(t, "cursor-agent");
+  const kiroCli = fakeCli(t, "kiro-cli");
 
-  // When: native setup is requested for every unsupported or unavailable harness.
-  const cursor = runHarnessLifecycle("cursor", "setup", { env: { PATH: bin } });
-  const kiro = runHarnessLifecycle("kiro", "remove", { env: { PATH: bin } });
+  // When: native setup is requested for every manual or unavailable harness.
+  const cursor = runHarnessLifecycle("cursor", "setup", { env: cursorCli.env });
+  const missingCursor = runHarnessLifecycle("cursor", "remove", { env: { PATH: bin } });
+  const kiro = runHarnessLifecycle("kiro", "remove", { env: kiroCli.env });
   const codex = runHarnessLifecycle("codex", "setup", { env: { PATH: bin } });
   const incapable = fakeCli(t, "copilot", ["plugin", "list"]);
   const copilot = runHarnessLifecycle("copilot", "setup", { env: incapable.env });
@@ -88,30 +91,39 @@ test("manual-required outcomes do not probe unsupported harnesses", (t) => {
     harness: "cursor",
     action: "setup",
     status: "manual-required",
-    nativeCli: null,
+    nativeCli: "cursor-agent",
     guide: `${GUIDE_ROOT}/cursor.md`,
   });
   assert.deepEqual(kiro, {
     harness: "kiro",
     action: "remove",
     status: "manual-required",
-    nativeCli: null,
+    nativeCli: "kiro-cli",
     guide: `${GUIDE_ROOT}/kiro.md`,
+  });
+  assert.deepEqual(missingCursor, {
+    harness: "cursor",
+    action: "remove",
+    status: "manual-required",
+    nativeCli: null,
+    guide: `${GUIDE_ROOT}/cursor.md`,
   });
   assert.deepEqual(codex, {
     harness: "codex",
     action: "setup",
     status: "manual-required",
-    nativeCli: "codex",
+    nativeCli: null,
     guide: `${GUIDE_ROOT}/codex.md`,
   });
   assert.deepEqual(copilot, {
     harness: "copilot",
     action: "setup",
     status: "manual-required",
-    nativeCli: "copilot",
+    nativeCli: null,
     guide: `${GUIDE_ROOT}/copilot.md`,
   });
+  assert.deepEqual(readCalls(cursorCli.log), [["--version"]]);
+  assert.deepEqual(readCalls(kiroCli.log), [["--version"]]);
   assert.deepEqual(readCalls(incapable.log), [["plugin", "list"]]);
 });
 
@@ -128,14 +140,14 @@ test("shared-retained removal does not spawn Copilot uninstall", (t) => {
     harness: "vscode",
     action: "remove",
     status: "shared-retained",
-    nativeCli: "copilot",
+    nativeCli: null,
     guide: `${GUIDE_ROOT}/vscode.md`,
   });
   assert.deepEqual(copilot, {
     harness: "copilot",
     action: "remove",
     status: "shared-retained",
-    nativeCli: "copilot",
+    nativeCli: null,
     guide: `${GUIDE_ROOT}/copilot.md`,
   });
   assert.equal(fs.existsSync(fake.log), false);
@@ -169,7 +181,7 @@ test("mutating command failure is typed and cannot report completion", (t) => {
 
 function fakeCli(
   t: test.TestContext,
-  name: "codex" | "copilot",
+  name: "codex" | "copilot" | "cursor-agent" | "kiro-cli",
   fails?: readonly string[],
 ): { readonly env: NodeJS.ProcessEnv; readonly log: string } {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-fake-cli-"));

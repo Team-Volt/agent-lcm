@@ -47,10 +47,11 @@ test("CLI storage commands use the daemon and daemon status controls its lifetim
 test("doctor reports actionable recommendations for an unwired empty install", () => {
   const codexHome = tempHome("codex-home-");
   const lcmHome = tempHome("agent-lcm-home-");
+  const harnessHome = tempHome("agent-lcm-harness-home-");
   fs.writeFileSync(path.join(codexHome, "config.toml"), "");
 
   const result = runCli(["doctor", "--codex-home", codexHome, "--json"], {
-    env: { AGENT_LCM_HOME: lcmHome },
+    env: { AGENT_LCM_HOME: lcmHome, HOME: harnessHome, USERPROFILE: harnessHome },
   });
 
   assertCliOk(result);
