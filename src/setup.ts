@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import type { CaptureHarness } from "./harnesses.ts";
-import { backupSetupConfiguration, readSetupConfiguration, writeSetupConfiguration } from "./setup-files.ts";
+import { mutateSetupConfiguration, readSetupConfiguration } from "./setup-files.ts";
 import { SETUP_HARNESSES, setupPath } from "./setup-targets.ts";
 
 export type SetupOptions = { home?: string; command: string };
@@ -16,12 +16,8 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
   const target = setupPath(harness, options.home);
   const command = options.command.trim();
   assertSafeCommand(command);
-  const existing = readSetupConfiguration(target);
-  const next = mergeConfiguration(existing, harness, command, target);
-  if (existing && JSON.stringify(existing) === JSON.stringify(next)) return { harness, path: target, changed: false };
-  if (existing) backupSetupConfiguration(target);
-  writeSetupConfiguration(target, next);
-  return { harness, path: target, changed: true };
+  const changed = mutateSetupConfiguration(target, (existing) => mergeConfiguration(existing, harness, command, target));
+  return { harness, path: target, changed };
 }
 
 export function setupStatus(options: SetupStatusOptions = {}): Record<CaptureHarness, HarnessSetupStatus> {

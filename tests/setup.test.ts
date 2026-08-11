@@ -44,7 +44,7 @@ test("setup leaves invalid owned configuration untouched", () => {
     new RegExp(setupPath.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"), "u"),
   );
   assert.deepEqual(fs.readFileSync(setupPath), original);
-  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)), ["agent-lcm.json"]);
+  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)).sort(), ["agent-lcm.json", "agent-lcm.json.lock.sqlite"]);
 });
 
 test("setup rejects malformed Kiro schema without changing the owned file", () => {
@@ -56,7 +56,7 @@ test("setup rejects malformed Kiro schema without changing the owned file", () =
 
   assert.throws(() => setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" }), /invalid setup configuration/u);
   assert.deepEqual(fs.readFileSync(setupPath), original);
-  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)), ["agent-lcm.json"]);
+  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)).sort(), ["agent-lcm.json", "agent-lcm.json.lock.sqlite"]);
 });
 
 test("setup rejects malformed Codex custom events without changing or backing up the file", () => {
@@ -70,7 +70,7 @@ test("setup rejects malformed Codex custom events without changing or backing up
     /invalid setup configuration/u,
   );
   assert.deepEqual(fs.readFileSync(setupPath), original);
-  assert.deepEqual(fs.readdirSync(clientHome), ["hooks.json"]);
+  assert.deepEqual(fs.readdirSync(clientHome).sort(), ["hooks.json", "hooks.json.lock.sqlite"]);
 });
 
 test("Copilot and VS Code converge on one lower-camel shared user hook configuration", () => {
