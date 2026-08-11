@@ -4,6 +4,7 @@ import { mutateSetupConfiguration, readSetupConfiguration } from "./setup-files.
 import { assertSafeSetupCommand, setupHooksConfigured } from "./setup-hook-status.ts";
 import {
   mergeSetupHooks,
+  removeSetupHooks,
   removeSharedSetupHooks,
   validateSetupHooks,
 } from "./setup-hooks.ts";
@@ -14,6 +15,15 @@ export type SetupReport = {
   readonly harness: CaptureHarness;
   readonly action: "setup";
   readonly status: "complete" | "manual-required";
+  readonly nativeCli: "codex" | "copilot" | null;
+  readonly hooks: { readonly path: string; readonly changed: boolean };
+  readonly guide: string;
+};
+export type RemoveOptions = { readonly home?: string; readonly env?: NodeJS.ProcessEnv };
+export type RemoveReport = {
+  readonly harness: CaptureHarness;
+  readonly action: "remove";
+  readonly status: "complete" | "manual-required" | "shared-retained";
   readonly nativeCli: "codex" | "copilot" | null;
   readonly hooks: { readonly path: string; readonly changed: boolean };
   readonly guide: string;
@@ -33,6 +43,22 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
     harness,
     action: "setup",
     status: native.status === "native-complete" ? "complete" : "manual-required",
+    nativeCli: native.nativeCli,
+    hooks: { path: target, changed },
+    guide: native.guide,
+  };
+}
+
+export function removeHarness(harness: CaptureHarness, options: RemoveOptions = {}): RemoveReport {
+  const target = setupPath(harness, options.home);
+  const existing = readSetupConfiguration(target);
+  validateSetupHooks(harness, existing, target);
+  const native = runHarnessLifecycle(harness, "remove", options.env ? { env: options.env } : {});
+  const changed = removeHooks(harness, target, existing !== undefined);
+  return {
+    harness,
+    action: "remove",
+    status: native.status === "native-complete" ? "complete" : native.status,
     nativeCli: native.nativeCli,
     hooks: { path: target, changed },
     guide: native.guide,
@@ -60,6 +86,13 @@ function updateHooks(
     return mutateSetupConfiguration(target, (existing) => removeSharedSetupHooks(existing ?? {}, harness, target));
   }
   return false;
+}
+
+function removeHooks(harness: CaptureHarness, target: string, targetExists: boolean): boolean {
+  if (harness === "copilot" || harness === "vscode" || !targetExists) return false;
+  return mutateSetupConfiguration(target, (existing) => existing === undefined
+    ? undefined
+    : removeSetupHooks(existing, harness, target));
 }
 
 function readConfigurationForStatus(target: string): Record<string, unknown> | undefined {

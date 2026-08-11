@@ -183,6 +183,55 @@ export function removeSharedSetupHooks(
   return next;
 }
 
+export function removeSetupHooks(
+  configuration: Record<string, unknown>,
+  harness: "codex" | "cursor" | "kiro",
+  target: string,
+): Record<string, unknown> {
+  validateSetupHooks(harness, configuration, target);
+  if (harness === "codex") return removeCodexHooks(configuration);
+  if (harness === "cursor") return removeCursorHooks(configuration);
+  return removeKiroHooks(configuration);
+}
+
+function removeCodexHooks(configuration: Record<string, unknown>): Record<string, unknown> {
+  const next = structuredClone(configuration);
+  if (!isRecord(next.hooks)) return next;
+  for (const event of CODEX_EVENTS) {
+    const selectors = next.hooks[event];
+    if (!Array.isArray(selectors)) continue;
+    for (const selector of selectors) {
+      if (!isRecord(selector) || !Array.isArray(selector.hooks)) continue;
+      selector.hooks = selector.hooks.filter((hook) => isCodexNativeHook(event)
+        ? !isAgentLcmCodexHook(hook, event)
+        : !isRecord(hook) || !isAgentLcmHook(hook, event, "codex"));
+    }
+  }
+  return next;
+}
+
+function removeCursorHooks(configuration: Record<string, unknown>): Record<string, unknown> {
+  const next = structuredClone(configuration);
+  if (!isRecord(next.hooks)) return next;
+  for (const [event] of setupEvents("cursor")) {
+    const hooks = next.hooks[event];
+    if (Array.isArray(hooks)) {
+      next.hooks[event] = hooks.filter((hook) => !isRecord(hook) || !isAgentLcmHook(hook, event, "cursor"));
+    }
+  }
+  return next;
+}
+
+function removeKiroHooks(configuration: Record<string, unknown>): Record<string, unknown> {
+  const next = structuredClone(configuration);
+  if (!Array.isArray(next.hooks)) return next;
+  next.hooks = next.hooks.filter((hook) => !isKiroHook(hook)
+    || !eventsFor("kiro").some((event) => hook.name === `agent-lcm-kiro-${event}`
+      && hook.trigger === event
+      && isAgentLcmHook(hook.action, event, "kiro")));
+  return next;
+}
+
 function removeSharedHooks(
   hooksByEvent: Record<string, unknown>,
   harness: "copilot" | "vscode",

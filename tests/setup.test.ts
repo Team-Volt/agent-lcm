@@ -4,10 +4,122 @@ import path from "node:path";
 import test from "node:test";
 
 import { writeSetupConfiguration } from "../src/setup-files.ts";
-import { setupHarness, setupStatus } from "../src/setup.ts";
+import { removeHarness, setupHarness, setupStatus } from "../src/setup.ts";
 import { assertCliOk, runCli, tempHome } from "./helpers.ts";
 
 const GUIDE_ROOT = "https://github.com/Team-Volt/agent-lcm/blob/main/docs/install";
+
+test("remove Codex deletes only exact owned hooks and is repeatable", (t) => {
+  const fake = fakeSetupCli(t, "codex");
+  const home = tempHome("agent-lcm-remove-codex-");
+  const target = path.join(home, "hooks.json");
+  const original = JSON.stringify({ owner: "user", hooks: {
+    SessionStart: [{ matcher: "*", hooks: [
+      { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness codex SessionStart' },
+      { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness codex SessionStart extra', keep: true },
+    ] }],
+    PreToolUse: [{ matcher: ".*", hooks: [
+      { type: "command", command: 'node "/old/bin/agent-lcm" hook PreToolUse' },
+      { type: "command", command: 'node "/old/bin/agent-lcm" hook PostCompact', keep: true },
+    ] }],
+    CustomEvent: [{ hooks: [{ type: "command", command: "keep-custom" }] }],
+  } });
+  fs.writeFileSync(target, original);
+
+  const first = removeHarness("codex", { home, env: fake.env });
+  const second = removeHarness("codex", { home, env: fake.env });
+
+  assert.deepEqual(first, {
+    harness: "codex",
+    action: "remove",
+    status: "complete",
+    nativeCli: "codex",
+    hooks: { path: target, changed: true },
+    guide: `${GUIDE_ROOT}/codex.md`,
+  });
+  assert.equal(second.hooks.changed, false);
+  const configuration = JSON.parse(fs.readFileSync(target, "utf8"));
+  assert.deepEqual(configuration, { owner: "user", hooks: {
+    SessionStart: [{ matcher: "*", hooks: [
+      { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness codex SessionStart extra', keep: true },
+    ] }],
+    PreToolUse: [{ matcher: ".*", hooks: [
+      { type: "command", command: 'node "/old/bin/agent-lcm" hook PostCompact', keep: true },
+    ] }],
+    CustomEvent: [{ hooks: [{ type: "command", command: "keep-custom" }] }],
+  } });
+  assert.deepEqual(readSetupCalls(fake.log), [
+    ["plugin", "list"],
+    ["plugin", "remove", "agent-lcm@agent-lcm"],
+    ["plugin", "list"],
+    ["plugin", "remove", "agent-lcm@agent-lcm"],
+  ]);
+  assert.equal(fs.readdirSync(home).filter((name) => name.startsWith("hooks-pre-agent-lcm-")).length, 1);
+  assert.equal(fs.readFileSync(path.join(home, fs.readdirSync(home).find((name) => name.startsWith("hooks-pre-agent-lcm-")) ?? ""), "utf8"), original);
+});
+
+test("remove Cursor and Kiro preserves adversarial near matches", () => {
+  const cursorHome = tempHome("agent-lcm-remove-cursor-");
+  const cursorTarget = path.join(cursorHome, "hooks.json");
+  fs.writeFileSync(cursorTarget, JSON.stringify({ version: 1, hooks: {
+    sessionStart: [
+      { command: 'node "/old/bin/agent-lcm" capture --harness cursor SessionStart' },
+      { command: 'node "/old/bin/agent-lcm" capture --harness codex SessionStart', keep: true },
+    ],
+  } }));
+  const cursor = removeHarness("cursor", { home: cursorHome });
+  assert.equal(cursor.status, "manual-required");
+  assert.equal(cursor.hooks.changed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(cursorTarget, "utf8")).hooks.sessionStart, [
+    { command: 'node "/old/bin/agent-lcm" capture --harness codex SessionStart', keep: true },
+  ]);
+
+  const kiroHome = tempHome("agent-lcm-remove-kiro-");
+  const kiroTarget = path.join(kiroHome, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(kiroTarget), { recursive: true });
+  fs.writeFileSync(kiroTarget, JSON.stringify({ version: "v1", hooks: [
+    { name: "agent-lcm-kiro-SessionStart", trigger: "SessionStart", action: { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness kiro SessionStart' } },
+    { name: "agent-lcm-kiro-SessionStart", trigger: "Stop", action: { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness kiro SessionStart' }, keep: true },
+    { name: "agent-lcm-kiro-Stop", trigger: "Stop", action: { type: "command", command: 'node "/old/bin/agent-lcm" capture --harness kiro Stop extra' }, keep: true },
+  ] }));
+  const kiro = removeHarness("kiro", { home: kiroHome });
+  assert.equal(kiro.status, "manual-required");
+  assert.equal(kiro.hooks.changed, true);
+  assert.equal(JSON.parse(fs.readFileSync(kiroTarget, "utf8")).hooks.length, 2);
+});
+
+test("remove shared harnesses retains byte-identical resources without spawning", (t) => {
+  const fake = fakeSetupCli(t, "copilot");
+  const home = tempHome("agent-lcm-remove-shared-");
+  const target = path.join(home, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const original = Buffer.from('{"version":1,"hooks":{"sessionStart":[{"command":"node \\"/old/bin/agent-lcm\\" capture --harness auto sessionStart"}]}}\n');
+  fs.writeFileSync(target, original);
+
+  const report = removeHarness("vscode", { home, env: fake.env });
+
+  assert.equal(report.status, "shared-retained");
+  assert.deepEqual(report.hooks, { path: target, changed: false });
+  assert.deepEqual(fs.readFileSync(target), original);
+  assert.equal(fs.existsSync(fake.log), false);
+});
+
+test("remove validates before native work and missing targets stay missing", (t) => {
+  const fake = fakeSetupCli(t, "codex");
+  const invalidHome = tempHome("agent-lcm-remove-invalid-");
+  const invalidTarget = path.join(invalidHome, "hooks.json");
+  const original = Buffer.from('{"hooks":{"SessionStart":"invalid"}}\n');
+  fs.writeFileSync(invalidTarget, original);
+  assert.throws(() => removeHarness("codex", { home: invalidHome, env: fake.env }), /invalid setup configuration/u);
+  assert.deepEqual(fs.readFileSync(invalidTarget), original);
+  assert.equal(fs.existsSync(fake.log), false);
+  assert.deepEqual(fs.readdirSync(invalidHome), ["hooks.json"]);
+
+  const missingHome = tempHome("agent-lcm-remove-missing-");
+  const missing = removeHarness("kiro", { home: missingHome });
+  assert.equal(missing.hooks.changed, false);
+  assert.equal(fs.existsSync(path.join(missingHome, "hooks")), false);
+});
 
 test("setup validates an existing hook schema before starting the native CLI", (t) => {
   // Given: malformed Codex hooks and a fake CLI that records every process start.

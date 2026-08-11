@@ -19,13 +19,14 @@ export class SetupFileLockTimeoutError extends Error {
 
 export function mutateSetupConfiguration(
   target: string,
-  transform: (configuration: Record<string, unknown> | undefined) => Record<string, unknown>,
+  transform: (configuration: Record<string, unknown> | undefined) => Record<string, unknown> | undefined,
 ): boolean {
   ensureSetupDirectory(path.dirname(target));
   return withSetupFileLock(target, () => {
     const current = readSetupFile(target);
     const existing = current ? parseSetupConfiguration(current, target) : undefined;
     const next = transform(existing);
+    if (next === undefined) return false;
     if (existing && JSON.stringify(existing) === JSON.stringify(next)) return false;
     if (current) backupSetupBytes(target, current);
     writeSetupBytes(target, Buffer.from(`${JSON.stringify(next, null, 2)}\n`));
