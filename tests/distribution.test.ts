@@ -36,7 +36,9 @@ test("the npm package contains the complete plugin and no development files", (t
     "plugin.json",
     "skills/lcm-recall/SKILL.md",
     "dist/cli.js",
+    "dist/copilot-plugin.js",
     "dist/setup-adapters.js",
+    "dist/setup-file-worker.js",
     "dist/setup-hook-status.js",
     "dist/setup-hooks.js",
   ]) assert.ok(names.includes(required), `missing ${required}`);

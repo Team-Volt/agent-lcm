@@ -11,7 +11,7 @@ export function setupHarness(harness, options) {
     const existing = readSetupConfiguration(target);
     validateSetupHooks(harness, existing, target);
     ensureSetupDirectory(path.dirname(target));
-    const native = runHarnessLifecycle(harness, "setup", options.env ? { env: options.env } : {});
+    const native = runHarnessLifecycle(harness, "setup", options.env ? { env: options.env, command } : { command });
     const changed = updateHooks(harness, native.status, target, command, existing !== undefined);
     return {
         harness,

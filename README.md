@@ -127,8 +127,8 @@ agent-lcm setup copilot
 agent-lcm setup kiro
 ```
 
-Run only the commands for the harnesses you use. The manual VS Code and GitHub
-Copilot fallback shares `~/.copilot/hooks/agent-lcm.json`; native plugin hooks
+Run only the commands for the harnesses you use. A legacy VS Code and GitHub
+Copilot fallback may share `~/.copilot/hooks/agent-lcm.json`; native plugin hooks
 are loaded from the plugin store instead of being duplicated there. Setup
 preserves unrelated hook entries, is safe to run again, and writes private
 files containing the absolute Agent LCM command when manual wiring is needed.
@@ -168,8 +168,9 @@ Native lifecycle support is limited to the commands that each client documents:
   directory as a local marketplace, then runs `codex plugin add
   agent-lcm@agent-lcm`. Removal runs `codex plugin remove agent-lcm@agent-lcm`.
 - GitHub Copilot CLI and VS Code share the Copilot plugin store. Setup probes
-  with `copilot plugin list` and installs the same local Agent LCM package
-  directory. `agent-lcm remove copilot` and `agent-lcm remove vscode`
+  with `copilot plugin list`, builds a private native package with absolute
+  Agent LCM hook and MCP commands, and installs it with `copilot plugin
+  install`. `agent-lcm remove copilot` and `agent-lcm remove vscode`
   return `shared-retained` without uninstalling that shared plugin; use the
   documented Copilot uninstall command only after reviewing both clients.
 - Cursor and Kiro are probed with `cursor-agent --version` and `kiro-cli
@@ -179,11 +180,12 @@ Native lifecycle support is limited to the commands that each client documents:
 
 Setup validates an existing hook file before invoking a native CLI, preserves
 unrelated entries, and changes only exact Agent LCM-owned registrations. It
-backs up a changed file as `*-pre-agent-lcm-*.json`, holds an atomic lock
-directory at `<target>.lock` for at most ten seconds, and publishes through a
-unique `wx` temporary file, `fsync`, and rename. Symlinked directory
-components, lock paths, targets, and non-regular files are refused. Hook
-commands must be absolute paths without shell metacharacters. These rules make
+backs up a changed file as `*-pre-agent-lcm-*.json` and holds an atomic lock
+directory at `<target>.lock` for at most ten seconds. A helper process anchors
+its working directory to the checked target directory before it reads, backs
+up, or publishes through a unique `wx` temporary file, `fsync`, and rename.
+Symlinked directory components, lock paths, targets, and non-regular files are
+refused. Hook commands must be absolute paths without shell metacharacters. These rules make
 repeated setup and removal safe while avoiding a second user-level hook copy
 after native installation.
 

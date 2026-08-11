@@ -8,28 +8,30 @@ Run:
 agent-lcm setup copilot
 ```
 
-This runs the Copilot native lifecycle against the installed Agent LCM package
-directory when the CLI is available and its plugin probe succeeds. Copilot CLI
-auto-loads the bundled hooks, so setup does not add
-duplicate shared hooks after native installation. The manual fallback path is
-`~/.copilot/hooks/agent-lcm.json`; setup preserves an existing fallback when
+When the CLI is available, setup builds a private Copilot-format package with
+the absolute installed Agent LCM command, then runs `copilot plugin install`.
+The package includes the recall skill, capture hooks, and MCP server. Copilot
+CLI copies it into its plugin store, so setup removes the temporary source
+after installation. Setup does not add duplicate shared hooks. The legacy
+fallback path is `~/.copilot/hooks/agent-lcm.json`; setup preserves an existing fallback when
 native installation is unavailable, adds no new duplicate, and reports
 `manual-required` with this guide.
 
 ## Native install and inspection
 
-Use the documented Copilot CLI commands with the local directory that contains
-Agent LCM's `plugin.json`. For a global npm install, `npm root --global` prints
-the `<global-node-modules>` part of this path:
+If setup reports that `copilot` is missing, install Copilot CLI using GitHub's
+[official install guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli),
+then rerun setup:
 
 ```sh
-copilot plugin install <global-node-modules>/@team-volt/agent-lcm
+agent-lcm setup copilot
 copilot plugin list
 ```
 
-Do not type the angle-bracket placeholder as written. If you run Agent LCM from
-a source checkout, use that checkout's root instead. The list command shows
-installed plugins. See the [Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference) for the command set and plugin specification.
+Do not install the Agent LCM package root directly. Copilot-format plugins do
+not define a plugin-root variable for hook commands, so setup must write the
+absolute installed command into a native package first. The list command shows
+the installed plugin. See the [Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference) for the supported command set.
 
 The Copilot CLI reference does not require a restart after installation. If a
 new plugin is not visible, start a new Copilot session as troubleshooting and

@@ -41,6 +41,11 @@ docs/                       architecture and troubleshooting
   `shared-retained` use exit `2`; command errors use exit `1`.
 - Copilot and VS Code share the native plugin store. Single-harness removal
   must retain that plugin and leave any legacy fallback hook file unchanged.
+- Copilot-format plugins have no plugin-root command variable. Setup must
+  install the generated native package whose hook and MCP commands use the
+  absolute Agent LCM executable.
+- Setup-file mutation runs through the directory-anchored helper. Do not
+  replace it with path checks followed by later path-based writes.
 - Validate existing setup JSON before native work. Preserve unrelated and
   near-matching hooks, reject symlinked or non-regular targets, and publish
   changes under an atomic `<target>.lock` directory through a unique fsynced

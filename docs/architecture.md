@@ -32,8 +32,9 @@ incompatible protocol.
 plugin commands before updating legacy capture hooks. Codex uses `codex plugin
 list`, adds the installed package directory as a local marketplace, then runs
 `codex plugin add agent-lcm@agent-lcm`. Copilot CLI and VS Code use the shared
-Copilot store and install that same local package directory after `copilot
-plugin list` succeeds.
+Copilot store. Setup generates a private Copilot-format package whose hooks and
+MCP config contain the absolute installed Agent LCM command, then installs it
+after `copilot plugin list` succeeds.
 Cursor and Kiro run version-only probes for `cursor-agent` and `kiro-cli`.
 Their Marketplace or Powers steps remain manual, so their native result is
 `manual-required`.
@@ -51,10 +52,12 @@ near-matching commands remain untouched; only an exact harness/event/command
 registration is changed.
 
 Setup files use an atomic `<target>.lock` directory (bounded to ten seconds).
-Publication writes a unique `wx` temporary file with
-restrictive permissions, fsyncs it, renames it, and fsyncs the parent directory.
-Symlinked or non-regular targets are refused, hook commands must be absolute and
-shell-safe, and changed files receive a collision-safe `-pre-agent-lcm-` backup.
+A short-lived helper changes into the checked target directory and verifies its
+device and inode before it reads, backs up, or publishes. Publication writes a
+unique `wx` temporary file with restrictive permissions, fsyncs it, renames it,
+and fsyncs the anchored directory. Symlinked or non-regular targets are
+refused, hook commands must be absolute and shell-safe, and changed files
+receive a collision-safe `-pre-agent-lcm-` backup.
 
 ## Capture and retrieval flow
 

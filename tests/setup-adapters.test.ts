@@ -47,8 +47,9 @@ test("Copilot and VS Code setup send the exact Copilot argv", (t) => {
   const fake = fakeCli(t, "copilot");
 
   // When: Agent LCM sets up Copilot and VS Code.
-  const copilot = runHarnessLifecycle("copilot", "setup", { env: fake.env });
-  const vscode = runHarnessLifecycle("vscode", "setup", { env: fake.env });
+  const command = "/opt/agent-lcm/bin/agent-lcm";
+  const copilot = runHarnessLifecycle("copilot", "setup", { env: fake.env, command });
+  const vscode = runHarnessLifecycle("vscode", "setup", { env: fake.env, command });
 
   // Then: both use the shared Copilot store and keep their own guide.
   assert.deepEqual(copilot, {
@@ -65,12 +66,31 @@ test("Copilot and VS Code setup send the exact Copilot argv", (t) => {
     nativeCli: "copilot",
     guide: `${GUIDE_ROOT}/vscode.md`,
   });
-  assert.deepEqual(readCalls(fake.log), [
+  const calls = readCalls(fake.log);
+  assert.deepEqual(calls.map((argv) => argv.slice(0, 2)), [
     ["plugin", "list"],
-    ["plugin", "install", PACKAGE_ROOT],
+    ["plugin", "install"],
     ["plugin", "list"],
-    ["plugin", "install", PACKAGE_ROOT],
+    ["plugin", "install"],
   ]);
+  for (const argv of calls.filter((entry) => entry[1] === "install")) {
+    assert.equal(argv.length, 3);
+    assert.equal(path.basename(argv[2] ?? ""), "agent-lcm");
+    assert.equal(fs.existsSync(argv[2] ?? ""), false);
+  }
+  for (const snapshot of readPluginSnapshots(fake.pluginLog)) {
+    assert.equal(snapshot.plugin.hooks, "hooks.json");
+    assert.equal(snapshot.plugin.mcpServers, ".mcp.json");
+    assert.equal(snapshot.skill, true);
+    assert.equal(JSON.stringify(snapshot.hooks).includes("${PLUGIN_ROOT}"), false);
+    assert.equal(JSON.stringify(snapshot.mcp).includes("${PLUGIN_ROOT}"), false);
+    assert.match(JSON.stringify(snapshot.hooks), new RegExp(command, "u"));
+    assert.deepEqual(snapshot.mcp.mcpServers["agent-lcm"], {
+      type: "stdio",
+      command: "node",
+      args: [command, "mcp"],
+    });
+  }
 });
 
 test("manual-required outcomes probe only documented harness version commands", (t) => {
@@ -131,6 +151,20 @@ test("a failing native probe is a command error, not an unavailable CLI", (t) =>
     return true;
   });
   assert.deepEqual(readCalls(fake.log), [["plugin", "list"]]);
+});
+
+test("a failing installed manual CLI probe is a command error", (t) => {
+  const fake = fakeCli(t, "kiro-cli", ["--version"]);
+
+  assert.throws(() => runHarnessLifecycle("kiro", "setup", { env: fake.env }), (error: unknown) => {
+    assert.ok(error instanceof NativeLifecycleCommandError);
+    assert.equal(error.executable, "kiro-cli");
+    assert.deepEqual(error.argv, ["--version"]);
+    assert.equal(error.status, 23);
+    assert.equal(error.stderr, "suppressed");
+    return true;
+  });
+  assert.deepEqual(readCalls(fake.log), [["--version"]]);
 });
 
 test("a native probe permission error is not treated as a missing CLI", { skip: process.platform === "win32" }, (t) => {
@@ -203,20 +237,34 @@ function fakeCli(
   t: test.TestContext,
   name: "codex" | "copilot" | "cursor-agent" | "kiro-cli",
   fails?: readonly string[],
-): { readonly env: NodeJS.ProcessEnv; readonly log: string } {
+): { readonly env: NodeJS.ProcessEnv; readonly log: string; readonly pluginLog: string } {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-fake-cli-"));
   const log = path.join(bin, "calls.jsonl");
+  const pluginLog = path.join(bin, "plugins.jsonl");
   const failure = fails ? JSON.stringify(fails) : "";
-  const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(args) + "\\n");\nif (${JSON.stringify(failure)} && JSON.stringify(args) === ${JSON.stringify(failure)}) { process.stderr.write("mutation failed\\n"); process.exit(23); }\n`;
+  const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst path = require("node:path");\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(args) + "\\n");\nif (args[0] === "plugin" && args[1] === "install" && args[2]) { const root = args[2]; fs.appendFileSync(process.env.AGENT_LCM_FAKE_PLUGIN_LOG, JSON.stringify({ plugin: JSON.parse(fs.readFileSync(path.join(root, "plugin.json"), "utf8")), hooks: JSON.parse(fs.readFileSync(path.join(root, "hooks.json"), "utf8")), mcp: JSON.parse(fs.readFileSync(path.join(root, ".mcp.json"), "utf8")), skill: fs.existsSync(path.join(root, "skills/lcm-recall/SKILL.md")) }) + "\\n"); }\nif (${JSON.stringify(failure)} && JSON.stringify(args) === ${JSON.stringify(failure)}) { process.stderr.write("mutation failed\\n"); process.exit(23); }\n`;
   fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
   t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
   return {
     env: {
       AGENT_LCM_FAKE_LOG: log,
+      AGENT_LCM_FAKE_PLUGIN_LOG: pluginLog,
       PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
     },
     log,
+    pluginLog,
   };
+}
+
+type PluginSnapshot = {
+  readonly plugin: Record<string, unknown>;
+  readonly hooks: Record<string, unknown>;
+  readonly mcp: { readonly mcpServers: Record<string, unknown> };
+  readonly skill: boolean;
+};
+
+function readPluginSnapshots(log: string): PluginSnapshot[] {
+  return fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as PluginSnapshot);
 }
 
 function readCalls(log: string): string[][] {

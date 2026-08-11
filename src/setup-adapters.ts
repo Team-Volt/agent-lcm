@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { withCopilotPluginSource } from "./copilot-plugin.ts";
 import type { CaptureHarness } from "./harnesses.ts";
 
 export type HarnessLifecycleAction = "setup" | "remove";
@@ -17,13 +18,13 @@ export type HarnessLifecycleOutcome = {
 
 export class NativeLifecycleCommandError extends Error {
   readonly name = "NativeLifecycleCommandError";
-  readonly executable: "codex" | "copilot";
+  readonly executable: HarnessCli;
   readonly argv: readonly string[];
   readonly status: number | null;
   readonly stderr: string;
 
   constructor(
-    executable: "codex" | "copilot",
+    executable: HarnessCli,
     argv: readonly string[],
     status: number | null,
     stderr: string,
@@ -50,7 +51,6 @@ type CopilotLifecycleAdapter = {
   readonly executable: "copilot";
   readonly guide: string;
   readonly probeArgv: readonly string[];
-  readonly setupArgv: readonly (readonly string[])[];
 };
 
 type ManualLifecycleAdapter = {
@@ -84,14 +84,12 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
     executable: "copilot",
     guide: `${GUIDE_ROOT}/vscode.md`,
     probeArgv: ["plugin", "list"],
-    setupArgv: [["plugin", "install", PACKAGE_ROOT]],
   },
   copilot: {
     kind: "copilot",
     executable: "copilot",
     guide: `${GUIDE_ROOT}/copilot.md`,
     probeArgv: ["plugin", "list"],
-    setupArgv: [["plugin", "install", PACKAGE_ROOT]],
   },
   kiro: { kind: "manual", executable: "kiro-cli", probeArgv: ["--version"], guide: `${GUIDE_ROOT}/kiro.md` },
 } satisfies Record<CaptureHarness, HarnessLifecycleAdapter>;
@@ -99,7 +97,7 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
 export function runHarnessLifecycle(
   harness: CaptureHarness,
   action: HarnessLifecycleAction,
-  options: { readonly env?: NodeJS.ProcessEnv } = {},
+  options: { readonly env?: NodeJS.ProcessEnv; readonly command?: string } = {},
 ): HarnessLifecycleOutcome {
   const adapter = HARNESS_LIFECYCLE_ADAPTERS[harness];
   switch (adapter.kind) {
@@ -107,7 +105,7 @@ export function runHarnessLifecycle(
       return manualOutcome(harness, action, adapter, options.env);
     case "copilot":
       if (action === "remove") return outcome(harness, action, "shared-retained", null, adapter.guide);
-      return runNative(harness, action, adapter, options.env);
+      return runNative(harness, action, adapter, options.env, options.command);
     case "codex":
       return runNative(harness, action, adapter, options.env);
     default:
@@ -120,6 +118,7 @@ function runNative(
   action: HarnessLifecycleAction,
   adapter: CodexLifecycleAdapter | CopilotLifecycleAdapter,
   env: NodeJS.ProcessEnv | undefined,
+  command?: string,
 ): HarnessLifecycleOutcome {
   const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
   if (isEnoent(probe.error)) {
@@ -129,10 +128,16 @@ function runNative(
     throw new NativeLifecycleCommandError(adapter.executable, adapter.probeArgv, probe.status, SUPPRESSED_STDERR);
   }
 
-  const commands = action === "setup"
-    ? adapter.setupArgv
-    : adapter.kind === "codex" ? [adapter.removeArgv] : [];
-  for (const argv of commands) runNativeCommand(adapter.executable, argv, env);
+  if (action === "setup" && adapter.kind === "copilot") {
+    withCopilotPluginSource(command ?? path.join(PACKAGE_ROOT, "bin", "agent-lcm"), (source) => {
+      runNativeCommand(adapter.executable, ["plugin", "install", source], env);
+    });
+  } else if (adapter.kind === "codex") {
+    const commands = action === "setup" ? adapter.setupArgv : [adapter.removeArgv];
+    for (const argv of commands) runNativeCommand(adapter.executable, argv, env);
+  } else {
+    throw new Error("Copilot removal must retain the shared plugin.");
+  }
   return outcome(harness, action, "native-complete", adapter.executable, adapter.guide);
 }
 
@@ -143,8 +148,11 @@ function manualOutcome(
   env: NodeJS.ProcessEnv | undefined,
 ): HarnessLifecycleOutcome {
   const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-  const nativeCli = isEnoent(probe.error) || probe.status !== 0 ? null : adapter.executable;
-  return outcome(harness, action, "manual-required", nativeCli, adapter.guide);
+  if (isEnoent(probe.error)) return outcome(harness, action, "manual-required", null, adapter.guide);
+  if (probe.error !== undefined || probe.status !== 0) {
+    throw new NativeLifecycleCommandError(adapter.executable, adapter.probeArgv, probe.status, SUPPRESSED_STDERR);
+  }
+  return outcome(harness, action, "manual-required", adapter.executable, adapter.guide);
 }
 
 function runNativeCommand(executable: "codex" | "copilot", argv: readonly string[], env: NodeJS.ProcessEnv | undefined): void {

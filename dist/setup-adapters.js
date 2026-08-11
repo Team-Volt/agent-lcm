@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { withCopilotPluginSource } from "./copilot-plugin.js";
 export class NativeLifecycleCommandError extends Error {
     name = "NativeLifecycleCommandError";
     executable;
@@ -36,14 +37,12 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
         executable: "copilot",
         guide: `${GUIDE_ROOT}/vscode.md`,
         probeArgv: ["plugin", "list"],
-        setupArgv: [["plugin", "install", PACKAGE_ROOT]],
     },
     copilot: {
         kind: "copilot",
         executable: "copilot",
         guide: `${GUIDE_ROOT}/copilot.md`,
         probeArgv: ["plugin", "list"],
-        setupArgv: [["plugin", "install", PACKAGE_ROOT]],
     },
     kiro: { kind: "manual", executable: "kiro-cli", probeArgv: ["--version"], guide: `${GUIDE_ROOT}/kiro.md` },
 };
@@ -55,14 +54,14 @@ export function runHarnessLifecycle(harness, action, options = {}) {
         case "copilot":
             if (action === "remove")
                 return outcome(harness, action, "shared-retained", null, adapter.guide);
-            return runNative(harness, action, adapter, options.env);
+            return runNative(harness, action, adapter, options.env, options.command);
         case "codex":
             return runNative(harness, action, adapter, options.env);
         default:
             return assertNever(adapter);
     }
 }
-function runNative(harness, action, adapter, env) {
+function runNative(harness, action, adapter, env, command) {
     const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
     if (isEnoent(probe.error)) {
         return outcome(harness, action, "manual-required", null, adapter.guide);
@@ -70,17 +69,29 @@ function runNative(harness, action, adapter, env) {
     if (probe.error !== undefined || probe.status !== 0) {
         throw new NativeLifecycleCommandError(adapter.executable, adapter.probeArgv, probe.status, SUPPRESSED_STDERR);
     }
-    const commands = action === "setup"
-        ? adapter.setupArgv
-        : adapter.kind === "codex" ? [adapter.removeArgv] : [];
-    for (const argv of commands)
-        runNativeCommand(adapter.executable, argv, env);
+    if (action === "setup" && adapter.kind === "copilot") {
+        withCopilotPluginSource(command ?? path.join(PACKAGE_ROOT, "bin", "agent-lcm"), (source) => {
+            runNativeCommand(adapter.executable, ["plugin", "install", source], env);
+        });
+    }
+    else if (adapter.kind === "codex") {
+        const commands = action === "setup" ? adapter.setupArgv : [adapter.removeArgv];
+        for (const argv of commands)
+            runNativeCommand(adapter.executable, argv, env);
+    }
+    else {
+        throw new Error("Copilot removal must retain the shared plugin.");
+    }
     return outcome(harness, action, "native-complete", adapter.executable, adapter.guide);
 }
 function manualOutcome(harness, action, adapter, env) {
     const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-    const nativeCli = isEnoent(probe.error) || probe.status !== 0 ? null : adapter.executable;
-    return outcome(harness, action, "manual-required", nativeCli, adapter.guide);
+    if (isEnoent(probe.error))
+        return outcome(harness, action, "manual-required", null, adapter.guide);
+    if (probe.error !== undefined || probe.status !== 0) {
+        throw new NativeLifecycleCommandError(adapter.executable, adapter.probeArgv, probe.status, SUPPRESSED_STDERR);
+    }
+    return outcome(harness, action, "manual-required", adapter.executable, adapter.guide);
 }
 function runNativeCommand(executable, argv, env) {
     const result = spawnSync(executable, argv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });

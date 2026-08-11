@@ -42,6 +42,11 @@ framework, fixture library, or custom runner.
 - Fake `codex`, `copilot`, `cursor-agent`, and `kiro-cli` executables must record
   argv and fail on demand; use them to prove the exact documented command
   vectors without touching a user's installed clients.
+- Copilot setup tests must inspect the generated package during the fake
+  install, assert its stable `agent-lcm` source basename and absolute hook/MCP
+  command, and then confirm the temporary source was removed.
+- Setup-file race tests may inject faults into the helper only through a
+  disposable child-process preload; never add a production test bypass.
 - Use `runMcp()` or `runCli(["mcp"], ...)` with newline or framed JSON to test
   the real stdio MCP server. Assert response IDs, errors, and continuation
   after malformed input; do not call dispatch functions directly for protocol

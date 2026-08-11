@@ -44,9 +44,10 @@
 ## Harness setup safety
 
 - Probe and invoke only documented commands: Codex uses `codex plugin`; Copilot and VS Code use the shared `copilot plugin` store; Cursor and Kiro use version-only probes and keep plugin changes manual.
+- Generate the Copilot-format package at setup time so hooks and MCP use the validated absolute Agent LCM command. Keep its source basename `agent-lcm` so repeat direct installs update one native plugin.
 - Validate existing setup JSON before starting a native process. Match owned hooks by harness, event, and command shape; preserve unrelated and near-matching entries.
-- Keep setup-file writes under a bounded atomic `<target>.lock` directory. Open targets through descriptor-bound no-follow checks; never validate by path and then read or chmod that path. Refuse symlinked directory components, lock paths, targets, and non-regular files. Use a unique `wx` temporary file, restrictive permissions, fsync, rename, and parent-directory fsync. Backups use the collision-safe `-pre-agent-lcm-` name.
-- Install native plugins from the current package directory, never from a mutable remote ref. Treat only `ENOENT` as an unavailable CLI; all other native probe or command failures must stop before hook mutation and must not echo client stderr.
+- Keep setup-file reads, backups, locks, and publication inside the helper process anchored to the validated target directory. A later path identity check does not make a path-based write safe. Refuse symlinked directory components, lock paths, targets, and non-regular files. Use a unique `wx` temporary file, restrictive permissions, fsync, rename, and directory fsync. Backups use the collision-safe `-pre-agent-lcm-` name.
+- Build native plugin sources only from the current local package, never from a mutable remote ref. Treat only `ENOENT` as an unavailable CLI; all other native probe or command failures must stop before hook mutation and must not echo client stderr.
 - Require an absolute hook binary path and reject shell metacharacters before writing configuration.
 - Never uninstall the shared Copilot plugin for a single `copilot` or `vscode` removal; report `shared-retained` instead.
 - `setup status` reports legacy/setup-managed `hooksConfigured` state only. Doctor must report native Copilot/VS Code health as unknown unless it has direct native evidence; it must not recommend setup from a missing legacy hook file.

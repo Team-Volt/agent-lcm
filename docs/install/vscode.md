@@ -8,10 +8,11 @@ Run:
 agent-lcm setup vscode
 ```
 
-This runs the Copilot native lifecycle against the installed Agent LCM package
-directory when the CLI is available and its plugin probe succeeds. VS Code
-auto-loads hooks from the Copilot plugin store, so setup
-does not add duplicate shared hooks after native installation. The manual
+When Copilot CLI is available, setup builds a private Copilot-format package
+with the absolute installed Agent LCM command and installs it into the shared
+plugin store. The package includes the recall skill, capture hooks, and MCP
+server. VS Code discovers that store, so setup does not add duplicate shared
+hooks after native installation. The legacy
 fallback path is `~/.copilot/hooks/agent-lcm.json`; setup preserves an existing
 fallback when native installation is unavailable, adds no new duplicate, and
 reports `manual-required` with this guide.
@@ -19,22 +20,20 @@ reports `manual-required` with this guide.
 ## Native install and inspection
 
 VS Code automatically discovers plugins installed by Copilot CLI from
-`~/.copilot/installed-plugins/`. To install through that shared store, use the
-local directory that contains Agent LCM's `plugin.json`. For a global npm
-install, `npm root --global` prints the `<global-node-modules>` part:
+`~/.copilot/installed-plugins/`. If setup reports that `copilot` is missing,
+install Copilot CLI using GitHub's [official install guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli),
+then rerun:
 
 ```sh
-copilot plugin install <global-node-modules>/@team-volt/agent-lcm
+agent-lcm setup vscode
 copilot plugin list
 ```
 
-Do not type the angle-bracket placeholder as written. If you run Agent LCM from
-a source checkout, use that checkout's root instead.
-
-You can install from the VS Code UI instead. Open Extensions and search for
-`@agentPlugins`, or run `Chat: Install Plugin From Source` from the Command
-Palette and enter `https://github.com/Team-Volt/agent-lcm`. Inspect the result in
-the Agent Plugins - Installed view. See the [VS Code agent plugin guide](https://code.visualstudio.com/docs/agent-customization/agent-plugins).
+Do not install the Agent LCM package root directly from the VS Code command
+palette. Its portable manifest cannot hold the absolute local command that the
+Copilot-format hook and MCP files need. Setup creates that native package. You
+can inspect, enable, disable, or uninstall the installed package in VS Code's
+Agent Plugins view. See the [VS Code agent plugin guide](https://code.visualstudio.com/docs/agent-customization/agent-plugins).
 
 If VS Code asks you to trust a new marketplace or repository, review the source
 before confirming. The official guide does not require a restart. If the plugin
