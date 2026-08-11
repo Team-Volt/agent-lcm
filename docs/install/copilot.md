@@ -35,6 +35,10 @@ The Copilot CLI reference does not require a restart after installation. If a
 new plugin is not visible, start a new Copilot session as troubleshooting and
 run `copilot plugin list` again.
 
+`agent-lcm setup status` reports legacy `hooksConfigured` state, not live
+native plugin health. `false` is expected after a successful native install;
+use `copilot plugin list` for the native check.
+
 > Warning: GitHub Copilot CLI and VS Code share the Copilot plugin store and the hook file `~/.copilot/hooks/agent-lcm.json`. A deliberate native uninstall affects both harnesses. Do not uninstall the shared plugin when you mean to remove only Copilot CLI.
 
 ## Remove Agent LCM

@@ -57,6 +57,89 @@ test("setup refuses a symlinked parent directory", { skip: process.platform === 
   assert.deepEqual(fs.readdirSync(victim), []);
 });
 
+test("a lock-path swap cannot change a symlink victim", { skip: process.platform === "win32" }, () => {
+  const home = tempHome("agent-lcm-setup-lock-race-");
+  const target = path.join(home, "hooks.json");
+  const lock = `${target}.lock.sqlite`;
+  const victim = path.join(home, "victim.sqlite");
+  fs.writeFileSync(lock, "");
+  fs.writeFileSync(victim, "");
+  fs.chmodSync(victim, 0o644);
+  const originalOpen = fs.openSync;
+  let lockOpens = 0;
+  const swappedOpen = ((candidate: fs.PathLike, flags: string | number, mode?: fs.Mode) => {
+    if (candidate.toString() === lock && (lockOpens += 1) === 2) {
+      fs.unlinkSync(lock);
+      fs.symlinkSync(victim, lock);
+    }
+    return originalOpen(candidate, flags, mode);
+  }) as typeof fs.openSync;
+  Object.defineProperty(fs, "openSync", { configurable: true, value: swappedOpen });
+  try {
+    assert.throws(() => mutateSetupConfiguration(target, () => ({ hooks: {} })), /lock (?:path changed|symlink)/u);
+  } finally {
+    Object.defineProperty(fs, "openSync", { configurable: true, value: originalOpen });
+  }
+  assert.equal(fs.statSync(victim).mode & 0o777, 0o644);
+});
+
+test("a lock swap after a path check cannot chmod the victim", { skip: process.platform === "win32" }, () => {
+  const home = tempHome("agent-lcm-setup-lock-chmod-race-");
+  const target = path.join(home, "hooks.json");
+  const lock = `${target}.lock.sqlite`;
+  const victim = path.join(home, "victim.sqlite");
+  fs.writeFileSync(lock, "");
+  fs.writeFileSync(victim, "");
+  fs.chmodSync(victim, 0o644);
+  const originalLstat = fs.lstatSync;
+  let swapped = false;
+  const swappedLstat = ((candidate: fs.PathLike) => {
+    const status = originalLstat(candidate);
+    if (!swapped && candidate.toString() === lock) {
+      swapped = true;
+      fs.unlinkSync(lock);
+      fs.symlinkSync(victim, lock);
+    }
+    return status;
+  }) as typeof fs.lstatSync;
+  Object.defineProperty(fs, "lstatSync", { configurable: true, value: swappedLstat });
+  try {
+    mutateSetupConfiguration(target, () => ({ hooks: {} }));
+  } finally {
+    Object.defineProperty(fs, "lstatSync", { configurable: true, value: originalLstat });
+  }
+  assert.equal(fs.statSync(victim).mode & 0o777, 0o644);
+});
+
+test("a target-path swap cannot copy symlink-victim bytes", { skip: process.platform === "win32" }, () => {
+  const home = tempHome("agent-lcm-setup-target-race-");
+  const target = path.join(home, "hooks.json");
+  const victim = path.join(home, "victim.json");
+  fs.writeFileSync(target, '{"hooks":{}}\n');
+  fs.writeFileSync(victim, '{"isolated-secret":true}\n');
+  const originalRead = fs.readFileSync;
+  let swapped = false;
+  const swappedRead = ((candidate: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (!swapped && typeof candidate === "string" && candidate === target) {
+      swapped = true;
+      fs.unlinkSync(target);
+      fs.symlinkSync(victim, target);
+    }
+    return Reflect.apply(originalRead, fs, [candidate, ...args]);
+  }) as typeof fs.readFileSync;
+  Object.defineProperty(fs, "readFileSync", { configurable: true, value: swappedRead });
+  try {
+    mutateSetupConfiguration(target, (configuration) => ({ ...configuration, added: true }));
+  } finally {
+    Object.defineProperty(fs, "readFileSync", { configurable: true, value: originalRead });
+  }
+  const backups = fs.readdirSync(home).filter((name) => name.startsWith("hooks-pre-agent-lcm-"));
+  assert.equal(backups.length, 1);
+  assert.doesNotMatch(fs.readFileSync(path.join(home, backups[0] ?? ""), "utf8"), /isolated-secret/u);
+  assert.deepEqual(JSON.parse(fs.readFileSync(target, "utf8")), { hooks: {}, added: true });
+  assert.deepEqual(JSON.parse(fs.readFileSync(victim, "utf8")), { "isolated-secret": true });
+});
+
 test("invalid setup bytes remain unchanged without backup or temporary files", () => {
   // Given: an existing target contains invalid JSON bytes.
   const home = tempHome("agent-lcm-setup-invalid-");

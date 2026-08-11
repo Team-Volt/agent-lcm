@@ -41,6 +41,11 @@ before confirming. The official guide does not require a restart. If the plugin
 does not appear, use the documented Installed view and Command Palette refresh
 actions as troubleshooting.
 
+`agent-lcm setup status` reports legacy `hooksConfigured` state, not live
+native plugin health. `false` is expected after a successful native install;
+use the Agent Plugins - Installed view or `copilot plugin list` for the native
+check.
+
 > Warning: VS Code and GitHub Copilot share the Copilot plugin store and the hook file `~/.copilot/hooks/agent-lcm.json`. A deliberate native uninstall affects both harnesses. Do not uninstall the shared plugin when you mean to remove only VS Code.
 
 ## Remove Agent LCM

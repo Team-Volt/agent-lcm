@@ -40,7 +40,7 @@ export function removeHarness(harness, options = {}) {
 export function setupStatus(options = {}) {
     return Object.fromEntries(SETUP_HARNESSES.map((harness) => {
         const target = setupPath(harness, options.home);
-        return [harness, { configured: setupHooksConfigured(harness, readConfigurationForStatus(target)), path: target }];
+        return [harness, { hooksConfigured: setupHooksConfigured(harness, readConfigurationForStatus(target)), path: target }];
     }));
 }
 function updateHooks(harness, nativeStatus, target, command, targetExists) {

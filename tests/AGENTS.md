@@ -59,6 +59,9 @@ framework, fixture library, or custom runner.
 - For fsync or publication faults, assert the failed subprocess leaves no
   acknowledged event, then run the normal retry and verify one raw and one
   indexed event.
+- For setup-file symlink races, swap the path at the old path-check/read or
+  chmod boundary and prove descriptor-bound I/O neither reads nor changes the
+  victim.
 - Prefer direct assertions on counts, IDs, paths, and JSON fields over broad
   snapshots; preserve security checks that prove secrets are absent.
 

@@ -35,10 +35,19 @@ function adapterStatus(status) {
             detail: codexConfigured ? "Codex MCP and hooks are configured." : "Codex MCP or hooks are not configured.",
             ...(codexConfigured ? {} : { setup_gap: "Install the Agent LCM plugin and restart Codex." }),
         },
-        cursor: setupAdapter("cursor", setups.cursor.configured),
-        vscode: setupAdapter("vscode", setups.vscode.configured),
-        copilot: setupAdapter("copilot", setups.copilot.configured),
-        kiro: setupAdapter("kiro", setups.kiro.configured),
+        cursor: setupAdapter("cursor", setups.cursor.hooksConfigured),
+        vscode: nativePluginAdapter("VS Code", setups.vscode.hooksConfigured),
+        copilot: nativePluginAdapter("Copilot", setups.copilot.hooksConfigured),
+        kiro: setupAdapter("kiro", setups.kiro.hooksConfigured),
+    };
+}
+function nativePluginAdapter(harness, legacyHooksConfigured) {
+    if (legacyHooksConfigured)
+        return setupAdapter(harness.toLowerCase(), true);
+    return {
+        configured: null,
+        state: "unknown",
+        detail: `${harness} native plugin health is not checked by doctor. Run \`copilot plugin list\` or use the client's installed-plugin view.`,
     };
 }
 function setupAdapter(harness, configured) {

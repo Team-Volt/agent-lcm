@@ -148,7 +148,7 @@ Setup-managed and legacy user hook locations are:
 Cursor, Copilot, and VS Code native plugins carry their own hooks. Setup does
 not add a second user-level copy after native installation.
 
-Check the result:
+Check setup-managed and legacy hook files, then run the broader doctor checks:
 
 ```sh
 agent-lcm setup status

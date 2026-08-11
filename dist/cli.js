@@ -331,7 +331,7 @@ function printSetupReports(value, json) {
             process.stdout.write(`Hooks ${report.hooks.changed ? "changed" : "unchanged"}: ${report.hooks.path}\n`);
             if (report.status === "manual-required") {
                 process.stdout.write(report.nativeCli === null
-                    ? "Native CLI unavailable or its capability probe failed.\n"
+                    ? "Native CLI unavailable.\n"
                     : `${report.nativeCli} is installed, but it has no supported noninteractive plugin ${report.action} command.\n`);
             }
             if (report.status !== "complete")

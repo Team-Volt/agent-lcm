@@ -31,7 +31,7 @@ export type RemoveReport = {
   readonly guide: string;
 };
 export type SetupStatusOptions = { readonly home?: string };
-export type HarnessSetupStatus = { readonly configured: boolean; readonly path: string };
+export type HarnessSetupStatus = { readonly hooksConfigured: boolean; readonly path: string };
 
 export function setupHarness(harness: CaptureHarness, options: SetupOptions): SetupReport {
   const target = setupPath(harness, options.home);
@@ -71,7 +71,7 @@ export function removeHarness(harness: CaptureHarness, options: RemoveOptions = 
 export function setupStatus(options: SetupStatusOptions = {}): Record<CaptureHarness, HarnessSetupStatus> {
   return Object.fromEntries(SETUP_HARNESSES.map((harness) => {
     const target = setupPath(harness, options.home);
-    return [harness, { configured: setupHooksConfigured(harness, readConfigurationForStatus(target)), path: target }];
+    return [harness, { hooksConfigured: setupHooksConfigured(harness, readConfigurationForStatus(target)), path: target }];
   })) as Record<CaptureHarness, HarnessSetupStatus>;
 }
 

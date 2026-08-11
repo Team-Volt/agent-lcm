@@ -65,6 +65,16 @@ test("doctor reports actionable recommendations for an unwired empty install", (
     detail: "Not configured.",
     setup_gap: "Run `agent-lcm setup cursor`, then restart Cursor.",
   });
+  assert.deepEqual(report.adapter_status.vscode, {
+    configured: null,
+    state: "unknown",
+    detail: "VS Code native plugin health is not checked by doctor. Run `copilot plugin list` or use the client's installed-plugin view.",
+  });
+  assert.deepEqual(report.adapter_status.copilot, {
+    configured: null,
+    state: "unknown",
+    detail: "Copilot native plugin health is not checked by doctor. Run `copilot plugin list` or use the client's installed-plugin view.",
+  });
   assert.equal(report.adapter_status.codex.configured, false);
   assert.equal(report.recommendations.some((text: string) => text.includes("Install the Agent LCM plugin")), true);
   assert.equal(report.recommendations.some((text: string) => text.includes("import --all")), true);

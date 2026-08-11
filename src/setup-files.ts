@@ -117,10 +117,12 @@ function backupSetupBytes(target: string, bytes: Buffer): void {
 function withSetupFileLock<T>(target: string, callback: () => T): T {
   const lockPath = `${target}.lock.sqlite`;
   const deadline = Date.now() + SETUP_LOCK_TIMEOUT_MS;
-  ensureRegularLockFile(lockPath);
-  const coordinator = new DatabaseSync(lockPath, { timeout: SETUP_LOCK_POLL_MS });
+  const lockDescriptor = openRegularLockFile(lockPath);
+  let coordinator: DatabaseSync | undefined;
   let transactionOpen = false;
   try {
+    coordinator = new DatabaseSync(lockPath, { timeout: SETUP_LOCK_POLL_MS });
+    assertSameFile(lockPath, fs.fstatSync(lockDescriptor));
     while (!transactionOpen) {
       try {
         coordinator.exec("BEGIN IMMEDIATE");
@@ -133,22 +135,28 @@ function withSetupFileLock<T>(target: string, callback: () => T): T {
     }
     return callback();
   } finally {
-    if (transactionOpen) coordinator.exec("ROLLBACK");
-    coordinator.close();
+    if (transactionOpen) coordinator?.exec("ROLLBACK");
+    coordinator?.close();
+    fs.closeSync(lockDescriptor);
   }
 }
 
 function readSetupFile(target: string): Buffer | undefined {
-  let status: fs.Stats;
+  let descriptor: number;
   try {
-    status = fs.lstatSync(target);
+    descriptor = fs.openSync(target, fs.constants.O_RDONLY | noFollowFlag());
   } catch (error) {
     if (hasCode(error, "ENOENT")) return undefined;
+    if (hasCode(error, "ELOOP")) throw new Error(`Refusing setup configuration symlink: ${target}`);
     throw error;
   }
-  if (status.isSymbolicLink()) throw new Error(`Refusing setup configuration symlink: ${target}`);
-  if (!status.isFile()) throw new Error(`Cannot update setup configuration that is not a regular file: ${target}`);
-  return fs.readFileSync(target);
+  try {
+    const status = fs.fstatSync(descriptor);
+    if (!status.isFile()) throw new Error(`Cannot update setup configuration that is not a regular file: ${target}`);
+    return fs.readFileSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 export function ensureSetupDirectory(directory: string): void {
@@ -158,21 +166,47 @@ export function ensureSetupDirectory(directory: string): void {
   if (created !== undefined) fs.chmodSync(directory, 0o700);
 }
 
-function ensureRegularLockFile(lockPath: string): void {
+function openRegularLockFile(lockPath: string): number {
   let descriptor: number | undefined;
   try {
-    descriptor = fs.openSync(lockPath, "wx", 0o600);
+    try {
+      descriptor = fs.openSync(lockPath, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollowFlag(), 0o600);
+    } catch (error) {
+      if (!hasCode(error, "EEXIST")) throw error;
+      descriptor = fs.openSync(lockPath, fs.constants.O_RDWR | noFollowFlag());
+    }
+    const status = fs.fstatSync(descriptor);
+    if (!status.isFile()) throw new Error(`Cannot use setup lock that is not a regular file: ${lockPath}`);
     fs.fchmodSync(descriptor, 0o600);
     fs.fsyncSync(descriptor);
+    return descriptor;
   } catch (error) {
-    if (!hasCode(error, "EEXIST")) throw error;
-  } finally {
     if (descriptor !== undefined) fs.closeSync(descriptor);
+    if (hasCode(error, "ELOOP")) throw new Error(`Refusing setup lock symlink: ${lockPath}`);
+    throw error;
   }
-  const status = fs.lstatSync(lockPath);
-  if (status.isSymbolicLink()) throw new Error(`Refusing setup lock symlink: ${lockPath}`);
-  if (!status.isFile()) throw new Error(`Cannot use setup lock that is not a regular file: ${lockPath}`);
-  fs.chmodSync(lockPath, 0o600);
+}
+
+function assertSameFile(target: string, expected: fs.Stats): void {
+  let descriptor: number;
+  try {
+    descriptor = fs.openSync(target, fs.constants.O_RDONLY | noFollowFlag());
+  } catch (error) {
+    if (hasCode(error, "ELOOP")) throw new Error(`Setup lock path changed while opening: ${target}`);
+    throw error;
+  }
+  try {
+    const actual = fs.fstatSync(descriptor);
+    if (!actual.isFile() || actual.dev !== expected.dev || actual.ino !== expected.ino) {
+      throw new Error(`Setup lock path changed while opening: ${target}`);
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function noFollowFlag(): number {
+  return fs.constants.O_NOFOLLOW ?? 0;
 }
 
 function assertSafeDirectoryPath(directory: string): void {

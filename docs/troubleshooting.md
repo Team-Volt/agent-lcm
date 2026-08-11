@@ -10,7 +10,8 @@ agent-lcm daemon status
 
 `doctor` checks Codex plugin wiring, the recall skill, the shared daemon, the
 capture queue, quarantine, SQLite, and summary indexing. `setup status` reports
-the harness hook files separately.
+`hooksConfigured` for setup-managed or legacy hook files; it does not claim to
+check native plugin health.
 
 ## The MCP server is missing
 
@@ -32,7 +33,7 @@ prefer native plugin installation when that happens.
 
 ## Hooks are not capturing
 
-Install or repair the harness hook file, then restart the harness:
+Install or repair Agent LCM, then restart the harness:
 
 ```sh
 agent-lcm setup all
@@ -45,13 +46,16 @@ home, configure it explicitly and pass that directory:
 agent-lcm setup codex --home /path/to/codex-home
 ```
 
-Codex loads `~/.codex/hooks.json`; Cursor loads `~/.cursor/hooks.json`. VS Code and GitHub Copilot share
-`~/.copilot/hooks/agent-lcm.json`, and the generated hook detects which one sent
-the event. Setup refuses malformed existing JSON instead of overwriting it.
-Before changing a valid existing file, setup saves a timestamped
-`-pre-agent-lcm-` backup in the same directory.
+Codex loads setup-managed hooks from `~/.codex/hooks.json`; Kiro uses
+`~/.kiro/hooks/agent-lcm.json`. Cursor, VS Code, and GitHub Copilot native
+plugins carry their own hooks. Cursor setup preserves an older
+`~/.cursor/hooks.json` fallback until native installation is complete. A
+successful Copilot or VS Code native setup removes only exact older Agent LCM
+entries from the shared fallback so capture does not run twice. Setup refuses
+malformed existing JSON instead of overwriting it. Before changing a valid
+existing file, setup saves a timestamped `-pre-agent-lcm-` backup beside it.
 
-Codex and Cursor may ask you to review or trust plugin-owned commands. Capture
+Codex, Cursor, VS Code, and Copilot may ask you to review or trust plugin-owned commands. Capture
 will not run until the harness allows those hooks.
 
 Check whether events reach the queue and daemon:

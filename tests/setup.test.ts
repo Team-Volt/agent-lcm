@@ -212,6 +212,10 @@ test("successful Copilot setup removes only legacy shared Agent LCM hooks", (t) 
     PostToolUse: [],
     custom: [{ type: "command", command: "also-keep-me" }],
   } });
+  assert.deepEqual(setupStatus({ home: clientHome }).copilot, {
+    hooksConfigured: false,
+    path: hooksPath,
+  });
 });
 
 test("manual setup preserves legacy shared hooks and creates no target", (t) => {
@@ -461,7 +465,7 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
   assert.deepEqual(configuration.hooks.SubagentStop, [{ hooks: [
     { type: "command", command: 'node "/new/bin/agent-lcm" hook SubagentStop' },
   ] }]);
-  assert.equal(setupStatus({ home: clientHome }).codex.configured, true);
+  assert.equal(setupStatus({ home: clientHome }).codex.hooksConfigured, true);
   const backups = fs.readdirSync(clientHome).filter((name) => name.startsWith("hooks-pre-agent-lcm-"));
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(clientHome, backups[0] ?? ""), "utf8"), original);
