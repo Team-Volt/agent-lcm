@@ -8,8 +8,9 @@ Run:
 agent-lcm setup copilot
 ```
 
-This runs the Copilot native lifecycle when the CLI is available and its plugin
-probe succeeds. Copilot CLI auto-loads the bundled hooks, so setup does not add
+This runs the Copilot native lifecycle against the installed Agent LCM package
+directory when the CLI is available and its plugin probe succeeds. Copilot CLI
+auto-loads the bundled hooks, so setup does not add
 duplicate shared hooks after native installation. The manual fallback path is
 `~/.copilot/hooks/agent-lcm.json`; setup preserves an existing fallback when
 native installation is unavailable, adds no new duplicate, and reports
@@ -17,14 +18,18 @@ native installation is unavailable, adds no new duplicate, and reports
 
 ## Native install and inspection
 
-Use the documented Copilot CLI commands:
+Use the documented Copilot CLI commands with the local directory that contains
+Agent LCM's `plugin.json`. For a global npm install, `npm root --global` prints
+the `<global-node-modules>` part of this path:
 
 ```sh
-copilot plugin install Team-Volt/agent-lcm
+copilot plugin install <global-node-modules>/@team-volt/agent-lcm
 copilot plugin list
 ```
 
-The list command shows installed plugins. See the [Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference) for the command set and plugin specification.
+Do not type the angle-bracket placeholder as written. If you run Agent LCM from
+a source checkout, use that checkout's root instead. The list command shows
+installed plugins. See the [Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference) for the command set and plugin specification.
 
 The Copilot CLI reference does not require a restart after installation. If a
 new plugin is not visible, start a new Copilot session as troubleshooting and

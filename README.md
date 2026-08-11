@@ -164,12 +164,12 @@ report fields.
 
 Native lifecycle support is limited to the commands that each client documents:
 
-- Codex probes with `codex plugin list`, then runs `codex plugin marketplace add
-  Team-Volt/agent-lcm` and `codex plugin add agent-lcm@agent-lcm`. Removal runs
-  `codex plugin remove agent-lcm@agent-lcm`.
+- Codex probes with `codex plugin list`, adds the installed Agent LCM package
+  directory as a local marketplace, then runs `codex plugin add
+  agent-lcm@agent-lcm`. Removal runs `codex plugin remove agent-lcm@agent-lcm`.
 - GitHub Copilot CLI and VS Code share the Copilot plugin store. Setup probes
-  with `copilot plugin list` and runs `copilot plugin install
-  Team-Volt/agent-lcm`. `agent-lcm remove copilot` and `agent-lcm remove vscode`
+  with `copilot plugin list` and installs the same local Agent LCM package
+  directory. `agent-lcm remove copilot` and `agent-lcm remove vscode`
   return `shared-retained` without uninstalling that shared plugin; use the
   documented Copilot uninstall command only after reviewing both clients.
 - Cursor and Kiro are probed with `cursor-agent --version` and `kiro-cli
@@ -181,8 +181,9 @@ Setup validates an existing hook file before invoking a native CLI, preserves
 unrelated entries, and changes only exact Agent LCM-owned registrations. It
 backs up a changed file as `*-pre-agent-lcm-*.json`, uses a per-file SQLite
 lock at `<target>.lock.sqlite`, and publishes through a unique `wx` temporary
-file, `fsync`, and rename. Symlinked or non-regular targets are refused, and
-hook commands must be absolute paths without shell metacharacters. These rules
+file, `fsync`, and rename. Symlinked directory components, lock files, targets,
+and non-regular files are refused. Hook commands must be absolute paths without
+shell metacharacters. These rules
 make repeated setup and removal safe while avoiding a second user-level hook
 copy after native installation.
 

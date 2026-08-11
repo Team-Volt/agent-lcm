@@ -45,7 +45,8 @@
 
 - Probe and invoke only documented commands: Codex uses `codex plugin`; Copilot and VS Code use the shared `copilot plugin` store; Cursor and Kiro use version-only probes and keep plugin changes manual.
 - Validate existing setup JSON before starting a native process. Match owned hooks by harness, event, and command shape; preserve unrelated and near-matching entries.
-- Keep setup-file writes under `<target>.lock.sqlite` with a bounded SQLite `BEGIN IMMEDIATE` lock. Refuse symlinked or non-regular targets. Use a unique `wx` temporary file, restrictive permissions, fsync, rename, and parent-directory fsync. Backups use the collision-safe `-pre-agent-lcm-` name.
+- Keep setup-file writes under `<target>.lock.sqlite` with a bounded SQLite `BEGIN IMMEDIATE` lock. Refuse symlinked directory components, lock files, targets, and non-regular files. Use a unique `wx` temporary file, restrictive permissions, fsync, rename, and parent-directory fsync. Backups use the collision-safe `-pre-agent-lcm-` name.
+- Install native plugins from the current package directory, never from a mutable remote ref. Treat only `ENOENT` as an unavailable CLI; all other native probe or command failures must stop before hook mutation and must not echo client stderr.
 - Require an absolute hook binary path and reject shell metacharacters before writing configuration.
 - Never uninstall the shared Copilot plugin for a single `copilot` or `vscode` removal; report `shared-retained` instead.
 

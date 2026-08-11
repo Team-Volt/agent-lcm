@@ -243,7 +243,7 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   assert.equal(JSON.parse(removed.stdout).hooks.changed, true);
   assert.deepEqual(fs.readFileSync(fakeLog, "utf8").trim().split("\n").map((line) => JSON.parse(line)), [
     ["plugin", "list"],
-    ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+    ["plugin", "marketplace", "add", packageRoot],
     ["plugin", "add", "agent-lcm@agent-lcm"],
     ["plugin", "list"],
     ["plugin", "remove", "agent-lcm@agent-lcm"],

@@ -8,8 +8,9 @@ Run:
 agent-lcm setup vscode
 ```
 
-This runs the Copilot native lifecycle when the CLI is available and its plugin
-probe succeeds. VS Code auto-loads hooks from the Copilot plugin store, so setup
+This runs the Copilot native lifecycle against the installed Agent LCM package
+directory when the CLI is available and its plugin probe succeeds. VS Code
+auto-loads hooks from the Copilot plugin store, so setup
 does not add duplicate shared hooks after native installation. The manual
 fallback path is `~/.copilot/hooks/agent-lcm.json`; setup preserves an existing
 fallback when native installation is unavailable, adds no new duplicate, and
@@ -18,12 +19,17 @@ reports `manual-required` with this guide.
 ## Native install and inspection
 
 VS Code automatically discovers plugins installed by Copilot CLI from
-`~/.copilot/installed-plugins/`. To install through that shared store, run:
+`~/.copilot/installed-plugins/`. To install through that shared store, use the
+local directory that contains Agent LCM's `plugin.json`. For a global npm
+install, `npm root --global` prints the `<global-node-modules>` part:
 
 ```sh
-copilot plugin install Team-Volt/agent-lcm
+copilot plugin install <global-node-modules>/@team-volt/agent-lcm
 copilot plugin list
 ```
+
+Do not type the angle-bracket placeholder as written. If you run Agent LCM from
+a source checkout, use that checkout's root instead.
 
 You can install from the VS Code UI instead. Open Extensions and search for
 `@agentPlugins`, or run `Chat: Install Plugin From Source` from the Command

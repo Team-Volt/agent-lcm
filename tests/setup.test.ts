@@ -9,6 +9,7 @@ import { assertCliOk, runCli, tempHome } from "./helpers.ts";
 
 const GUIDE_ROOT = "https://github.com/Team-Volt/agent-lcm/blob/main/docs/install";
 const NO_CLI_ENV = { PATH: "" };
+const PACKAGE_ROOT = path.resolve(".");
 
 test("remove Codex deletes only exact owned hooks and is repeatable", (t) => {
   const fake = fakeSetupCli(t, "codex");
@@ -163,7 +164,7 @@ test("Codex setup runs native setup and still installs user hooks", (t) => {
   });
   assert.deepEqual(readSetupCalls(fake.log), [
     ["plugin", "list"],
-    ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+    ["plugin", "marketplace", "add", PACKAGE_ROOT],
     ["plugin", "add", "agent-lcm@agent-lcm"],
   ]);
   assert.equal(fs.existsSync(path.join(clientHome, "hooks.json")), true);
@@ -546,7 +547,7 @@ test("CLI setup and remove use native Codex with an isolated explicit home", (t)
   const calls = fs.readFileSync(fake.log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(calls.map((call) => call.argv), [
     ["plugin", "list"],
-    ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+    ["plugin", "marketplace", "add", PACKAGE_ROOT],
     ["plugin", "add", "agent-lcm@agent-lcm"],
     ["plugin", "list"],
     ["plugin", "remove", "agent-lcm@agent-lcm"],
@@ -558,6 +559,20 @@ test("CLI setup and remove use native Codex with an isolated explicit home", (t)
     COPILOT_HOME: home,
     AGENT_LCM_HOME: path.join(home, "agent-lcm"),
   });
+});
+
+test("CLI reports a native probe failure without writing hooks or leaking stderr", (t) => {
+  const home = path.join(tempHome("agent-lcm-cli-probe-failure-"), "new-codex-home");
+  const fake = fakeLifecycleCli(t, "codex", true);
+
+  const result = runCli(["setup", "codex", "--home", home, "--json"], {
+    env: { PATH: fake.path, AGENT_LCM_FAKE_LOG: fake.log },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /status=23 stderr=suppressed/u);
+  assert.doesNotMatch(result.stderr, /secret-token/u);
+  assert.equal(fs.existsSync(path.join(home, "hooks.json")), false);
 });
 
 test("CLI remove reports unsupported native removal without changing shared resources", () => {
@@ -719,6 +734,7 @@ function fakeSetupCli(
 function fakeLifecycleCli(
   t: test.TestContext,
   name: "codex" | "copilot",
+  failProbe = false,
 ): { readonly path: string; readonly log: string } {
   const bin = fs.mkdtempSync(path.join(tempHome("agent-lcm-lifecycle-cli-parent-"), "bin-"));
   const log = path.join(bin, "calls.jsonl");
@@ -726,6 +742,7 @@ function fakeLifecycleCli(
 const fs = require("node:fs");
 if (!fs.existsSync(process.env.CODEX_HOME)) process.exit(24);
 fs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify({ argv: process.argv.slice(2), env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME, COPILOT_HOME: process.env.COPILOT_HOME, AGENT_LCM_HOME: process.env.AGENT_LCM_HOME } }) + "\\n");
+if (${String(failProbe)} && JSON.stringify(process.argv.slice(2)) === JSON.stringify(["plugin", "list"])) { process.stderr.write("secret-token\\n"); process.exit(23); }
 `;
   fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
   t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));

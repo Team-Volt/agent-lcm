@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { CaptureHarness } from "./harnesses.ts";
 
@@ -61,7 +63,8 @@ type ManualLifecycleAdapter = {
 export type HarnessLifecycleAdapter = CodexLifecycleAdapter | CopilotLifecycleAdapter | ManualLifecycleAdapter;
 
 const GUIDE_ROOT = "https://github.com/Team-Volt/agent-lcm/blob/main/docs/install";
-const MAX_STDERR_CHARS = 4_096;
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const SUPPRESSED_STDERR = "suppressed";
 
 export const HARNESS_LIFECYCLE_ADAPTERS = {
   codex: {
@@ -70,7 +73,7 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
     guide: `${GUIDE_ROOT}/codex.md`,
     probeArgv: ["plugin", "list"],
     setupArgv: [
-      ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+      ["plugin", "marketplace", "add", PACKAGE_ROOT],
       ["plugin", "add", "agent-lcm@agent-lcm"],
     ],
     removeArgv: ["plugin", "remove", "agent-lcm@agent-lcm"],
@@ -81,14 +84,14 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
     executable: "copilot",
     guide: `${GUIDE_ROOT}/vscode.md`,
     probeArgv: ["plugin", "list"],
-    setupArgv: [["plugin", "install", "Team-Volt/agent-lcm"]],
+    setupArgv: [["plugin", "install", PACKAGE_ROOT]],
   },
   copilot: {
     kind: "copilot",
     executable: "copilot",
     guide: `${GUIDE_ROOT}/copilot.md`,
     probeArgv: ["plugin", "list"],
-    setupArgv: [["plugin", "install", "Team-Volt/agent-lcm"]],
+    setupArgv: [["plugin", "install", PACKAGE_ROOT]],
   },
   kiro: { kind: "manual", executable: "kiro-cli", probeArgv: ["--version"], guide: `${GUIDE_ROOT}/kiro.md` },
 } satisfies Record<CaptureHarness, HarnessLifecycleAdapter>;
@@ -119,8 +122,11 @@ function runNative(
   env: NodeJS.ProcessEnv | undefined,
 ): HarnessLifecycleOutcome {
   const probe = spawnSync(adapter.executable, adapter.probeArgv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-  if (isEnoent(probe.error) || probe.status !== 0) {
+  if (isEnoent(probe.error)) {
     return outcome(harness, action, "manual-required", null, adapter.guide);
+  }
+  if (probe.error !== undefined || probe.status !== 0) {
+    throw new NativeLifecycleCommandError(adapter.executable, adapter.probeArgv, probe.status, SUPPRESSED_STDERR);
   }
 
   const commands = action === "setup"
@@ -144,7 +150,7 @@ function manualOutcome(
 function runNativeCommand(executable: "codex" | "copilot", argv: readonly string[], env: NodeJS.ProcessEnv | undefined): void {
   const result = spawnSync(executable, argv, { encoding: "utf8", env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
   if (result.status === 0) return;
-  throw new NativeLifecycleCommandError(executable, argv, result.status, boundedStderr(result.stderr));
+  throw new NativeLifecycleCommandError(executable, argv, result.status, SUPPRESSED_STDERR);
 }
 
 function outcome(
@@ -155,11 +161,6 @@ function outcome(
   guide: string,
 ): HarnessLifecycleOutcome {
   return { harness, action, status, nativeCli, guide };
-}
-
-function boundedStderr(stderr: string | Buffer | null | undefined): string {
-  const value = typeof stderr === "string" ? stderr : stderr?.toString("utf8") ?? "";
-  return value.slice(0, MAX_STDERR_CHARS).trimEnd();
 }
 
 function isEnoent(error: Error | undefined): boolean {

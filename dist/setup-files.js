@@ -119,10 +119,10 @@ function backupSetupBytes(target, bytes) {
 function withSetupFileLock(target, callback) {
     const lockPath = `${target}.lock.sqlite`;
     const deadline = Date.now() + SETUP_LOCK_TIMEOUT_MS;
+    ensureRegularLockFile(lockPath);
     const coordinator = new DatabaseSync(lockPath, { timeout: SETUP_LOCK_POLL_MS });
     let transactionOpen = false;
     try {
-        fs.chmodSync(lockPath, 0o600);
         while (!transactionOpen) {
             try {
                 coordinator.exec("BEGIN IMMEDIATE");
@@ -161,9 +161,60 @@ function readSetupFile(target) {
     return fs.readFileSync(target);
 }
 export function ensureSetupDirectory(directory) {
+    assertSafeDirectoryPath(directory);
     const created = fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    assertSafeDirectoryPath(directory);
     if (created !== undefined)
         fs.chmodSync(directory, 0o700);
+}
+function ensureRegularLockFile(lockPath) {
+    let descriptor;
+    try {
+        descriptor = fs.openSync(lockPath, "wx", 0o600);
+        fs.fchmodSync(descriptor, 0o600);
+        fs.fsyncSync(descriptor);
+    }
+    catch (error) {
+        if (!hasCode(error, "EEXIST"))
+            throw error;
+    }
+    finally {
+        if (descriptor !== undefined)
+            fs.closeSync(descriptor);
+    }
+    const status = fs.lstatSync(lockPath);
+    if (status.isSymbolicLink())
+        throw new Error(`Refusing setup lock symlink: ${lockPath}`);
+    if (!status.isFile())
+        throw new Error(`Cannot use setup lock that is not a regular file: ${lockPath}`);
+    fs.chmodSync(lockPath, 0o600);
+}
+function assertSafeDirectoryPath(directory) {
+    const resolved = path.resolve(directory);
+    const root = path.parse(resolved).root;
+    let current = root;
+    for (const part of path.relative(root, resolved).split(path.sep).filter(Boolean)) {
+        current = path.join(current, part);
+        let status;
+        try {
+            status = fs.lstatSync(current);
+        }
+        catch (error) {
+            if (hasCode(error, "ENOENT"))
+                continue;
+            throw error;
+        }
+        if (status.isSymbolicLink()) {
+            if (isDarwinSystemAlias(current))
+                continue;
+            throw new Error(`Refusing setup directory symlink: ${current}`);
+        }
+        if (!status.isDirectory())
+            throw new Error(`Cannot use setup path through a non-directory: ${current}`);
+    }
+}
+function isDarwinSystemAlias(target) {
+    return process.platform === "darwin" && (target === "/etc" || target === "/tmp" || target === "/var");
 }
 function fsyncPath(target) {
     const descriptor = fs.openSync(target, "r");

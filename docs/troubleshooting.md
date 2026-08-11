@@ -84,8 +84,9 @@ Replace `codex` with the harness you want to remove.
 Exit status `0` means the requested work completed. Exit status `2` means the
 native step is `manual-required`, or Copilot/VS Code removal returned
 `shared-retained` so the shared plugin was left in place. Exit status `1` means
-the command failed; its stderr is the error record. Use `--json` for stable
-automation fields.
+the command failed; Agent LCM reports the fixed command, exit status, and a
+suppressed-stderr marker so a client cannot leak secrets into logs. Use
+`--json` for stable automation fields.
 
 Codex setup probes `codex plugin list`, then runs the marketplace-add and
 plugin-add commands. Removal runs `codex plugin remove agent-lcm@agent-lcm`.
@@ -99,8 +100,9 @@ Kiro Powers installation/removal stay manual.
 Setup validates the existing JSON before starting a native CLI. It changes only
 exact Agent LCM-owned hook entries and preserves unrelated or near-matching
 entries. A changed file gets a collision-safe `-pre-agent-lcm-` backup. Setup
-also refuses symlinked or non-regular targets and uses a per-file SQLite lock
-at `<target>.lock.sqlite`, with a ten-second bound, plus unique, fsynced
+also refuses symlinked directory components, lock files, targets, and
+non-regular files. It uses a per-file SQLite lock at `<target>.lock.sqlite`,
+with a ten-second bound, plus unique, fsynced
 temporary publication; a predictable temporary symlink cannot redirect the
 write. Hook commands must use an absolute shell-safe binary path. If validation
 fails, the original file and native CLI invocation remain unchanged.

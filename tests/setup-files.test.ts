@@ -30,6 +30,33 @@ test("setup refuses a target symlink without changing the victim", { skip: proce
   assert.deepEqual(setupArtifacts(home), []);
 });
 
+test("setup refuses a symlinked lock without changing the victim", { skip: process.platform === "win32" }, () => {
+  const home = tempHome("agent-lcm-setup-lock-symlink-");
+  const target = path.join(home, "hooks.json");
+  const victim = path.join(home, "victim.sqlite");
+  fs.writeFileSync(victim, "");
+  fs.chmodSync(victim, 0o644);
+  fs.symlinkSync(victim, `${target}.lock.sqlite`);
+
+  assert.throws(() => mutateSetupConfiguration(target, () => ({ hooks: {} })), /lock.*symlink/u);
+
+  assert.equal(fs.lstatSync(`${target}.lock.sqlite`).isSymbolicLink(), true);
+  assert.equal(fs.statSync(victim).mode & 0o777, 0o644);
+  assert.equal(fs.existsSync(target), false);
+});
+
+test("setup refuses a symlinked parent directory", { skip: process.platform === "win32" }, () => {
+  const home = tempHome("agent-lcm-setup-parent-symlink-");
+  const victim = path.join(home, "victim");
+  const linked = path.join(home, "linked");
+  fs.mkdirSync(victim);
+  fs.symlinkSync(victim, linked);
+
+  assert.throws(() => mutateSetupConfiguration(path.join(linked, "hooks.json"), () => ({ hooks: {} })), /directory symlink/u);
+
+  assert.deepEqual(fs.readdirSync(victim), []);
+});
+
 test("invalid setup bytes remain unchanged without backup or temporary files", () => {
   // Given: an existing target contains invalid JSON bytes.
   const home = tempHome("agent-lcm-setup-invalid-");

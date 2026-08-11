@@ -3,10 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { NativeLifecycleCommandError, runHarnessLifecycle } from "../src/setup-adapters.ts";
 
 const GUIDE_ROOT = "https://github.com/Team-Volt/agent-lcm/blob/main/docs/install";
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("Codex setup and remove send the exact argv", (t) => {
   // Given: a capable fake Codex CLI that records each argv vector.
@@ -33,7 +35,7 @@ test("Codex setup and remove send the exact argv", (t) => {
   });
   assert.deepEqual(readCalls(fake.log), [
     ["plugin", "list"],
-    ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+    ["plugin", "marketplace", "add", PACKAGE_ROOT],
     ["plugin", "add", "agent-lcm@agent-lcm"],
     ["plugin", "list"],
     ["plugin", "remove", "agent-lcm@agent-lcm"],
@@ -65,9 +67,9 @@ test("Copilot and VS Code setup send the exact Copilot argv", (t) => {
   });
   assert.deepEqual(readCalls(fake.log), [
     ["plugin", "list"],
-    ["plugin", "install", "Team-Volt/agent-lcm"],
+    ["plugin", "install", PACKAGE_ROOT],
     ["plugin", "list"],
-    ["plugin", "install", "Team-Volt/agent-lcm"],
+    ["plugin", "install", PACKAGE_ROOT],
   ]);
 });
 
@@ -83,8 +85,6 @@ test("manual-required outcomes probe only documented harness version commands", 
   const missingCursor = runHarnessLifecycle("cursor", "remove", { env: { PATH: bin } });
   const kiro = runHarnessLifecycle("kiro", "remove", { env: kiroCli.env });
   const codex = runHarnessLifecycle("codex", "setup", { env: { PATH: bin } });
-  const incapable = fakeCli(t, "copilot", ["plugin", "list"]);
-  const copilot = runHarnessLifecycle("copilot", "setup", { env: incapable.env });
 
   // Then: each reports its canonical guide without a native success claim.
   assert.deepEqual(cursor, {
@@ -115,16 +115,36 @@ test("manual-required outcomes probe only documented harness version commands", 
     nativeCli: null,
     guide: `${GUIDE_ROOT}/codex.md`,
   });
-  assert.deepEqual(copilot, {
-    harness: "copilot",
-    action: "setup",
-    status: "manual-required",
-    nativeCli: null,
-    guide: `${GUIDE_ROOT}/copilot.md`,
-  });
   assert.deepEqual(readCalls(cursorCli.log), [["--version"]]);
   assert.deepEqual(readCalls(kiroCli.log), [["--version"]]);
-  assert.deepEqual(readCalls(incapable.log), [["plugin", "list"]]);
+});
+
+test("a failing native probe is a command error, not an unavailable CLI", (t) => {
+  const fake = fakeCli(t, "copilot", ["plugin", "list"]);
+
+  assert.throws(() => runHarnessLifecycle("copilot", "setup", { env: fake.env }), (error: unknown) => {
+    assert.ok(error instanceof NativeLifecycleCommandError);
+    assert.equal(error.executable, "copilot");
+    assert.deepEqual(error.argv, ["plugin", "list"]);
+    assert.equal(error.status, 23);
+    assert.equal(error.stderr, "suppressed");
+    return true;
+  });
+  assert.deepEqual(readCalls(fake.log), [["plugin", "list"]]);
+});
+
+test("a native probe permission error is not treated as a missing CLI", { skip: process.platform === "win32" }, (t) => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-denied-cli-"));
+  fs.writeFileSync(path.join(bin, "codex"), "denied\n", { mode: 0o600 });
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+
+  assert.throws(() => runHarnessLifecycle("codex", "setup", { env: { PATH: bin } }), (error: unknown) => {
+    assert.ok(error instanceof NativeLifecycleCommandError);
+    assert.deepEqual(error.argv, ["plugin", "list"]);
+    assert.equal(error.status, null);
+    assert.equal(error.stderr, "suppressed");
+    return true;
+  });
 });
 
 test("shared-retained removal does not spawn Copilot uninstall", (t) => {
@@ -155,7 +175,7 @@ test("shared-retained removal does not spawn Copilot uninstall", (t) => {
 
 test("mutating command failure is typed and cannot report completion", (t) => {
   // Given: a capable fake Codex CLI that fails its marketplace mutation.
-  const fake = fakeCli(t, "codex", ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"]);
+  const fake = fakeCli(t, "codex", ["plugin", "marketplace", "add", PACKAGE_ROOT]);
 
   // When: Agent LCM attempts Codex setup.
   const run = () => runHarnessLifecycle("codex", "setup", { env: fake.env });
@@ -164,18 +184,18 @@ test("mutating command failure is typed and cannot report completion", (t) => {
   assert.throws(run, (error: unknown) => {
     assert.ok(error instanceof NativeLifecycleCommandError);
     assert.equal(error.executable, "codex");
-    assert.deepEqual(error.argv, ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"]);
+    assert.deepEqual(error.argv, ["plugin", "marketplace", "add", PACKAGE_ROOT]);
     assert.equal(error.status, 23);
-    assert.equal(error.stderr, "mutation failed");
+    assert.equal(error.stderr, "suppressed");
     assert.equal(
       error.message,
-      "Native lifecycle command failed: executable=codex argv=plugin marketplace add Team-Volt/agent-lcm status=23 stderr=mutation failed",
+      `Native lifecycle command failed: executable=codex argv=plugin marketplace add ${PACKAGE_ROOT} status=23 stderr=suppressed`,
     );
     return true;
   });
   assert.deepEqual(readCalls(fake.log), [
     ["plugin", "list"],
-    ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+    ["plugin", "marketplace", "add", PACKAGE_ROOT],
   ]);
 });
 

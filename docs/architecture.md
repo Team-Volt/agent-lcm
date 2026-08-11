@@ -30,9 +30,10 @@ incompatible protocol.
 
 `agent-lcm setup <harness>` probes and, where supported, runs the client's native
 plugin commands before updating legacy capture hooks. Codex uses `codex plugin
-list`, then `codex plugin marketplace add Team-Volt/agent-lcm` and `codex plugin
-add agent-lcm@agent-lcm`. Copilot CLI and VS Code use the shared Copilot store:
-`copilot plugin list` followed by `copilot plugin install Team-Volt/agent-lcm`.
+list`, adds the installed package directory as a local marketplace, then runs
+`codex plugin add agent-lcm@agent-lcm`. Copilot CLI and VS Code use the shared
+Copilot store and install that same local package directory after `copilot
+plugin list` succeeds.
 Cursor and Kiro run version-only probes for `cursor-agent` and `kiro-cli`.
 Their Marketplace or Powers steps remain manual, so their native result is
 `manual-required`.
