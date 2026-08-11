@@ -179,13 +179,17 @@ test("Codex setup reports recoverable partial state when hooks change during nat
     command: 'node "/old/bin/agent-lcm" capture --harness codex SessionStart',
   }] }] } }));
 
+  const concurrent = JSON.stringify({ metadata: { user: true }, hooks: { SessionStart: [{ hooks: [{
+    type: "command",
+    command: 'node "/old/bin/agent-lcm" capture --harness codex SessionStart',
+  }] }] } });
   assert.throws(() => setupHarness("codex", {
     home: clientHome,
     command: "/opt/agent-lcm/bin/agent-lcm",
-    env: { ...fake.env, AGENT_LCM_FAKE_MUTATE_TARGET: target },
-  }), /Native codex setup completed.*Repair.*rerun agent-lcm setup codex/u);
+    env: { ...fake.env, AGENT_LCM_FAKE_MUTATE_TARGET: target, AGENT_LCM_FAKE_MUTATE_CONTENT: concurrent },
+  }), /Native codex setup completed.*concurrent change.*did not overwrite.*rerun agent-lcm setup codex/u);
 
-  assert.equal(fs.readFileSync(target, "utf8"), "{invalid\n");
+  assert.equal(fs.readFileSync(target, "utf8"), concurrent);
   assert.deepEqual(readSetupCalls(fake.log), [
     ["plugin", "list"],
     ["plugin", "marketplace", "add", PACKAGE_ROOT],
@@ -737,7 +741,7 @@ function fakeSetupCli(
 ): { readonly env: NodeJS.ProcessEnv; readonly log: string } {
   const bin = fs.mkdtempSync(path.join(tempHome("agent-lcm-setup-cli-parent-"), "bin-"));
   const log = path.join(bin, "calls.jsonl");
-  const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst argv = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(argv) + "\\n");\nif (process.env.AGENT_LCM_FAKE_MUTATE_TARGET && JSON.stringify(argv) === JSON.stringify(["plugin", "list"])) fs.writeFileSync(process.env.AGENT_LCM_FAKE_MUTATE_TARGET, "{invalid\\n");\n`;
+  const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst argv = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(argv) + "\\n");\nif (process.env.AGENT_LCM_FAKE_MUTATE_TARGET && JSON.stringify(argv) === JSON.stringify(["plugin", "list"])) fs.writeFileSync(process.env.AGENT_LCM_FAKE_MUTATE_TARGET, process.env.AGENT_LCM_FAKE_MUTATE_CONTENT);\n`;
   fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
   t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
   return {

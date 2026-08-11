@@ -2,7 +2,13 @@ import path from "node:path";
 
 import type { CaptureHarness } from "./harnesses.ts";
 import { runHarnessLifecycle, type HarnessCli } from "./setup-adapters.ts";
-import { ensureSetupDirectory, mutateSetupConfiguration, readSetupConfiguration } from "./setup-files.ts";
+import {
+  ensureSetupDirectory,
+  mutateSetupConfiguration,
+  readSetupConfiguration,
+  readSetupConfigurationSnapshot,
+  SetupConfigurationChangedError,
+} from "./setup-files.ts";
 import { assertSafeSetupCommand, setupHooksConfigured } from "./setup-hook-status.ts";
 import {
   mergeSetupHooks,
@@ -37,12 +43,13 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
   const target = setupPath(harness, options.home);
   const command = options.command.trim();
   assertSafeSetupCommand(command);
-  const existing = readSetupConfiguration(target);
+  const snapshot = readSetupConfigurationSnapshot(target);
+  const existing = snapshot.configuration;
   validateSetupHooks(harness, existing, target);
   ensureSetupDirectory(path.dirname(target));
   const native = runHarnessLifecycle(harness, "setup", options.env ? { env: options.env, command } : { command });
   const changed = finishHookUpdate("setup", harness, native.status, target, () => (
-    updateHooks(harness, native.status, target, command, existing !== undefined)
+    updateHooks(harness, native.status, target, command, snapshot.hash)
   ));
   return {
     harness,
@@ -56,11 +63,12 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
 
 export function removeHarness(harness: CaptureHarness, options: RemoveOptions = {}): RemoveReport {
   const target = setupPath(harness, options.home);
-  const existing = readSetupConfiguration(target);
+  const snapshot = readSetupConfigurationSnapshot(target);
+  const existing = snapshot.configuration;
   validateSetupHooks(harness, existing, target);
   const native = runHarnessLifecycle(harness, "remove", options.env ? { env: options.env } : {});
   const changed = finishHookUpdate("remove", harness, native.status, target, () => (
-    removeHooks(harness, target, existing !== undefined)
+    removeHooks(harness, target, existing !== undefined, snapshot.hash)
   ));
   return {
     harness,
@@ -84,27 +92,25 @@ function updateHooks(
   nativeStatus: "native-complete" | "manual-required" | "shared-retained",
   target: string,
   command: string,
-  targetExists: boolean,
+  expectedHash: string,
 ): boolean {
-  if (harness === "kiro") {
-    return mutateSetupConfiguration(target, (existing) => mergeSetupHooks(existing, harness, command, target));
-  }
-  if (harness === "codex" && nativeStatus === "native-complete" && targetExists) {
-    return mutateSetupConfiguration(target, (existing) => existing === undefined
-      ? undefined
-      : removeSetupHooks(existing, harness, target));
-  }
-  if ((harness === "copilot" || harness === "vscode") && nativeStatus === "native-complete" && targetExists) {
-    return mutateSetupConfiguration(target, (existing) => removeSharedSetupHooks(existing ?? {}, harness, target));
-  }
-  return false;
+  return mutateSetupConfiguration(target, (existing) => {
+    if (harness === "kiro") return mergeSetupHooks(existing, harness, command, target);
+    if (harness === "codex" && nativeStatus === "native-complete") {
+      return existing === undefined ? undefined : removeSetupHooks(existing, harness, target);
+    }
+    if ((harness === "copilot" || harness === "vscode") && nativeStatus === "native-complete") {
+      return existing === undefined ? undefined : removeSharedSetupHooks(existing, harness, target);
+    }
+    return existing;
+  }, expectedHash);
 }
 
-function removeHooks(harness: CaptureHarness, target: string, targetExists: boolean): boolean {
+function removeHooks(harness: CaptureHarness, target: string, targetExists: boolean, expectedHash: string): boolean {
   if (harness === "copilot" || harness === "vscode" || !targetExists) return false;
   return mutateSetupConfiguration(target, (existing) => existing === undefined
     ? undefined
-    : removeSetupHooks(existing, harness, target));
+    : removeSetupHooks(existing, harness, target), expectedHash);
 }
 
 function finishHookUpdate(
@@ -118,9 +124,12 @@ function finishHookUpdate(
     return update();
   } catch (error) {
     if (nativeStatus !== "native-complete") throw error;
+    const detail = error instanceof SetupConfigurationChangedError
+      ? "Agent LCM detected the concurrent change and did not overwrite it."
+      : "Inspect the hook file because the local update may have completed.";
     throw new Error(
       `Native ${harness} ${action} completed, but Agent LCM could not safely update ${target}. `
-      + `The file was not overwritten. Repair it, then rerun agent-lcm ${action} ${harness}.`,
+      + `${detail} Repair it if needed, then rerun agent-lcm ${action} ${harness}.`,
       { cause: error },
     );
   }

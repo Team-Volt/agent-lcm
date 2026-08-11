@@ -24,9 +24,25 @@ export class SetupFileLockTimeoutError extends Error {
   }
 }
 
+export class SetupConfigurationChangedError extends Error {
+  readonly target: string;
+
+  constructor(target: string) {
+    super(`Setup configuration changed after preflight: ${target}`);
+    this.name = "SetupConfigurationChangedError";
+    this.target = target;
+  }
+}
+
+export type SetupConfigurationSnapshot = {
+  readonly configuration: Record<string, unknown> | undefined;
+  readonly hash: string;
+};
+
 export function mutateSetupConfiguration(
   target: string,
   transform: (configuration: Record<string, unknown> | undefined) => Record<string, unknown> | undefined,
+  expectedHash?: string,
 ): boolean {
   const directory = path.dirname(target);
   ensureSetupDirectory(directory);
@@ -34,6 +50,9 @@ export function mutateSetupConfiguration(
   if (!directoryIdentity.isDirectory()) throw new Error(`Setup directory changed while updating: ${directory}`);
   return withSetupFileLock(target, directoryIdentity, () => {
     const current = readAnchoredSetupFile(target, directoryIdentity);
+    if (expectedHash !== undefined && setupConfigurationHash(current) !== expectedHash) {
+      throw new SetupConfigurationChangedError(target);
+    }
     const existing = current ? parseSetupConfiguration(current, target) : undefined;
     const next = transform(existing);
     if (next === undefined) return false;
@@ -49,9 +68,19 @@ export function mutateSetupConfiguration(
 }
 
 export function readSetupConfiguration(target: string): Record<string, unknown> | undefined {
+  return readSetupConfigurationSnapshot(target).configuration;
+}
+
+export function readSetupConfigurationSnapshot(target: string): SetupConfigurationSnapshot {
   const bytes = readSetupFile(target);
-  if (!bytes) return undefined;
-  return parseSetupConfiguration(bytes, target);
+  return {
+    configuration: bytes ? parseSetupConfiguration(bytes, target) : undefined,
+    hash: setupConfigurationHash(bytes),
+  };
+}
+
+function setupConfigurationHash(bytes: Buffer | undefined): string {
+  return bytes === undefined ? "missing" : createHash("sha256").update(bytes).digest("hex");
 }
 
 function parseSetupConfiguration(bytes: Buffer, target: string): Record<string, unknown> {

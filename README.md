@@ -166,8 +166,9 @@ native step remains (`manual-required`) or a shared Copilot resource was
 deliberately retained (`shared-retained`). Exit status `1` means the command
 failed; inspect stderr before retrying. If stderr says the native action
 completed but the hook file could not be updated safely, repair that file and
-rerun the same command. Agent LCM leaves the changed bytes untouched. Add
-`--json` when a script needs the report fields.
+rerun the same command. A reported concurrent change is left untouched; for
+other file errors, inspect the file because publication may have completed.
+Add `--json` when a script needs the report fields.
 
 Native lifecycle support is limited to the commands that each client documents:
 

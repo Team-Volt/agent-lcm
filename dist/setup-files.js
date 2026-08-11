@@ -17,7 +17,15 @@ export class SetupFileLockTimeoutError extends Error {
         this.lockPath = lockPath;
     }
 }
-export function mutateSetupConfiguration(target, transform) {
+export class SetupConfigurationChangedError extends Error {
+    target;
+    constructor(target) {
+        super(`Setup configuration changed after preflight: ${target}`);
+        this.name = "SetupConfigurationChangedError";
+        this.target = target;
+    }
+}
+export function mutateSetupConfiguration(target, transform, expectedHash) {
     const directory = path.dirname(target);
     ensureSetupDirectory(directory);
     const directoryIdentity = fs.lstatSync(directory);
@@ -25,6 +33,9 @@ export function mutateSetupConfiguration(target, transform) {
         throw new Error(`Setup directory changed while updating: ${directory}`);
     return withSetupFileLock(target, directoryIdentity, () => {
         const current = readAnchoredSetupFile(target, directoryIdentity);
+        if (expectedHash !== undefined && setupConfigurationHash(current) !== expectedHash) {
+            throw new SetupConfigurationChangedError(target);
+        }
         const existing = current ? parseSetupConfiguration(current, target) : undefined;
         const next = transform(existing);
         if (next === undefined)
@@ -36,10 +47,17 @@ export function mutateSetupConfiguration(target, transform) {
     });
 }
 export function readSetupConfiguration(target) {
+    return readSetupConfigurationSnapshot(target).configuration;
+}
+export function readSetupConfigurationSnapshot(target) {
     const bytes = readSetupFile(target);
-    if (!bytes)
-        return undefined;
-    return parseSetupConfiguration(bytes, target);
+    return {
+        configuration: bytes ? parseSetupConfiguration(bytes, target) : undefined,
+        hash: setupConfigurationHash(bytes),
+    };
+}
+function setupConfigurationHash(bytes) {
+    return bytes === undefined ? "missing" : createHash("sha256").update(bytes).digest("hex");
 }
 function parseSetupConfiguration(bytes, target) {
     let value;
