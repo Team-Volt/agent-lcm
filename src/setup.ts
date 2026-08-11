@@ -107,7 +107,7 @@ function updateHooks(
 }
 
 function removeHooks(harness: CaptureHarness, target: string, targetExists: boolean, expectedHash: string): boolean {
-  if (harness === "copilot" || harness === "vscode" || !targetExists) return false;
+  if (harness === "copilot" || harness === "vscode" || (!targetExists && harness !== "codex")) return false;
   return mutateSetupConfiguration(target, (existing) => existing === undefined
     ? undefined
     : removeSetupHooks(existing, harness, target), expectedHash);

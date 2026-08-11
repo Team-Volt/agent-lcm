@@ -197,6 +197,24 @@ test("Codex setup reports recoverable partial state when hooks change during nat
   ]);
 });
 
+test("Codex remove reports recoverable partial state when hooks appear during native removal", (t) => {
+  const fake = fakeSetupCli(t, "codex");
+  const clientHome = tempHome("agent-lcm-codex-remove-race-");
+  const target = path.join(clientHome, "hooks.json");
+  const concurrent = JSON.stringify({ metadata: { user: true }, hooks: {} });
+
+  assert.throws(() => removeHarness("codex", {
+    home: clientHome,
+    env: { ...fake.env, AGENT_LCM_FAKE_MUTATE_TARGET: target, AGENT_LCM_FAKE_MUTATE_CONTENT: concurrent },
+  }), /Native codex remove completed.*concurrent change.*did not overwrite.*rerun agent-lcm remove codex/u);
+
+  assert.equal(fs.readFileSync(target, "utf8"), concurrent);
+  assert.deepEqual(readSetupCalls(fake.log), [
+    ["plugin", "list"],
+    ["plugin", "remove", "agent-lcm@agent-lcm"],
+  ]);
+});
+
 test("successful Copilot setup removes only legacy shared Agent LCM hooks", (t) => {
   // Given: a capable Copilot CLI and a shared hook file with owned and unrelated hooks.
   const fake = fakeSetupCli(t, "copilot");

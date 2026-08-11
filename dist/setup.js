@@ -59,7 +59,7 @@ function updateHooks(harness, nativeStatus, target, command, expectedHash) {
     }, expectedHash);
 }
 function removeHooks(harness, target, targetExists, expectedHash) {
-    if (harness === "copilot" || harness === "vscode" || !targetExists)
+    if (harness === "copilot" || harness === "vscode" || (!targetExists && harness !== "codex"))
         return false;
     return mutateSetupConfiguration(target, (existing) => existing === undefined
         ? undefined
