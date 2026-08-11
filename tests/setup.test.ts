@@ -44,6 +44,7 @@ test("setup leaves invalid owned configuration untouched", () => {
     new RegExp(setupPath.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"), "u"),
   );
   assert.deepEqual(fs.readFileSync(setupPath), original);
+  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)), ["agent-lcm.json"]);
 });
 
 test("setup rejects malformed Kiro schema without changing the owned file", () => {
@@ -55,6 +56,7 @@ test("setup rejects malformed Kiro schema without changing the owned file", () =
 
   assert.throws(() => setupHarness("kiro", { home: kiroHome, command: "/opt/agent-lcm/bin/agent-lcm" }), /invalid setup configuration/u);
   assert.deepEqual(fs.readFileSync(setupPath), original);
+  assert.deepEqual(fs.readdirSync(path.dirname(setupPath)), ["agent-lcm.json"]);
 });
 
 test("setup rejects malformed Codex custom events without changing or backing up the file", () => {
@@ -117,7 +119,12 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
         },
         { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
       ],
-      sessionStart: [{ type: "command", command: "other-hook", timeout: 30 }],
+      sessionStart: [{
+        type: "command",
+        command: 'node "/opt/not-agent-lcm" capture --harness auto sessionStart',
+        timeout: 30,
+        metadata: { owner: "user" },
+      }],
       customEvent: [{ type: "command", command: "custom-hook", custom: true }],
       customCaptureEvent: [{
         type: "command",
@@ -137,7 +144,12 @@ test("shared setup replaces older Agent LCM registrations after a binary move wi
   assert.deepEqual(configuration.hooks.UserPromptSubmit, [
     { type: "command", command: "\"/opt/custom-agent-lcm\" capture --harness vscode UserPromptSubmit" },
   ]);
-  assert.deepEqual(configuration.hooks.sessionStart[0], { type: "command", command: "other-hook", timeout: 30 });
+  assert.deepEqual(configuration.hooks.sessionStart[0], {
+    type: "command",
+    command: 'node "/opt/not-agent-lcm" capture --harness auto sessionStart',
+    timeout: 30,
+    metadata: { owner: "user" },
+  });
   assert.equal(configuration.hooks.sessionStart[1].command, "node \"/new-location/bin/agent-lcm\" capture --harness auto sessionStart");
   assert.deepEqual(configuration.hooks.userPromptSubmitted[0], {
     type: "command",
@@ -173,7 +185,12 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
       { type: "command", command: "other-post-compact-hook", timeout: 30 },
     ] }],
     PreToolUse: [{ matcher: "Read", hooks: [
-      { type: "command", command: "other-pre-tool-hook", timeout: 30 },
+      {
+        type: "command",
+        command: 'node "/opt/not-agent-lcm" capture --harness codex PreToolUse',
+        timeout: 30,
+        metadata: { owner: "user" },
+      },
     ] }],
     CustomEvent: [{ hooks: [{
       type: "command",
@@ -208,7 +225,12 @@ test("Codex setup replaces its old Agent LCM commands and preserves unrelated ho
     { type: "command", command: "other-post-compact-hook", timeout: 30 },
   ] }]);
   assert.deepEqual(configuration.hooks.PreToolUse, [{ matcher: "Read", hooks: [
-    { type: "command", command: "other-pre-tool-hook", timeout: 30 },
+    {
+      type: "command",
+      command: 'node "/opt/not-agent-lcm" capture --harness codex PreToolUse',
+      timeout: 30,
+      metadata: { owner: "user" },
+    },
   ] }, { matcher: ".*", hooks: [
     { type: "command", command: 'node "/new/bin/agent-lcm" hook PreToolUse' },
   ] }]);
@@ -228,7 +250,11 @@ test("Cursor setup writes the user hooks file in Cursor's native schema", () => 
   const clientHome = tempHome("agent-lcm-cursor-");
   const hooksPath = path.join(clientHome, "hooks.json");
   fs.writeFileSync(hooksPath, JSON.stringify({ version: 1, owner: "user", hooks: {
-    stop: [{ command: "other-hook", timeout: 30 }],
+    stop: [{
+      command: 'node "/opt/not-agent-lcm" capture --harness cursor Stop',
+      timeout: 30,
+      metadata: { owner: "user" },
+    }],
   } }));
   const report = setupHarness("cursor", { home: clientHome, command: "/opt/agent-lcm/bin/agent-lcm" });
 
@@ -241,7 +267,11 @@ test("Cursor setup writes the user hooks file in Cursor's native schema", () => 
       beforeSubmitPrompt: [{ command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor UserPromptSubmit' }],
       postToolUse: [{ command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor PostToolUse' }],
       stop: [
-        { command: "other-hook", timeout: 30 },
+        {
+          command: 'node "/opt/not-agent-lcm" capture --harness cursor Stop',
+          timeout: 30,
+          metadata: { owner: "user" },
+        },
         { command: 'node "/opt/agent-lcm/bin/agent-lcm" capture --harness cursor Stop' },
       ],
     },
@@ -337,7 +367,11 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
     {
       name: "agent-lcm-kiro-PostToolUse",
       trigger: "PostToolUse",
-      action: { type: "command", command: "user-owned-command", timeout: 45 },
+      action: {
+        type: "command",
+        command: 'node "/opt/not-agent-lcm" capture --harness kiro PostToolUse',
+        timeout: 45,
+      },
       metadata: { owner: "user" },
     },
     {
@@ -367,7 +401,11 @@ test("Kiro setup updates its owned hooks after a binary move", () => {
   assert.deepEqual(configuration.hooks[2], {
     name: "agent-lcm-kiro-PostToolUse",
     trigger: "PostToolUse",
-    action: { type: "command", command: "user-owned-command", timeout: 45 },
+    action: {
+      type: "command",
+      command: 'node "/opt/not-agent-lcm" capture --harness kiro PostToolUse',
+      timeout: 45,
+    },
     metadata: { owner: "user" },
   });
   assert.equal(configuration.hooks[3].action.command, "node \"/new/bin/agent-lcm\" capture --harness kiro SessionStart");
