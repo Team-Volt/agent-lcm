@@ -108,8 +108,8 @@ function spawnLifecycleCommand(executable, argv, env) {
     const shim = resolveWindowsShim(executable, env);
     if (shim === null)
         return direct;
-    const command = quoteWindowsCommand([shim, ...argv], executable, argv);
-    const result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command], options);
+    assertSafeWindowsCommand([shim, ...argv], executable, argv);
+    const result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", shim, ...argv], options);
     if (isEnoent(result.error)) {
         throw new NativeLifecycleCommandError(executable, argv, result.status, SUPPRESSED_STDERR);
     }
@@ -135,11 +135,10 @@ function resolveWindowsShim(executable, env) {
     }
     return null;
 }
-function quoteWindowsCommand(values, executable, argv) {
+function assertSafeWindowsCommand(values, executable, argv) {
     if (values.some((value) => /["&|<>^%!\r\n]/u.test(value))) {
         throw new NativeLifecycleCommandError(executable, argv, null, SUPPRESSED_STDERR);
     }
-    return `"${values.map((value) => `"${value}"`).join(" ")}"`;
 }
 function outcome(harness, action, status, nativeCli, guide) {
     return { harness, action, status, nativeCli, guide };

@@ -170,8 +170,8 @@ function spawnLifecycleCommand(executable: HarnessCli, argv: readonly string[], 
 
   const shim = resolveWindowsShim(executable, env);
   if (shim === null) return direct;
-  const command = quoteWindowsCommand([shim, ...argv], executable, argv);
-  const result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command], options);
+  assertSafeWindowsCommand([shim, ...argv], executable, argv);
+  const result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", shim, ...argv], options);
   if (isEnoent(result.error)) {
     throw new NativeLifecycleCommandError(executable, argv, result.status, SUPPRESSED_STDERR);
   }
@@ -195,11 +195,10 @@ function resolveWindowsShim(executable: HarnessCli, env: NodeJS.ProcessEnv | und
   return null;
 }
 
-function quoteWindowsCommand(values: readonly string[], executable: HarnessCli, argv: readonly string[]): string {
+function assertSafeWindowsCommand(values: readonly string[], executable: HarnessCli, argv: readonly string[]): void {
   if (values.some((value) => /["&|<>^%!\r\n]/u.test(value))) {
     throw new NativeLifecycleCommandError(executable, argv, null, SUPPRESSED_STDERR);
   }
-  return `"${values.map((value) => `"${value}"`).join(" ")}"`;
 }
 
 function outcome(
