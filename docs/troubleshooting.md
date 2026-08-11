@@ -116,8 +116,8 @@ fails, the original file and native CLI invocation remain unchanged.
 
 If another process changes the hook file after that preflight while a native
 command is running, Agent LCM does not overwrite the new bytes. It exits `1`
-and states that the native action completed but hook cleanup did not. Repair
-the named file, then rerun the same `agent-lcm setup <harness>` or
+and states whether the native action completed or setup stopped. Repair the
+named file if needed, then rerun the same `agent-lcm setup <harness>` or
 `agent-lcm remove <harness>` command.
 
 If setup times out on `<target>.lock`, first confirm that no Agent LCM setup or

@@ -199,7 +199,8 @@ refused. Hook commands must be absolute paths without shell metacharacters. Thes
 repeated setup and removal safe while avoiding a second user-level hook copy
 after native installation. A native client and a hook file cannot share one
 transaction. If another process changes the hook file during native work,
-Agent LCM reports that recoverable partial state instead of overwriting it.
+Agent LCM reports whether the native action completed or setup stopped, then
+leaves the changed bytes untouched.
 
 Hooks start the daemon on demand. You can also manage it directly:
 

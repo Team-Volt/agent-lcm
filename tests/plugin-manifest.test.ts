@@ -4,9 +4,11 @@ import { readJson } from "./helpers.ts";
 
 test("root is an Agent Plugins 1.0 package", () => {
   const plugin = readJson("plugin.json");
-  assert.deepEqual(Object.keys(plugin).sort(), ["$schema", "description", "homepage", "name", "version"]);
+  assert.deepEqual(Object.keys(plugin).sort(), ["$schema", "author", "description", "homepage", "keywords", "name", "version"]);
   assert.equal(plugin.$schema, "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json");
   assert.equal(plugin.name, "agent-lcm");
+  assert.deepEqual(plugin.author, { name: "Team Volt" });
+  assert.deepEqual(plugin.keywords, ["agent-memory", "context", "recall", "sessions"]);
   assert.equal(plugin.homepage, "https://github.com/Team-Volt/agent-lcm");
 
   const mcp = readJson("mcp.json");

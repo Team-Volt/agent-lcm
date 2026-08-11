@@ -314,6 +314,24 @@ test("manual setup preserves a concurrent hook rewrite when no mutation is neede
   assert.deepEqual(readSetupCalls(fake.log), [["--version"]]);
 });
 
+test("Kiro setup reports a concurrent hook rewrite without claiming native install", (t) => {
+  const fake = fakeSetupCli(t, "kiro-cli");
+  const clientHome = tempHome("agent-lcm-kiro-race-");
+  const target = path.join(clientHome, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify({ version: "v1", hooks: [] }));
+  const concurrent = JSON.stringify({ version: "v1", metadata: { user: true }, hooks: [] });
+
+  assert.throws(() => setupHarness("kiro", {
+    home: clientHome,
+    command: "/opt/agent-lcm/bin/agent-lcm",
+    env: { ...fake.env, AGENT_LCM_FAKE_MUTATE_TARGET: target, AGENT_LCM_FAKE_MUTATE_CONTENT: concurrent },
+  }), /kiro setup stopped.*concurrent change.*did not overwrite.*rerun agent-lcm setup kiro/u);
+
+  assert.equal(fs.readFileSync(target, "utf8"), concurrent);
+  assert.deepEqual(readSetupCalls(fake.log), [["--version"]]);
+});
+
 test("Kiro setup uses the native array schema, is repeatable, and leaves sibling hooks unchanged", () => {
   const kiroHome = tempHome("agent-lcm-kiro-");
   const unrelatedKiroHook = path.join(kiroHome, "hooks", "other.json");
@@ -774,7 +792,7 @@ test("setup requires an absolute installed binary path", () => {
 
 function fakeSetupCli(
   t: test.TestContext,
-  name: "codex" | "copilot" | "cursor-agent",
+  name: "codex" | "copilot" | "cursor-agent" | "kiro-cli",
 ): { readonly env: NodeJS.ProcessEnv; readonly log: string } {
   const bin = fs.mkdtempSync(path.join(tempHome("agent-lcm-setup-cli-parent-"), "bin-"));
   const log = path.join(bin, "calls.jsonl");

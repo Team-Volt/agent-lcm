@@ -124,13 +124,21 @@ function finishHookUpdate(
   try {
     return update();
   } catch (error) {
+    if (error instanceof SetupConfigurationChangedError) {
+      const result = nativeStatus === "native-complete"
+        ? `Native ${harness} ${action} completed`
+        : `${harness} ${action} stopped`;
+      throw new Error(
+        `${result}, but Agent LCM detected a concurrent change to ${target} and did not overwrite it. `
+        + `Repair it if needed, then rerun agent-lcm ${action} ${harness}.`,
+        { cause: error },
+      );
+    }
     if (nativeStatus !== "native-complete") throw error;
-    const detail = error instanceof SetupConfigurationChangedError
-      ? "Agent LCM detected the concurrent change and did not overwrite it."
-      : "Inspect the hook file because the local update may have completed.";
     throw new Error(
       `Native ${harness} ${action} completed, but Agent LCM could not safely update ${target}. `
-      + `${detail} Repair it if needed, then rerun agent-lcm ${action} ${harness}.`,
+      + `Inspect the hook file because the local update may have completed. `
+      + `Repair it if needed, then rerun agent-lcm ${action} ${harness}.`,
       { cause: error },
     );
   }
