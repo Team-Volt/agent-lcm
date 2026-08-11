@@ -1,5 +1,6 @@
+import path from "node:path";
 import { runHarnessLifecycle } from "./setup-adapters.js";
-import { mutateSetupConfiguration, readSetupConfiguration } from "./setup-files.js";
+import { ensureSetupDirectory, mutateSetupConfiguration, readSetupConfiguration } from "./setup-files.js";
 import { assertSafeSetupCommand, setupHooksConfigured } from "./setup-hook-status.js";
 import { mergeSetupHooks, removeSetupHooks, removeSharedSetupHooks, validateSetupHooks, } from "./setup-hooks.js";
 import { SETUP_HARNESSES, setupPath } from "./setup-targets.js";
@@ -9,6 +10,7 @@ export function setupHarness(harness, options) {
     assertSafeSetupCommand(command);
     const existing = readSetupConfiguration(target);
     validateSetupHooks(harness, existing, target);
+    ensureSetupDirectory(path.dirname(target));
     const native = runHarnessLifecycle(harness, "setup", options.env ? { env: options.env } : {});
     const changed = updateHooks(harness, native.status, target, command, existing !== undefined);
     return {

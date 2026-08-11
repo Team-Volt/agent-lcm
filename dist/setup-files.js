@@ -160,7 +160,7 @@ function readSetupFile(target) {
         throw new Error(`Cannot update setup configuration that is not a regular file: ${target}`);
     return fs.readFileSync(target);
 }
-function ensureSetupDirectory(directory) {
+export function ensureSetupDirectory(directory) {
     const created = fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (created !== undefined)
         fs.chmodSync(directory, 0o700);

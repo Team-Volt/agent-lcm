@@ -1,6 +1,8 @@
+import path from "node:path";
+
 import type { CaptureHarness } from "./harnesses.ts";
 import { runHarnessLifecycle, type HarnessCli } from "./setup-adapters.ts";
-import { mutateSetupConfiguration, readSetupConfiguration } from "./setup-files.ts";
+import { ensureSetupDirectory, mutateSetupConfiguration, readSetupConfiguration } from "./setup-files.ts";
 import { assertSafeSetupCommand, setupHooksConfigured } from "./setup-hook-status.ts";
 import {
   mergeSetupHooks,
@@ -37,6 +39,7 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
   assertSafeSetupCommand(command);
   const existing = readSetupConfiguration(target);
   validateSetupHooks(harness, existing, target);
+  ensureSetupDirectory(path.dirname(target));
   const native = runHarnessLifecycle(harness, "setup", options.env ? { env: options.env } : {});
   const changed = updateHooks(harness, native.status, target, command, existing !== undefined);
   return {

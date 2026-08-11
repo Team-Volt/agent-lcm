@@ -524,7 +524,7 @@ test("setup prints a clear result for people and keeps JSON output for scripts",
 });
 
 test("CLI setup and remove use native Codex with an isolated explicit home", (t) => {
-  const home = tempHome("agent-lcm-cli-native-");
+  const home = path.join(tempHome("agent-lcm-cli-native-"), "new-codex-home");
   const fake = fakeLifecycleCli(t, "codex");
   const env = { PATH: fake.path, AGENT_LCM_FAKE_LOG: fake.log };
 
@@ -724,6 +724,7 @@ function fakeLifecycleCli(
   const log = path.join(bin, "calls.jsonl");
   const script = `#!/usr/bin/env node
 const fs = require("node:fs");
+if (!fs.existsSync(process.env.CODEX_HOME)) process.exit(24);
 fs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify({ argv: process.argv.slice(2), env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME, COPILOT_HOME: process.env.COPILOT_HOME, AGENT_LCM_HOME: process.env.AGENT_LCM_HOME } }) + "\\n");
 `;
   fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });

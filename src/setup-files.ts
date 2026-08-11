@@ -151,7 +151,7 @@ function readSetupFile(target: string): Buffer | undefined {
   return fs.readFileSync(target);
 }
 
-function ensureSetupDirectory(directory: string): void {
+export function ensureSetupDirectory(directory: string): void {
   const created = fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (created !== undefined) fs.chmodSync(directory, 0o700);
 }
