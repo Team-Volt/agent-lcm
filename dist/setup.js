@@ -46,6 +46,8 @@ export function setupStatus(options = {}) {
     }));
 }
 function updateHooks(harness, nativeStatus, target, command, expectedHash) {
+    if (harness !== "kiro" && nativeStatus !== "native-complete")
+        return false;
     return mutateSetupConfiguration(target, (existing) => {
         if (harness === "kiro")
             return mergeSetupHooks(existing, harness, command, target);

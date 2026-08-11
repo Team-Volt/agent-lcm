@@ -94,6 +94,7 @@ function updateHooks(
   command: string,
   expectedHash: string,
 ): boolean {
+  if (harness !== "kiro" && nativeStatus !== "native-complete") return false;
   return mutateSetupConfiguration(target, (existing) => {
     if (harness === "kiro") return mergeSetupHooks(existing, harness, command, target);
     if (harness === "codex" && nativeStatus === "native-complete") {

@@ -295,6 +295,25 @@ test("manual setup preserves legacy shared hooks and creates no target", (t) => 
   assert.equal(fs.existsSync(path.join(cursorHome, "hooks.json")), false);
 });
 
+test("manual setup preserves a concurrent hook rewrite when no mutation is needed", (t) => {
+  const fake = fakeSetupCli(t, "cursor-agent");
+  const clientHome = tempHome("agent-lcm-cursor-manual-race-");
+  const target = path.join(clientHome, "hooks.json");
+  fs.writeFileSync(target, JSON.stringify({ version: 1, hooks: {} }));
+  const concurrent = JSON.stringify({ version: 1, metadata: { user: true }, hooks: {} });
+
+  const report = setupHarness("cursor", {
+    home: clientHome,
+    command: "/opt/agent-lcm/bin/agent-lcm",
+    env: { ...fake.env, AGENT_LCM_FAKE_MUTATE_TARGET: target, AGENT_LCM_FAKE_MUTATE_CONTENT: concurrent },
+  });
+
+  assert.equal(report.status, "manual-required");
+  assert.deepEqual(report.hooks, { path: target, changed: false });
+  assert.equal(fs.readFileSync(target, "utf8"), concurrent);
+  assert.deepEqual(readSetupCalls(fake.log), [["--version"]]);
+});
+
 test("Kiro setup uses the native array schema, is repeatable, and leaves sibling hooks unchanged", () => {
   const kiroHome = tempHome("agent-lcm-kiro-");
   const unrelatedKiroHook = path.join(kiroHome, "hooks", "other.json");
@@ -755,11 +774,11 @@ test("setup requires an absolute installed binary path", () => {
 
 function fakeSetupCli(
   t: test.TestContext,
-  name: "codex" | "copilot",
+  name: "codex" | "copilot" | "cursor-agent",
 ): { readonly env: NodeJS.ProcessEnv; readonly log: string } {
   const bin = fs.mkdtempSync(path.join(tempHome("agent-lcm-setup-cli-parent-"), "bin-"));
   const log = path.join(bin, "calls.jsonl");
-  const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst argv = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(argv) + "\\n");\nif (process.env.AGENT_LCM_FAKE_MUTATE_TARGET && JSON.stringify(argv) === JSON.stringify(["plugin", "list"])) fs.writeFileSync(process.env.AGENT_LCM_FAKE_MUTATE_TARGET, process.env.AGENT_LCM_FAKE_MUTATE_CONTENT);\n`;
+  const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst argv = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(argv) + "\\n");\nif (process.env.AGENT_LCM_FAKE_MUTATE_TARGET && (JSON.stringify(argv) === JSON.stringify(["plugin", "list"]) || JSON.stringify(argv) === JSON.stringify(["--version"]))) fs.writeFileSync(process.env.AGENT_LCM_FAKE_MUTATE_TARGET, process.env.AGENT_LCM_FAKE_MUTATE_CONTENT);\n`;
   fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
   t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
   return {
