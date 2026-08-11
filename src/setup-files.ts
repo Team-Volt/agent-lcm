@@ -1,10 +1,18 @@
-import { randomUUID } from "node:crypto";
+import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SETUP_LOCK_TIMEOUT_MS = 10_000;
 const SETUP_LOCK_POLL_MS = 10;
 const SETUP_LOCK_WAIT = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+const WORKER_BUSY_EXIT = 75;
+const WORKER_MISSING_EXIT = 66;
+const SETUP_FILE_WORKER = fileURLToPath(new URL(
+  import.meta.url.endsWith(".ts") ? "./setup-file-worker.ts" : "./setup-file-worker.js",
+  import.meta.url,
+));
 
 export class SetupFileLockTimeoutError extends Error {
   readonly lockPath: string;
@@ -25,17 +33,17 @@ export function mutateSetupConfiguration(
   const directoryIdentity = fs.lstatSync(directory);
   if (!directoryIdentity.isDirectory()) throw new Error(`Setup directory changed while updating: ${directory}`);
   return withSetupFileLock(target, directoryIdentity, () => {
-    assertDirectoryIdentity(directory, directoryIdentity);
-    const current = readSetupFile(target);
+    const current = readAnchoredSetupFile(target, directoryIdentity);
     const existing = current ? parseSetupConfiguration(current, target) : undefined;
     const next = transform(existing);
     if (next === undefined) return false;
     if (existing && JSON.stringify(existing) === JSON.stringify(next)) return false;
-    assertDirectoryIdentity(directory, directoryIdentity);
-    if (current) backupSetupBytes(target, current);
-    assertDirectoryIdentity(directory, directoryIdentity);
-    writeSetupBytes(target, Buffer.from(`${JSON.stringify(next, null, 2)}\n`));
-    assertDirectoryIdentity(directory, directoryIdentity);
+    writeAnchoredSetupFile(
+      target,
+      directoryIdentity,
+      current === undefined ? "missing" : createHash("sha256").update(current).digest("hex"),
+      Buffer.from(`${JSON.stringify(next, null, 2)}\n`),
+    );
     return true;
   });
 }
@@ -57,86 +65,74 @@ function parseSetupConfiguration(bytes: Buffer, target: string): Record<string, 
   return value;
 }
 
-function writeSetupBytes(target: string, bytes: Buffer): void {
-  const temporary = `${target}.${randomUUID()}.tmp`;
-  let descriptor: number | undefined;
-  try {
-    descriptor = fs.openSync(temporary, "wx", 0o600);
-    fs.fchmodSync(descriptor, 0o600);
-    fs.writeFileSync(descriptor, bytes);
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-    descriptor = undefined;
-    fs.renameSync(temporary, target);
-    if (process.platform !== "win32") fsyncPath(path.dirname(target));
-  } catch (error) {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
-    try {
-      fs.unlinkSync(temporary);
-    } catch (cleanupError) {
-      if (!hasCode(cleanupError, "ENOENT")) throw new AggregateError([error, cleanupError], "Setup publication and cleanup failed.");
-    }
-    throw error;
-  }
-}
-
-function backupSetupBytes(target: string, bytes: Buffer): void {
-  const extension = path.extname(target);
-  const stem = extension ? target.slice(0, -extension.length) : target;
-  const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
-  for (let suffix = 0; ; suffix += 1) {
-    const candidate = `${stem}-pre-agent-lcm-${timestamp}${suffix ? `-${suffix}` : ""}${extension}`;
-    let descriptor: number;
-    try {
-      descriptor = fs.openSync(candidate, "wx", 0o600);
-    } catch (error) {
-      if (hasCode(error, "EEXIST")) continue;
-      throw error;
-    }
-    try {
-      fs.fchmodSync(descriptor, 0o600);
-      fs.writeFileSync(descriptor, bytes);
-      fs.fsyncSync(descriptor);
-      fs.closeSync(descriptor);
-      return;
-    } catch (error) {
-      fs.closeSync(descriptor);
-      try {
-        fs.unlinkSync(candidate);
-      } catch (cleanupError) {
-        if (!hasCode(cleanupError, "ENOENT")) throw new AggregateError([error, cleanupError], "Setup backup and cleanup failed.");
-      }
-      throw error;
-    }
-  }
-}
-
 function withSetupFileLock<T>(target: string, directoryIdentity: fs.Stats, callback: () => T): T {
   const lockPath = `${target}.lock`;
   const deadline = Date.now() + SETUP_LOCK_TIMEOUT_MS;
   let acquired = false;
+  let failed = false;
   // ponytail: a crashed setup leaves this empty directory; recover it manually
   // rather than guessing whether another setup process is still alive.
   try {
     while (!acquired) {
-      assertDirectoryIdentity(path.dirname(target), directoryIdentity);
-      try {
-        fs.mkdirSync(lockPath, { mode: 0o700 });
-        acquired = true;
-      } catch (error) {
-        if (!hasCode(error, "EEXIST")) throw error;
-        const status = fs.lstatSync(lockPath);
-        if (status.isSymbolicLink()) throw new Error(`Refusing setup lock symlink: ${lockPath}`);
-        if (!status.isDirectory()) throw new Error(`Cannot use setup lock that is not a directory: ${lockPath}`);
-        if (Date.now() >= deadline) throw new SetupFileLockTimeoutError(lockPath);
-        Atomics.wait(SETUP_LOCK_WAIT, 0, 0, SETUP_LOCK_POLL_MS);
-      }
+      const result = runSetupFileWorker("lock", target, directoryIdentity);
+      if (result.status === 0) acquired = true;
+      else if (result.status !== WORKER_BUSY_EXIT) throw setupFileWorkerError(result);
+      else if (Date.now() >= deadline) throw new SetupFileLockTimeoutError(lockPath);
+      else Atomics.wait(SETUP_LOCK_WAIT, 0, 0, SETUP_LOCK_POLL_MS);
     }
-    assertDirectoryIdentity(path.dirname(target), directoryIdentity);
     return callback();
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    if (acquired) fs.rmdirSync(lockPath);
+    if (acquired) {
+      const result = runSetupFileWorker("unlock", target, directoryIdentity);
+      if (!failed && result.status !== 0) throw setupFileWorkerError(result);
+    }
   }
+}
+
+function readAnchoredSetupFile(target: string, directoryIdentity: fs.Stats): Buffer | undefined {
+  const result = runSetupFileWorker("read", target, directoryIdentity);
+  if (result.status === WORKER_MISSING_EXIT) return undefined;
+  if (result.status !== 0) throw setupFileWorkerError(result);
+  return result.stdout;
+}
+
+function writeAnchoredSetupFile(target: string, directoryIdentity: fs.Stats, expectedHash: string, bytes: Buffer): void {
+  const result = runSetupFileWorker("write", target, directoryIdentity, [expectedHash, new Date().toISOString()], bytes);
+  if (result.status !== 0) throw setupFileWorkerError(result);
+}
+
+function runSetupFileWorker(
+  operation: "lock" | "unlock" | "read" | "write",
+  target: string,
+  directoryIdentity: fs.Stats,
+  extraArguments: readonly string[] = [],
+  input?: Buffer,
+): childProcess.SpawnSyncReturns<Buffer> {
+  const result = childProcess.spawnSync(process.execPath, [
+    "--no-warnings",
+    SETUP_FILE_WORKER,
+    operation,
+    path.basename(target),
+    String(directoryIdentity.dev),
+    String(directoryIdentity.ino),
+    ...extraArguments,
+  ], {
+    cwd: path.dirname(target),
+    input,
+    maxBuffer: 16 * 1024 * 1024,
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (result.error !== undefined) throw result.error;
+  return result;
+}
+
+function setupFileWorkerError(result: childProcess.SpawnSyncReturns<Buffer>): Error {
+  const message = result.stderr.toString("utf8").trim();
+  return new Error(message || `Setup file worker failed with status ${String(result.status)}.`);
 }
 
 function readSetupFile(target: string): Buffer | undefined {
@@ -178,13 +174,6 @@ function noFollowFlag(): number {
   return process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW;
 }
 
-function assertDirectoryIdentity(directory: string, expected: fs.Stats): void {
-  const actual = fs.lstatSync(directory);
-  if (!actual.isDirectory() || actual.dev !== expected.dev || actual.ino !== expected.ino) {
-    throw new Error(`Setup directory changed while updating: ${directory}`);
-  }
-}
-
 function assertSafeDirectoryPath(directory: string): void {
   const resolved = path.resolve(directory);
   const root = path.parse(resolved).root;
@@ -208,15 +197,6 @@ function assertSafeDirectoryPath(directory: string): void {
 
 function isDarwinSystemAlias(target: string): boolean {
   return process.platform === "darwin" && (target === "/etc" || target === "/tmp" || target === "/var");
-}
-
-function fsyncPath(target: string): void {
-  const descriptor = fs.openSync(target, "r");
-  try {
-    fs.fsyncSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
 }
 
 function hasCode(error: unknown, code: string): boolean {
