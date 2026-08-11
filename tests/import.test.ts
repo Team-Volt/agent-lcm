@@ -133,6 +133,32 @@ test("all discovers local Codex, Copilot, and Kiro homes", async (t) => {
   assert.match(cli.stderr, /3 sessions across 3 harnesses/u);
 });
 
+test("Copilot default import honors COPILOT_HOME", () => {
+  const userHome = tempHome("agent-lcm-import-copilot-user-");
+  const copilotHome = tempHome("agent-lcm-import-copilot-home-");
+  const session = path.join(copilotHome, "session-state", "one");
+  fs.mkdirSync(session, { recursive: true });
+  fs.copyFileSync(fixtures("import/copilot/events.jsonl"), path.join(session, "events.jsonl"));
+  const result = runCli(["import", "--harness", "copilot", "--dry-run", "--json"], {
+    env: { HOME: userHome, USERPROFILE: userHome, COPILOT_HOME: copilotHome },
+  });
+  assertCliOk(result);
+  assert.equal(JSON.parse(result.stdout).sessions_scanned, 1);
+});
+
+test("Kiro default import honors KIRO_HOME", () => {
+  const userHome = tempHome("agent-lcm-import-kiro-user-");
+  const kiroHome = tempHome("agent-lcm-import-kiro-home-");
+  const sessions = path.join(kiroHome, "sessions", "cli");
+  fs.mkdirSync(sessions, { recursive: true });
+  fs.copyFileSync(fixtures("import/kiro/session.jsonl"), path.join(sessions, "session.jsonl"));
+  const result = runCli(["import", "--harness", "kiro", "--dry-run", "--json"], {
+    env: { HOME: userHome, USERPROFILE: userHome, KIRO_HOME: kiroHome },
+  });
+  assertCliOk(result);
+  assert.equal(JSON.parse(result.stdout).sessions_scanned, 1);
+});
+
 test("dry-run progress reports zero discovered sessions without starting the daemon", async () => {
   const progress: ImportProgress[] = [];
   const config = loadConfig({ home: tempHome("agent-lcm-import-empty-progress-") });

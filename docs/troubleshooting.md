@@ -45,10 +45,13 @@ home, configure it explicitly and pass that directory:
 agent-lcm setup codex --home /path/to/codex-home
 ```
 
-Codex loads `~/.codex/hooks.json`; Cursor loads `~/.cursor/hooks.json`. VS Code and GitHub Copilot share
-`~/.copilot/hooks/agent-lcm.json`, and the generated hook detects which one sent
-the event. Setup refuses malformed existing JSON instead of overwriting it.
-Before changing a valid existing file, setup saves a timestamped
+Codex loads `~/.codex/hooks.json`; Cursor loads `~/.cursor/hooks.json`. VS Code loads
+`~/.copilot/hooks/agent-lcm-vscode.json`; GitHub Copilot CLI loads
+`${COPILOT_HOME:-~/.copilot}/hooks/agent-lcm-copilot.json`. The distinct files use
+each client's documented event spelling and explicit provenance. Setup refuses
+malformed existing JSON instead of overwriting it. The Copilot plugin already
+supplies its root hook; use explicit `setup copilot` only without that plugin,
+or events are captured twice. Before changing a valid existing file, setup saves a timestamped
 `-pre-agent-lcm-` backup in the same directory.
 
 Codex and Cursor may ask you to review or trust plugin-owned commands. Capture

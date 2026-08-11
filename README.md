@@ -123,11 +123,18 @@ agent-lcm setup kiro
 ```
 
 Run only the commands for the harnesses you use. VS Code and GitHub Copilot
-share `~/.copilot/hooks/agent-lcm.json`; either setup command installs the same
-auto-detecting hooks. Setup preserves unrelated hook entries, is safe to run
-again, and writes private files containing the absolute Agent LCM command. If a
-target file already exists and needs changes, setup first saves a timestamped
-`-pre-agent-lcm-` backup beside it.
+read the same user hook directory but require different native event spellings,
+so setup keeps their configuration in distinct owned files. A Copilot plugin
+installation already activates the root `hooks.json`; `setup all` detects that
+installation and does not add either Copilot or VS Code user hooks, because
+Copilot CLI would also execute the VS Code aliases. Run explicit `setup copilot`
+only as an npm/no-plugin fallback, because using it alongside
+the plugin duplicates capture. When both clients are detected, `setup all`
+chooses at most one user hook; configure the other explicitly only after
+reviewing the duplicate-capture tradeoff (Copilot CLI accepts VS Code aliases). Setup preserves
+unrelated hook entries, is safe to run again, and writes private files containing
+the absolute Agent LCM command. If a target file already exists and needs
+changes, setup first saves a timestamped `-pre-agent-lcm-` backup beside it.
 
 The user hook locations are:
 
@@ -135,9 +142,11 @@ The user hook locations are:
 | --- | --- |
 | Codex | `~/.codex/hooks.json` |
 | Cursor | `~/.cursor/hooks.json` |
-| VS Code | `~/.copilot/hooks/agent-lcm.json` |
-| GitHub Copilot | `~/.copilot/hooks/agent-lcm.json` |
-| Kiro | `~/.kiro/hooks/agent-lcm.json` |
+| VS Code | `~/.copilot/hooks/agent-lcm-vscode.json` |
+| GitHub Copilot | `${COPILOT_HOME:-~/.copilot}/hooks/agent-lcm-copilot.json` |
+| Kiro | `${KIRO_HOME:-~/.kiro}/hooks/agent-lcm.json` |
+
+Kiro's documented `KIRO_HOME` override is honored for detection, setup, and default session import.
 
 Check the result, then restart each harness:
 

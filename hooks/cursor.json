@@ -1,8 +1,25 @@
 {
+  "version": 1,
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${CURSOR_PLUGIN_ROOT}/bin/agent-lcm\" capture --harness cursor SessionStart" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${CURSOR_PLUGIN_ROOT}/bin/agent-lcm\" capture --harness cursor UserPromptSubmit" }] }],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "node \"${CURSOR_PLUGIN_ROOT}/bin/agent-lcm\" capture --harness cursor PostToolUse" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${CURSOR_PLUGIN_ROOT}/bin/agent-lcm\" capture --harness cursor Stop" }] }]
+    "sessionStart": [
+      {
+        "command": "node \"./bin/agent-lcm\" capture --harness cursor sessionStart"
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node \"./bin/agent-lcm\" capture --harness cursor beforeSubmitPrompt"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node \"./bin/agent-lcm\" capture --harness cursor postToolUse"
+      }
+    ],
+    "stop": [
+      {
+        "command": "node \"./bin/agent-lcm\" capture --harness cursor stop"
+      }
+    ]
   }
 }

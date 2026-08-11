@@ -47,17 +47,21 @@ test("client hook manifests invoke explicit or detected harness capture", () => 
   assert.equal(cursor.homepage, "https://github.com/Team-Volt/agent-lcm");
   assert.equal(cursor.mcpServers, "./mcp.cursor.json");
   assert.deepEqual(readJson("mcp.cursor.json").mcpServers["agent-lcm"], {
-    type: "stdio",
     command: "node",
-    args: ["${CURSOR_PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+    args: ["./bin/agent-lcm", "mcp"],
   });
-  const cursorHooks = JSON.stringify(readJson("hooks/cursor.json"));
-  assert.match(cursorHooks, /capture --harness cursor UserPromptSubmit/u);
-  assert.match(cursorHooks, /\$\{CURSOR_PLUGIN_ROOT\}/u);
-  assert.doesNotMatch(cursorHooks, /\$\{PLUGIN_ROOT\}/u);
+  const cursorManifest = readJson("hooks/cursor.json");
+  assert.equal(cursorManifest.version, 1);
+  assert.deepEqual(Object.keys(cursorManifest.hooks).sort(), ["beforeSubmitPrompt", "postToolUse", "sessionStart", "stop"]);
+  const cursorHooks = JSON.stringify(cursorManifest);
+  assert.match(cursorHooks, /capture --harness cursor beforeSubmitPrompt/u);
+  assert.doesNotMatch(cursorHooks, /CURSOR_PLUGIN_ROOT|PLUGIN_ROOT/u);
+  assert.doesNotMatch(cursorHooks, /"hooks":\s*\[/u);
   const portableHooks = readJson("hooks.json");
   assert.equal(portableHooks.version, 1);
   assert.equal(portableHooks.hooks.sessionStart[0].type, "command");
-  assert.deepEqual(Object.keys(portableHooks.hooks).sort(), ["postToolUse", "sessionEnd", "sessionStart", "userPromptSubmitted"]);
-  assert.match(JSON.stringify(portableHooks), /capture --harness auto/u);
+  assert.deepEqual(Object.keys(portableHooks.hooks).sort(), ["agentStop", "postToolUse", "sessionStart", "userPromptSubmitted"]);
+  for (const event of ["sessionStart", "userPromptSubmitted", "postToolUse", "agentStop"]) {
+    assert.match(portableHooks.hooks[event][0].command, new RegExp(`capture --harness copilot ${event}$`, "u"));
+  }
 });

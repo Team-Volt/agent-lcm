@@ -34,7 +34,40 @@ test("explicit VS Code capture accepts its documented payload spelling", () => {
   assert.equal(event.hook_event, "UserPromptSubmit");
 });
 
-test("auto capture accepts VS Code events from the shared hook file", () => {
+test("Copilot hook arguments supply the event name absent from documented camel-case payloads", () => {
+  const event = mapHarnessEvent("auto", "userPromptSubmitted", {
+    sessionId: "copilot-without-synthetic-event-field",
+    timestamp: 1785578582000,
+    cwd: "/tmp/copilot",
+    prompt: "documented Copilot payload",
+  });
+  assert.equal(event.harness, "copilot");
+  assert.equal(event.hook_event, "UserPromptSubmit");
+});
+
+test("maps the documented Copilot agentStop and VS Code Stop event pair", () => {
+  const copilot = mapHarnessEvent("auto", "agentStop", {
+    sessionId: "copilot-stop",
+    timestamp: 1785578582000,
+    cwd: "/tmp/copilot",
+    transcriptPath: "/tmp/transcript",
+    stopReason: "end_turn",
+    stop_hook_active: false,
+  });
+  const vscode = mapHarnessEvent("vscode", "Stop", {
+    hook_event_name: "Stop",
+    session_id: "vscode-stop",
+    timestamp: "2026-08-01T10:01:00.000Z",
+    cwd: "/tmp/vscode",
+    transcript_path: "/tmp/transcript",
+    stop_reason: "end_turn",
+    stop_hook_active: false,
+  });
+  assert.equal(copilot.hook_event, "Stop");
+  assert.equal(vscode.hook_event, "Stop");
+});
+
+test("auto capture accepts a lower-camel VS Code compatibility event", () => {
   const event = mapHarnessEvent("auto", "userPromptSubmitted", {
     session_id: "vscode-shared-hook",
     cwd: "/tmp/vscode-shared-hook",
@@ -67,6 +100,17 @@ test("capture replaces a pre-existing harness namespace instead of nesting it", 
     cwd: "/tmp/namespaced",
   });
   assert.equal(event.session_id, "vscode:shared-session");
+});
+
+test("Cursor maps its documented lower-camel hook names while preserving native provenance", () => {
+  const event = mapHarnessEvent("cursor", "beforeSubmitPrompt", {
+    session_id: "cursor-native",
+    cwd: "/tmp/cursor",
+    prompt: "capture me",
+  });
+  assert.equal(event.hook_event, "UserPromptSubmit");
+  assert.equal(event.native_event, "beforeSubmitPrompt");
+  assert.equal(event.session_id, "cursor:cursor-native");
 });
 
 test("Kiro accepts the former lower-camel event aliases without changing its native event", () => {

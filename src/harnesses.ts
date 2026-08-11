@@ -6,9 +6,19 @@ export type CaptureHarness = "codex" | "cursor" | "vscode" | "copilot" | "kiro";
 
 const EVENT_MAP: Record<CaptureHarness, Record<string, string>> = {
   codex: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
-  cursor: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
+  cursor: {
+    sessionStart: "SessionStart",
+    beforeSubmitPrompt: "UserPromptSubmit",
+    postToolUse: "PostToolUse",
+    stop: "Stop",
+    // Accept commands written by Agent LCM releases predating Cursor's native hook schema.
+    SessionStart: "SessionStart",
+    UserPromptSubmit: "UserPromptSubmit",
+    PostToolUse: "PostToolUse",
+    Stop: "Stop",
+  },
   vscode: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
-  copilot: { sessionStart: "SessionStart", userPromptSubmitted: "UserPromptSubmit", postToolUse: "PostToolUse", sessionEnd: "Stop" },
+  copilot: { sessionStart: "SessionStart", userPromptSubmitted: "UserPromptSubmit", postToolUse: "PostToolUse", agentStop: "Stop", sessionEnd: "Stop" },
   kiro: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
 };
 
@@ -23,6 +33,7 @@ const VSCODE_ALIASES: Record<string, string> = {
   sessionStart: "SessionStart",
   userPromptSubmitted: "UserPromptSubmit",
   postToolUse: "PostToolUse",
+  agentStop: "Stop",
   sessionEnd: "Stop",
 };
 

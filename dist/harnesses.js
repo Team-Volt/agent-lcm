@@ -2,9 +2,19 @@ import { harnessSessionId, normalizeHookEvent } from "./events.js";
 import { sha256 } from "./redact.js";
 const EVENT_MAP = {
     codex: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
-    cursor: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
+    cursor: {
+        sessionStart: "SessionStart",
+        beforeSubmitPrompt: "UserPromptSubmit",
+        postToolUse: "PostToolUse",
+        stop: "Stop",
+        // Accept commands written by Agent LCM releases predating Cursor's native hook schema.
+        SessionStart: "SessionStart",
+        UserPromptSubmit: "UserPromptSubmit",
+        PostToolUse: "PostToolUse",
+        Stop: "Stop",
+    },
     vscode: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
-    copilot: { sessionStart: "SessionStart", userPromptSubmitted: "UserPromptSubmit", postToolUse: "PostToolUse", sessionEnd: "Stop" },
+    copilot: { sessionStart: "SessionStart", userPromptSubmitted: "UserPromptSubmit", postToolUse: "PostToolUse", agentStop: "Stop", sessionEnd: "Stop" },
     kiro: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
 };
 const KIRO_ALIASES = {
@@ -17,6 +27,7 @@ const VSCODE_ALIASES = {
     sessionStart: "SessionStart",
     userPromptSubmitted: "UserPromptSubmit",
     postToolUse: "PostToolUse",
+    agentStop: "Stop",
     sessionEnd: "Stop",
 };
 export function mapHarnessEvent(requestedHarness, nativeEvent, input, options = {}) {

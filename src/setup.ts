@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 import type { CaptureHarness } from "./harnesses.ts";
@@ -18,9 +19,15 @@ export function setupHarness(harness: CaptureHarness, options: SetupOptions): Se
   assertSafeCommand(command);
   const existing = readSetupConfiguration(target);
   const next = mergeConfiguration(existing, harness, command, target);
-  if (existing && JSON.stringify(existing) === JSON.stringify(next)) return { harness, path: target, changed: false };
+  if (existing && JSON.stringify(existing) === JSON.stringify(next)) {
+    const legacyChanged = harness === "vscode" || harness === "copilot"
+      ? cleanupLegacySharedConfiguration(target)
+      : false;
+    return { harness, path: target, changed: legacyChanged };
+  }
   if (existing) backupSetupConfiguration(target);
   writeSetupConfiguration(target, next);
+  if (harness === "vscode" || harness === "copilot") cleanupLegacySharedConfiguration(target);
   return { harness, path: target, changed: true };
 }
 
@@ -130,14 +137,14 @@ function mergeKiroConfiguration(existing: Record<string, unknown> | undefined, c
 
 function eventsFor(harness: CaptureHarness): string[] {
   return isSharedHookHarness(harness)
-    ? ["sessionStart", "userPromptSubmitted", "postToolUse", "sessionEnd"]
+    ? ["sessionStart", "userPromptSubmitted", "postToolUse", "agentStop"]
     : ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
 }
 
 function setupEvents(harness: "cursor" | "vscode" | "copilot"): ReadonlyArray<readonly [string, string]> {
-  return harness === "cursor"
-    ? [["sessionStart", "SessionStart"], ["beforeSubmitPrompt", "UserPromptSubmit"], ["postToolUse", "PostToolUse"], ["stop", "Stop"]]
-    : [["sessionStart", "sessionStart"], ["userPromptSubmitted", "userPromptSubmitted"], ["postToolUse", "postToolUse"], ["sessionEnd", "sessionEnd"]];
+  if (harness === "cursor") return [["sessionStart", "sessionStart"], ["beforeSubmitPrompt", "beforeSubmitPrompt"], ["postToolUse", "postToolUse"], ["stop", "stop"]];
+  if (harness === "vscode") return [["SessionStart", "SessionStart"], ["UserPromptSubmit", "UserPromptSubmit"], ["PostToolUse", "PostToolUse"], ["Stop", "Stop"]];
+  return [["sessionStart", "sessionStart"], ["userPromptSubmitted", "userPromptSubmitted"], ["postToolUse", "postToolUse"], ["agentStop", "agentStop"]];
 }
 
 function isSharedHookHarness(harness: CaptureHarness): harness is "copilot" | "vscode" {
@@ -145,7 +152,7 @@ function isSharedHookHarness(harness: CaptureHarness): harness is "copilot" | "v
 }
 
 function setupCaptureHarness(harness: CaptureHarness): CaptureHarness | "auto" {
-  return isSharedHookHarness(harness) ? "auto" : harness;
+  return harness;
 }
 
 function takeAgentLcmHooks(
@@ -154,7 +161,9 @@ function takeAgentLcmHooks(
   event: string,
 ): Record<string, unknown>[] {
   const found: Record<string, unknown>[] = [];
-  const candidates = isSharedHookHarness(harness) ? [event, sharedLegacyEvent(event)] : [event];
+  const candidates = isSharedHookHarness(harness)
+    ? [event, sharedLegacyEvent(event), ...(event === "agentStop" ? ["sessionEnd"] : [])]
+    : [event];
   for (const candidate of candidates) {
     const hooks = hooksByEvent[candidate];
     if (!Array.isArray(hooks)) continue;
@@ -174,7 +183,18 @@ function sharedLegacyEvent(event: string): string {
     sessionStart: "SessionStart",
     userPromptSubmitted: "UserPromptSubmit",
     postToolUse: "PostToolUse",
+    agentStop: "Stop",
     sessionEnd: "Stop",
+  } as Record<string, string>)[event] ?? event;
+}
+
+
+function cursorLegacyCaptureEvent(event: string): string {
+  return ({
+    sessionStart: "SessionStart",
+    beforeSubmitPrompt: "UserPromptSubmit",
+    postToolUse: "PostToolUse",
+    stop: "Stop",
   } as Record<string, string>)[event] ?? event;
 }
 
@@ -220,7 +240,6 @@ function configured(harness: CaptureHarness, target: string): boolean {
         ? isAgentLcmCodexHook(hook, event)
         : isExpectedCommandHook(hook, harness, event)));
   });
-  if (isSharedHookHarness(harness) && hasSharedPascalRegistration(hooksByEvent)) return false;
   return setupEvents(harness).every(([event, captureEvent]) => {
     const hooks = hooksByEvent[event];
     return Array.isArray(hooks) && hooks.some((entry) => isExpectedCommandHook(entry, setupCaptureHarness(harness), captureEvent));
@@ -247,12 +266,12 @@ function isCodexSelectors(value: unknown): value is Array<Record<string, unknown
 
 function isAgentLcmHook(value: Record<string, unknown>, event: string, harness: CaptureHarness): boolean {
   if ((value.type !== undefined && value.type !== "command") || typeof value.command !== "string") return false;
-  const match = /^(?:node )?"(?:[^"\\/]*[\\/])*agent-lcm(?:\.(?:cmd|exe))?" capture --harness (auto|codex|cursor|copilot|vscode|kiro) (sessionStart|userPromptSubmitted|postToolUse|sessionEnd|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
+  const match = /^(?:node )?"(?:[^"\\/]*[\\/])*agent-lcm(?:\.(?:cmd|exe))?" capture --harness (auto|codex|cursor|copilot|vscode|kiro) (sessionStart|beforeSubmitPrompt|userPromptSubmitted|postToolUse|agentStop|sessionEnd|stop|SessionStart|UserPromptSubmit|PostToolUse|Stop)$/u
     .exec(value.command);
-  const captureEvent = harness === "cursor"
-    ? setupEvents("cursor").find(([hookEvent]) => hookEvent === event)?.[1]
-    : event;
-  if (!match || match[2] !== captureEvent) return false;
+  const captureEvents = harness === "cursor"
+    ? [event, cursorLegacyCaptureEvent(event)]
+    : [event];
+  if (!match || !captureEvents.includes(match[2])) return false;
   return isSharedHookHarness(harness)
     ? match[1] === "auto" || match[1] === "copilot" || match[1] === "vscode"
     : match[1] === harness;
@@ -312,6 +331,38 @@ function isCaptureCommand(value: unknown, harness: CaptureHarness | "auto", even
   } catch {
     return false;
   }
+}
+
+function cleanupLegacySharedConfiguration(target: string): boolean {
+  const legacy = path.join(path.dirname(target), "agent-lcm.json");
+  if (legacy === target || !fs.existsSync(legacy)) return false;
+  let configuration: Record<string, unknown> | undefined;
+  try {
+    configuration = readSetupConfiguration(legacy);
+  } catch {
+    return false;
+  }
+  if (!configuration || configuration.version !== 1 || !isRecord(configuration.hooks)) return false;
+  const hooks = configuration.hooks;
+  let changed = false;
+  for (const [event, entries] of Object.entries(hooks)) {
+    if (!Array.isArray(entries) || !entries.every(isRecord)) continue;
+    const kept = entries.filter((entry) => {
+      const owned = isAgentLcmHook(entry, event, "vscode") || isAgentLcmHook(entry, event, "copilot");
+      if (owned) changed = true;
+      return !owned;
+    });
+    if (kept.length === 0) delete hooks[event];
+    else hooks[event] = kept;
+  }
+  if (!changed) return false;
+  backupSetupConfiguration(legacy);
+  if (Object.keys(hooks).length === 0 && Object.keys(configuration).every((key) => key === "version" || key === "hooks")) {
+    fs.unlinkSync(legacy);
+  } else {
+    writeSetupConfiguration(legacy, configuration);
+  }
+  return true;
 }
 
 function invalidConfiguration(target: string): Error {

@@ -166,18 +166,23 @@ async function rebuildImportedSessions(config: LcmConfig, sessions: ReadonlySet<
 
 function sourcesFor(options: ImportOptions): Array<{ harness: ImportHarness; paths: string[]; optional: boolean }> {
   if (options.harness) return [{ harness: options.harness, paths: options.paths?.map((value) => path.resolve(value)) ?? [defaultPath(options.harness)], optional: options.harness === "vscode" || options.harness === "cursor" }];
-  const roots = options.paths?.map((value) => path.resolve(value)) ?? [os.homedir()];
+  const roots = options.paths?.map((value) => path.resolve(value));
+  const defaultRoot = os.homedir();
   return [
-    { harness: "codex", paths: roots.flatMap((root) => [path.join(root, "codex", "sessions"), path.join(root, ".codex", "sessions")]), optional: true },
-    { harness: "copilot", paths: roots.flatMap((root) => [path.join(root, "copilot", "session-state"), path.join(root, ".copilot", "session-state")]), optional: true },
-    { harness: "kiro", paths: roots.flatMap((root) => [path.join(root, "kiro", "sessions", "cli"), path.join(root, ".kiro", "sessions", "cli")]), optional: true },
+    { harness: "codex", paths: (roots ?? [defaultRoot]).flatMap((root) => [path.join(root, "codex", "sessions"), path.join(root, ".codex", "sessions")]), optional: true },
+    { harness: "copilot", paths: roots
+      ? roots.flatMap((root) => [path.join(root, "copilot", "session-state"), path.join(root, ".copilot", "session-state")])
+      : [defaultPath("copilot")], optional: true },
+    { harness: "kiro", paths: roots
+      ? roots.flatMap((root) => [path.join(root, "kiro", "sessions", "cli"), path.join(root, ".kiro", "sessions", "cli")])
+      : [defaultPath("kiro")], optional: true },
   ];
 }
 
 function defaultPath(harness: ImportHarness): string {
   if (harness === "codex") return defaultCodexSessionsPath();
-  if (harness === "copilot") return path.join(os.homedir(), ".copilot", "session-state");
-  if (harness === "kiro") return path.join(os.homedir(), ".kiro", "sessions", "cli");
+  if (harness === "copilot") return path.join(process.env.COPILOT_HOME?.trim() || path.join(os.homedir(), ".copilot"), "session-state");
+  if (harness === "kiro") return path.join(process.env.KIRO_HOME?.trim() || path.join(os.homedir(), ".kiro"), "sessions", "cli");
   return "";
 }
 
@@ -388,7 +393,7 @@ function mapRecord(harness: ImportHarness, value: unknown, file: string, positio
 
 function knownEvent(harness: ImportHarness, candidate: string | undefined, role: string | undefined): string | undefined {
   const supported = harness === "copilot"
-    ? ["sessionStart", "userPromptSubmitted", "postToolUse", "sessionEnd"]
+    ? ["sessionStart", "userPromptSubmitted", "postToolUse", "agentStop", "sessionEnd"]
     : ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
   if (candidate && supported.includes(candidate)) return candidate;
   if (role === "user") return harness === "copilot" ? "userPromptSubmitted" : "UserPromptSubmit";
