@@ -47,6 +47,23 @@ See `src/AGENTS.md` and `tests/AGENTS.md` for more specific rules.
 - When a live client cannot be exercised, keep the PR in draft and state the
   unverified boundary rather than claiming end-to-end compatibility.
 
+## Pull request gate
+
+Before creating a pull request:
+
+1. Freeze the candidate diff and run the complete validation suite.
+2. Run an independent adversarial review whose goal is to find reasons the
+   change should not merge. The reviewer must inspect Git history, altered test
+   expectations, host contracts, packaging behavior, and unsupported claims.
+3. Address every finding, rerun validation, and perform a second adversarial
+   pass over the resulting diff.
+4. Create the PR only when the second pass has no unresolved correctness or
+   regression findings. Record untestable boundaries in the PR description and
+   keep the PR draft when a required live integration was not exercised.
+
+The implementer must not treat a reviewer that edited the code as independent,
+and a passing test suite does not override contradictory live-client evidence.
+
 ## Commands
 
 Run from the repository root:
