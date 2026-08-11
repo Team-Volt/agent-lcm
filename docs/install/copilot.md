@@ -28,10 +28,12 @@ agent-lcm setup copilot
 copilot plugin list
 ```
 
-Do not install the Agent LCM package root directly. Copilot-format plugins do
-not define a plugin-root variable for hook commands, so setup must write the
-absolute installed command into a native package first. The list command shows
-the installed plugin. See the [Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference) for the supported command set.
+Do not use the Agent LCM package root as a substitute for setup. Its manifest
+declares Agent Plugins 1.0, where skills and MCP are portable but hooks are not.
+Setup writes the client-specific hooks and the absolute installed command into
+a Copilot-format package. The list command shows the installed plugin. See the
+[Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference)
+for the supported command set.
 
 The Copilot CLI reference does not require a restart after installation. If a
 new plugin is not visible, start a new Copilot session as troubleshooting and
