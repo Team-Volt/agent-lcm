@@ -155,6 +155,37 @@ agent-lcm setup status
 agent-lcm doctor --json
 ```
 
+Setup and removal print one report per harness. Exit status `0` means the
+requested native work and hook work completed. Exit status `2` means a manual
+native step remains (`manual-required`) or a shared Copilot resource was
+deliberately retained (`shared-retained`). Exit status `1` means the command
+failed; inspect stderr before retrying. Add `--json` when a script needs the
+report fields.
+
+Native lifecycle support is limited to the commands that each client documents:
+
+- Codex probes with `codex plugin list`, then runs `codex plugin marketplace add
+  Team-Volt/agent-lcm` and `codex plugin add agent-lcm@agent-lcm`. Removal runs
+  `codex plugin remove agent-lcm@agent-lcm`.
+- GitHub Copilot CLI and VS Code share the Copilot plugin store. Setup probes
+  with `copilot plugin list` and runs `copilot plugin install
+  Team-Volt/agent-lcm`. `agent-lcm remove copilot` and `agent-lcm remove vscode`
+  return `shared-retained` without uninstalling that shared plugin; use the
+  documented Copilot uninstall command only after reviewing both clients.
+- Cursor and Kiro are probed with `cursor-agent --version` and `kiro-cli
+  --version`. Neither CLI documents a noninteractive plugin install or removal
+  command, so their Marketplace or Powers steps remain manual while Agent LCM
+  manages only its legacy capture hooks.
+
+Setup validates an existing hook file before invoking a native CLI, preserves
+unrelated entries, and changes only exact Agent LCM-owned registrations. It
+backs up a changed file as `*-pre-agent-lcm-*.json`, uses a per-file SQLite
+lock at `<target>.lock.sqlite`, and publishes through a unique `wx` temporary
+file, `fsync`, and rename. Symlinked or non-regular targets are refused, and
+hook commands must be absolute paths without shell metacharacters. These rules
+make repeated setup and removal safe while avoiding a second user-level hook
+copy after native installation.
+
 Hooks start the daemon on demand. You can also manage it directly:
 
 ```sh

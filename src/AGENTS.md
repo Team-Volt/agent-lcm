@@ -10,6 +10,8 @@
 - `storage-graph.ts` derives bounded graph slices from indexed events and summary lineage; it does not persist a graph projection.
 - `overflow.ts` owns bounded, content-addressed overflow storage and recovery checks.
 
+- `setup.ts`, `setup-adapters.ts`, `setup-hooks.ts`, and `setup-hook-status.ts` own harness lifecycle reports, native CLI adapters, exact-owned hook edits, and setup status. `setup-files.ts` owns validation, per-file locks, backups, and atomic setup-file publication.
+
 ## Storage invariants
 
 - Sanitize and normalize input before inbox publication. Only the daemon drains inbox files into storage.
@@ -38,6 +40,14 @@
 - Do not silently skip malformed lines during destructive reconciliation.
 - Do not let a derived-index transaction cover raw appends, or keep the raw-log lock during expensive work.
 - Do not turn a read path into an implicit migration or backfill.
+
+## Harness setup safety
+
+- Probe and invoke only documented commands: Codex uses `codex plugin`; Copilot and VS Code use the shared `copilot plugin` store; Cursor and Kiro use version-only probes and keep plugin changes manual.
+- Validate existing setup JSON before starting a native process. Match owned hooks by harness, event, and command shape; preserve unrelated and near-matching entries.
+- Keep setup-file writes under `<target>.lock.sqlite` with a bounded SQLite `BEGIN IMMEDIATE` lock. Refuse symlinked or non-regular targets. Use a unique `wx` temporary file, restrictive permissions, fsync, rename, and parent-directory fsync. Backups use the collision-safe `-pre-agent-lcm-` name.
+- Require an absolute hook binary path and reject shell metacharacters before writing configuration.
+- Never uninstall the shared Copilot plugin for a single `copilot` or `vscode` removal; report `shared-retained` instead.
 
 ## Test routing
 

@@ -66,6 +66,45 @@ A nonzero `queue_depth` means capture succeeded but the daemon has not drained
 the inbox. A nonzero `quarantine_count` means the daemon rejected one or more
 queue records; inspect `~/.agent-lcm/quarantine/` before removing them.
 
+## Setup or removal needs manual work
+
+Run the harness-specific command and read its report:
+
+```sh
+agent-lcm setup codex
+agent-lcm setup copilot
+agent-lcm setup vscode
+agent-lcm setup cursor
+agent-lcm setup kiro
+agent-lcm remove codex
+```
+
+Replace `codex` with the harness you want to remove.
+
+Exit status `0` means the requested work completed. Exit status `2` means the
+native step is `manual-required`, or Copilot/VS Code removal returned
+`shared-retained` so the shared plugin was left in place. Exit status `1` means
+the command failed; its stderr is the error record. Use `--json` for stable
+automation fields.
+
+Codex setup probes `codex plugin list`, then runs the marketplace-add and
+plugin-add commands. Removal runs `codex plugin remove agent-lcm@agent-lcm`.
+Copilot and VS Code probe and install through `copilot plugin`; they share the
+same plugin store and `~/.copilot/hooks/agent-lcm.json`, so either
+`agent-lcm remove copilot` or `agent-lcm remove vscode` is intentionally
+conservative and does not uninstall the shared plugin. Review both clients
+before using the documented Copilot uninstall command. Cursor Marketplace and
+Kiro Powers installation/removal stay manual.
+
+Setup validates the existing JSON before starting a native CLI. It changes only
+exact Agent LCM-owned hook entries and preserves unrelated or near-matching
+entries. A changed file gets a collision-safe `-pre-agent-lcm-` backup. Setup
+also refuses symlinked or non-regular targets and uses a per-file SQLite lock
+at `<target>.lock.sqlite`, with a ten-second bound, plus unique, fsynced
+temporary publication; a predictable temporary symlink cannot redirect the
+write. Hook commands must use an absolute shell-safe binary path. If validation
+fails, the original file and native CLI invocation remain unchanged.
+
 ## Isolate a storage problem
 
 Use a temporary home so tests do not touch your normal store:

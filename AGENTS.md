@@ -31,6 +31,21 @@ docs/                       architecture and troubleshooting
   provenance in every result.
 - Do not add `lcm_record_note`; Agent LCM has no note-writing MCP tool.
 
+## Harness setup and removal
+
+- `agent-lcm setup <harness>` uses native lifecycle commands only for Codex and
+  the shared Copilot/VS Code store; Cursor Marketplace and Kiro Powers remain
+  manual. `agent-lcm remove <harness>` removes only exact Agent LCM-owned hook
+  entries.
+- Setup reports `complete` with exit `0`; `manual-required` and
+  `shared-retained` use exit `2`; command errors use exit `1`.
+- Copilot and VS Code share native plugin and hook resources. Single-harness
+  removal must retain those resources and must not invoke an uninstall.
+- Validate existing setup JSON before native work. Preserve unrelated and
+  near-matching hooks, reject symlinked or non-regular targets, and publish
+  changes under the per-file SQLite lock through a unique fsynced temporary
+  file and rename.
+
 See `src/AGENTS.md` and `tests/AGENTS.md` for more specific rules.
 
 ## Commands

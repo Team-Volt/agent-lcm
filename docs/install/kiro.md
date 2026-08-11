@@ -8,7 +8,7 @@ Run:
 agent-lcm setup kiro
 ```
 
-This installs or repairs the Kiro capture hooks at
+This probes `kiro-cli --version`, then installs or repairs the Kiro capture hooks at
 `~/.kiro/hooks/agent-lcm.json`. Kiro's native Power install remains a manual UI
 step, so setup reports `manual-required` for that step.
 
@@ -25,9 +25,10 @@ troubleshooting, then check `agent-lcm setup status`.
 
 ## Remove Agent LCM
 
-Use the Powers UI's documented management control to remove Agent LCM. Kiro's
-official Powers documentation does not define a native removal CLI. Then remove
-only the Agent LCM hooks:
+Kiro's official Powers installation page does not publish a CLI or a fixed UI
+sequence for uninstalling a Power. Open the Powers panel, select Agent LCM, and
+use the removal control shown by your installed Kiro version. Then remove only
+the Agent LCM hooks:
 
 ```sh
 agent-lcm remove kiro

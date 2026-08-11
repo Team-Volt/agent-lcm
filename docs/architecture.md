@@ -26,6 +26,35 @@ running daemon can be reused. This prevents independently cached plugin versions
 from replacing one another while preserving orderly replacement for an
 incompatible protocol.
 
+## Harness lifecycle
+
+`agent-lcm setup <harness>` probes and, where supported, runs the client's native
+plugin commands before updating legacy capture hooks. Codex uses `codex plugin
+list`, then `codex plugin marketplace add Team-Volt/agent-lcm` and `codex plugin
+add agent-lcm@agent-lcm`. Copilot CLI and VS Code use the shared Copilot store:
+`copilot plugin list` followed by `copilot plugin install Team-Volt/agent-lcm`.
+Cursor and Kiro run version-only probes for `cursor-agent` and `kiro-cli`.
+Their Marketplace or Powers steps remain manual, so their native result is
+`manual-required`.
+
+`agent-lcm remove <harness>` removes only exact Agent LCM-owned legacy hooks.
+Codex runs `codex plugin remove agent-lcm@agent-lcm`. Copilot and VS Code share a
+native store, so either single-harness removal returns `shared-retained` and
+does not invoke an uninstall. Deliberate shared removal remains a documented
+manual Copilot action after both clients are reviewed.
+
+Lifecycle reports use exit status `0` for `complete`, `2` for
+`manual-required` or `shared-retained`, and `1` for an error. Existing hook
+configuration is validated before native work. Unrelated entries and
+near-matching commands remain untouched; only an exact harness/event/command
+registration is changed.
+
+Setup files use `<target>.lock.sqlite` with a SQLite `BEGIN IMMEDIATE` lock
+(bounded to ten seconds). Publication writes a unique `wx` temporary file with
+restrictive permissions, fsyncs it, renames it, and fsyncs the parent directory.
+Symlinked or non-regular targets are refused, hook commands must be absolute and
+shell-safe, and changed files receive a collision-safe `-pre-agent-lcm-` backup.
+
 ## Capture and retrieval flow
 
 1. A harness invokes `agent-lcm capture --harness ...` with a lifecycle event.

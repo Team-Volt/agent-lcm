@@ -12,6 +12,10 @@ framework, fixture library, or custom runner.
 - Route tests by surface: storage behavior belongs in `storage.test.ts` or
   `storage-api.test.ts`, protocol behavior in `mcp.test.ts`, and real command
   or hook behavior in `hook-cli.test.ts`.
+- Native lifecycle adapter contracts and fake-CLI argv/outcome checks belong
+  in `setup-adapters.test.ts`. End-to-end setup/remove reports, exit statuses,
+  exact-owned hook edits, shared-retained behavior, lock handling, backups,
+  and symlink-safe publication belong in `setup.test.ts`.
 - Keep manifest, event, redaction, summary, and import coverage in their
   existing focused files instead of growing a catch-all suite.
 
@@ -35,6 +39,9 @@ framework, fixture library, or custom runner.
 - Use `runCli()` for the actual `bin/agent-lcm` subprocess and assert its exit
   status, stderr, and parsed stdout. Set a bounded timeout for lock or worker
   scenarios.
+- Fake `codex`, `copilot`, `cursor-agent`, and `kiro-cli` executables must record
+  argv and fail on demand; use them to prove the exact documented command
+  vectors without touching a user's installed clients.
 - Use `runMcp()` or `runCli(["mcp"], ...)` with newline or framed JSON to test
   the real stdio MCP server. Assert response IDs, errors, and continuation
   after malformed input; do not call dispatch functions directly for protocol
@@ -62,5 +69,8 @@ framework, fixture library, or custom runner.
   when the test claims to cover that boundary.
 - Do not leave open `DatabaseSync` handles, workers, subprocesses, or lock
   files; leaked resources make later suites flaky.
+- Do not claim native setup or removal coverage from unit calls alone: include
+  the real CLI boundary and assert `0` for `complete`, `2` for
+  `manual-required` or `shared-retained`, and `1` for command errors.
 - Do not add generated databases, raw logs, overflow files, or ad hoc scripts
   to the checkout. Keep changes and fixtures local to the test that needs them.
