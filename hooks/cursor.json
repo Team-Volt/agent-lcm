@@ -3,22 +3,22 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "node \"./bin/agent-lcm\" capture --harness cursor sessionStart"
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/bin/agent-lcm\" capture --harness cursor sessionStart"
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "node \"./bin/agent-lcm\" capture --harness cursor beforeSubmitPrompt"
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/bin/agent-lcm\" capture --harness cursor beforeSubmitPrompt"
       }
     ],
     "postToolUse": [
       {
-        "command": "node \"./bin/agent-lcm\" capture --harness cursor postToolUse"
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/bin/agent-lcm\" capture --harness cursor postToolUse"
       }
     ],
     "stop": [
       {
-        "command": "node \"./bin/agent-lcm\" capture --harness cursor stop"
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/bin/agent-lcm\" capture --harness cursor stop"
       }
     ]
   }

@@ -93,6 +93,11 @@ Compatible clients discover the same portable components:
 - `skills/lcm-recall/SKILL.md`
 - the `agent-lcm` stdio server in `mcp.json`
 
+The root `hooks.json` is deliberately not a portable component: it is the
+Copilot CLI compatibility extension required by that client's plugin format.
+VS Code and Kiro load only the portable MCP and skill surfaces from this Agent
+Plugins package; their automatic capture is configured separately below.
+
 Codex and Cursor compatibility manifests are included for their native plugin
 layouts. If a client cannot install the plugin, add this stdio MCP server:
 
