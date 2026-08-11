@@ -488,7 +488,7 @@ test("setup all configures only harnesses already installed for the user", () =>
   fs.mkdirSync(path.join(userHome, ".codex"));
 
   const result = runCli(["setup", "all", "--json"], { env: { HOME: userHome, USERPROFILE: userHome, PATH: "" } });
-  assertCliOk(result);
+  assert.equal(result.status, 2, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), [{
     harness: "codex",
     action: "setup",
@@ -505,11 +505,12 @@ test("setup all configures only harnesses already installed for the user", () =>
 test("setup prints a clear result for people and keeps JSON output for scripts", () => {
   const userHome = tempHome("agent-lcm-output-");
   const text = runCli(["setup", "codex", "--home", userHome], { env: { PATH: "" } });
-  assertCliOk(text);
-  assert.equal(text.stdout, `codex hooks have been configured: ${path.join(userHome, "hooks.json")}\n`);
+  assert.equal(text.status, 2, text.stderr);
+  assert.match(text.stdout, /codex setup: manual-required/u);
+  assert.match(text.stdout, new RegExp(`${GUIDE_ROOT}/codex\\.md`, "u"));
 
   const json = runCli(["setup", "codex", "--home", userHome, "--json"], { env: { PATH: "" } });
-  assertCliOk(json);
+  assert.equal(json.status, 2, json.stderr);
   assert.deepEqual(JSON.parse(json.stdout), {
     harness: "codex",
     action: "setup",
@@ -518,6 +519,58 @@ test("setup prints a clear result for people and keeps JSON output for scripts",
     hooks: { path: path.join(userHome, "hooks.json"), changed: false },
     guide: `${GUIDE_ROOT}/codex.md`,
   });
+});
+
+test("CLI setup and remove use native Codex with an isolated explicit home", (t) => {
+  const home = tempHome("agent-lcm-cli-native-");
+  const fake = fakeLifecycleCli(t, "codex");
+  const env = { PATH: fake.path, AGENT_LCM_FAKE_LOG: fake.log };
+
+  const setup = runCli(["setup", "codex", "--home", home, "--json"], { env });
+  assertCliOk(setup);
+  assert.equal(JSON.parse(setup.stdout).status, "complete");
+
+  const remove = runCli(["remove", "codex", "--home", home, "--json"], { env });
+  assertCliOk(remove);
+  assert.deepEqual(JSON.parse(remove.stdout), {
+    harness: "codex",
+    action: "remove",
+    status: "complete",
+    nativeCli: "codex",
+    hooks: { path: path.join(home, "hooks.json"), changed: true },
+    guide: `${GUIDE_ROOT}/codex.md`,
+  });
+
+  const calls = fs.readFileSync(fake.log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(calls.map((call) => call.argv), [
+    ["plugin", "list"],
+    ["plugin", "marketplace", "add", "Team-Volt/agent-lcm"],
+    ["plugin", "add", "agent-lcm@agent-lcm"],
+    ["plugin", "list"],
+    ["plugin", "remove", "agent-lcm@agent-lcm"],
+  ]);
+  for (const call of calls) assert.deepEqual(call.env, {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_HOME: home,
+    COPILOT_HOME: home,
+    AGENT_LCM_HOME: path.join(home, "agent-lcm"),
+  });
+});
+
+test("CLI remove reports unsupported native removal without changing shared resources", () => {
+  const home = tempHome("agent-lcm-cli-shared-");
+  const target = path.join(home, "hooks", "agent-lcm.json");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const original = Buffer.from('{"version":1,"hooks":{}}\n');
+  fs.writeFileSync(target, original);
+
+  const result = runCli(["remove", "vscode", "--home", home]);
+
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stdout, /vscode remove: shared-retained/u);
+  assert.match(result.stdout, new RegExp(`${GUIDE_ROOT}/vscode\\.md`, "u"));
+  assert.deepEqual(fs.readFileSync(target), original);
 });
 
 test("setup never overwrites an existing timestamped backup", (t) => {
@@ -657,6 +710,24 @@ function fakeSetupCli(
   t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
   return {
     env: { AGENT_LCM_FAKE_LOG: log, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+    log,
+  };
+}
+
+function fakeLifecycleCli(
+  t: test.TestContext,
+  name: "codex" | "copilot",
+): { readonly path: string; readonly log: string } {
+  const bin = fs.mkdtempSync(path.join(tempHome("agent-lcm-lifecycle-cli-parent-"), "bin-"));
+  const log = path.join(bin, "calls.jsonl");
+  const script = `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify({ argv: process.argv.slice(2), env: { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME, COPILOT_HOME: process.env.COPILOT_HOME, AGENT_LCM_HOME: process.env.AGENT_LCM_HOME } }) + "\\n");
+`;
+  fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
+  t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
+  return {
+    path: `${bin}${path.delimiter}${path.dirname(process.execPath)}`,
     log,
   };
 }

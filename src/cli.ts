@@ -11,7 +11,7 @@ import type { CaptureHarness } from "./harnesses.ts";
 import { readStatus } from "./installer.ts";
 import { startMcpServer } from "./mcp.ts";
 import { packageVersion } from "./release.ts";
-import { setupHarness, setupStatus, type SetupReport } from "./setup.ts";
+import { removeHarness, setupHarness, setupStatus, type RemoveReport, type SetupReport } from "./setup.ts";
 import { detectedHarnesses } from "./setup-targets.ts";
 
 type DaemonCliParams =
@@ -87,9 +87,20 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     const harness = captureHarness(rest[0]);
+    const home = optionValue(rest, "--home");
     printSetupReports(setupHarness(harness, {
-      home: optionValue(rest, "--home"),
+      home,
       command: commandPath,
+      ...(home ? { env: lifecycleEnvironment(home) } : {}),
+    }), rest.includes("--json"));
+    return;
+  }
+  if (command === "remove") {
+    const harness = captureHarness(rest[0], "remove");
+    const home = optionValue(rest, "--home");
+    printSetupReports(removeHarness(harness, {
+      home,
+      ...(home ? { env: lifecycleEnvironment(home) } : {}),
     }), rest.includes("--json"));
     return;
   }
@@ -300,6 +311,7 @@ Commands:
   agent-lcm setup all
   agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]
   agent-lcm setup status
+  agent-lcm remove <codex|cursor|vscode|copilot|kiro> [--home PATH]
   agent-lcm status [--codex-home PATH] [--json]
   agent-lcm doctor [--codex-home PATH] [--json]  Diagnose install, storage, and capture state
   agent-lcm health [--json]
@@ -316,9 +328,9 @@ Commands:
 `);
 }
 
-function captureHarness(value: string | undefined): CaptureHarness {
+function captureHarness(value: string | undefined, action: "setup" | "remove" = "setup"): CaptureHarness {
   if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro") return value;
-  throw new Error("Usage: agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]");
+  throw new Error(`Usage: agent-lcm ${action} <codex|cursor|vscode|copilot|kiro> [--home PATH]`);
 }
 
 function importHarness(value: string | undefined): ImportHarness {
@@ -346,18 +358,32 @@ function printObjectOrText(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-function printSetupReports(value: SetupReport | SetupReport[], json: boolean): void {
+function printSetupReports(value: SetupReport | RemoveReport | SetupReport[], json: boolean): void {
   if (json) {
     printObjectOrText(value);
-    return;
+  } else {
+    const reports = Array.isArray(value) ? value : [value];
+    if (reports.length === 0) {
+      process.stdout.write("No supported harnesses were detected. Configure one with agent-lcm setup <harness>.\n");
+      return;
+    }
+    for (const report of reports) {
+      process.stdout.write(`${report.harness} ${report.action}: ${report.status}\n`);
+      process.stdout.write(`Hooks ${report.hooks.changed ? "changed" : "unchanged"}: ${report.hooks.path}\n`);
+      if (report.status !== "complete") process.stdout.write(`Manual steps: ${report.guide}\n`);
+    }
   }
   const reports = Array.isArray(value) ? value : [value];
-  if (reports.length === 0) {
-    process.stdout.write("No supported harnesses were detected. Configure one with agent-lcm setup <harness>.\n");
-    return;
-  }
-  for (const report of reports) {
-    const state = report.hooks.changed ? "have been configured" : "are already configured";
-    process.stdout.write(`${report.harness} hooks ${state}: ${report.hooks.path}\n`);
-  }
+  if (reports.some((report) => report.status !== "complete")) process.exitCode = 2;
+}
+
+function lifecycleEnvironment(home: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_HOME: home,
+    COPILOT_HOME: home,
+    AGENT_LCM_HOME: path.join(home, "agent-lcm"),
+  };
 }
