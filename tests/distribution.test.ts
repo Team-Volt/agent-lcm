@@ -172,7 +172,9 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   const cursorMcpConfiguration = JSON.parse(fs.readFileSync(path.join(packageRoot, "mcp.cursor.json"), "utf8"))
     .mcpServers["agent-lcm"] as { command: string; args: string[] };
   const cursorMcp = spawnSync(cursorMcpConfiguration.command, cursorMcpConfiguration.args.map((arg) => arg.replaceAll("${CURSOR_PLUGIN_ROOT}", packageRoot)), {
-    cwd: packageRoot,
+    // Cursor does not launch bundled MCP servers from the plugin directory.
+    // Keep this cwd unrelated so a regression to ./bin/agent-lcm fails here.
+    cwd: root,
     encoding: "utf8",
     env,
     input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })}\n`,

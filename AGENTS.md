@@ -33,6 +33,20 @@ docs/                       architecture and troubleshooting
 
 See `src/AGENTS.md` and `tests/AGENTS.md` for more specific rules.
 
+## Harness integration changes
+
+- Inspect the relevant Git history and merged PR validation before changing a
+  client manifest, hook schema, path token, or launch command.
+- Treat a successful live-client validation as a compatibility invariant. Do
+  not replace it based only on documentation or a synthetic test; reconcile the
+  conflict or preserve the proven behavior.
+- Tests for bundled commands must use the client's real path expansion and a
+  working directory that does not accidentally make relative paths succeed.
+- Changing an existing integration expectation requires an explicit root-cause
+  explanation and evidence that the replacement works in the target client.
+- When a live client cannot be exercised, keep the PR in draft and state the
+  unverified boundary rather than claiming end-to-end compatibility.
+
 ## Commands
 
 Run from the repository root:
