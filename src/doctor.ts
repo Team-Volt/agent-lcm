@@ -20,8 +20,8 @@ export type DoctorReport = {
 };
 
 export type AdapterStatus = {
-  configured: boolean;
-  state: "configured" | "not_configured";
+  configured: boolean | null;
+  state: "configured" | "not_configured" | "unknown";
   detail: string;
   setup_gap?: string;
 };
@@ -117,10 +117,19 @@ function adapterStatus(status: Record<string, unknown>): Record<string, AdapterS
       detail: codexConfigured ? "Codex MCP and hooks are configured." : "Codex MCP or hooks are not configured.",
       ...(codexConfigured ? {} : { setup_gap: "Install the Agent LCM plugin and restart Codex." }),
     },
-    cursor: setupAdapter("cursor", setups.cursor.configured),
-    vscode: setupAdapter("vscode", setups.vscode.configured),
-    copilot: setupAdapter("copilot", setups.copilot.configured),
-    kiro: setupAdapter("kiro", setups.kiro.configured),
+    cursor: setupAdapter("cursor", setups.cursor.hooksConfigured),
+    vscode: nativePluginAdapter("VS Code", setups.vscode.hooksConfigured),
+    copilot: nativePluginAdapter("Copilot", setups.copilot.hooksConfigured),
+    kiro: setupAdapter("kiro", setups.kiro.hooksConfigured),
+  };
+}
+
+function nativePluginAdapter(harness: "VS Code" | "Copilot", legacyHooksConfigured: boolean): AdapterStatus {
+  if (legacyHooksConfigured) return setupAdapter(harness.toLowerCase(), true);
+  return {
+    configured: null,
+    state: "unknown",
+    detail: `${harness} native plugin health is not checked by doctor. Run \`copilot plugin list\` or use the client's installed-plugin view.`,
   };
 }
 

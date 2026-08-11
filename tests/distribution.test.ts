@@ -25,6 +25,7 @@ test("the npm package contains the complete plugin and no development files", (t
     ".codex-plugin/plugin.json",
     ".cursor-plugin/marketplace.json",
     ".cursor-plugin/plugin.json",
+    ".mcp.json",
     "LICENSE",
     "README.md",
     "bin/agent-lcm",
@@ -32,10 +33,15 @@ test("the npm package contains the complete plugin and no development files", (t
     "mcp.cursor.json",
     "mcp.json",
     "package.json",
-    "plugin.json",
     "skills/lcm-recall/SKILL.md",
     "dist/cli.js",
+    "dist/copilot-plugin.js",
+    "dist/setup-adapters.js",
+    "dist/setup-file-worker.js",
+    "dist/setup-hook-status.js",
+    "dist/setup-hooks.js",
   ]) assert.ok(names.includes(required), `missing ${required}`);
+  assert.equal(names.includes("plugin.json"), false, "packed native clients must not select the portable manifest");
   assert.equal(names.some((name) => /^(?:\.github|docs|scripts|tests)\//u.test(name)), false);
   assert.equal(fs.existsSync(path.join(root, filename)), true);
 
@@ -134,7 +140,24 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   assert.equal(install.status, 0, install.stderr);
   const executable = process.platform === "win32" ? path.join(prefix, "agent-lcm.cmd") : path.join(prefix, "bin", "agent-lcm");
   const home = path.join(root, "home");
-  const env = { ...process.env, HOME: home, USERPROFILE: home, AGENT_LCM_HOME: path.join(home, ".agent-lcm") };
+  const fakeBin = path.join(root, "fake-bin");
+  const fakeLog = path.join(root, "codex-calls.jsonl");
+  const fakeScript = path.join(root, "fake-codex.cjs");
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(fakeScript, 'require("node:fs").appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");\n');
+  if (process.platform === "win32") {
+    fs.writeFileSync(path.join(fakeBin, "codex.cmd"), `@"${process.execPath}" "${fakeScript}" %*\r\n`);
+  } else {
+    fs.writeFileSync(path.join(fakeBin, "codex"), `#!${process.execPath}\nrequire(${JSON.stringify(fakeScript)});\n`, { mode: 0o755 });
+  }
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    AGENT_LCM_HOME: path.join(home, ".agent-lcm"),
+    AGENT_LCM_FAKE_LOG: fakeLog,
+    PATH: `${fakeBin}${path.delimiter}${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`,
+  };
   const runInstalled = (args: string[], input?: string) => spawnSync(executable, args, {
     cwd: root,
     encoding: "utf8",
@@ -158,6 +181,9 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
     "@team-volt",
     "agent-lcm",
   );
+  assert.equal(fs.existsSync(path.join(packageRoot, "plugin.json")), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(packageRoot, ".codex-plugin/plugin.json"), "utf8")).hooks, "./hooks/codex.json");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(packageRoot, ".cursor-plugin/plugin.json"), "utf8")).hooks, "./hooks/cursor.json");
   const mcpConfiguration = JSON.parse(fs.readFileSync(path.join(packageRoot, "mcp.json"), "utf8"))
     .mcpServers["agent-lcm"] as { command: string; args: string[] };
   const mcp = spawnSync(mcpConfiguration.command, mcpConfiguration.args.map((arg) => arg.replaceAll("${PLUGIN_ROOT}", packageRoot)), {
@@ -192,8 +218,10 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   assert.equal(fs.existsSync(path.join(home, ".cursor")), false);
   assert.equal(fs.existsSync(path.join(home, ".copilot")), false);
   assert.equal(fs.existsSync(path.join(home, ".kiro")), false);
-  const codexHooks = JSON.parse(fs.readFileSync(path.join(home, ".codex/hooks.json"), "utf8"));
-  const capture = spawnSync(codexHooks.hooks.UserPromptSubmit[0].hooks[0].command, {
+  assert.equal(fs.existsSync(path.join(home, ".codex/hooks.json")), false);
+  const codexHooks = JSON.parse(fs.readFileSync(path.join(packageRoot, "hooks/codex.json"), "utf8"));
+  const captureCommand = codexHooks.hooks.UserPromptSubmit[0].hooks[0].command.replaceAll("${PLUGIN_ROOT}", packageRoot);
+  const capture = spawnSync(captureCommand, {
     cwd: root,
     encoding: "utf8",
     env,
@@ -202,7 +230,8 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
     timeout: 15_000,
   });
   assert.equal(capture.status, 0, capture.stderr);
-  const postCompact = spawnSync(codexHooks.hooks.PostCompact[0].hooks[0].command, {
+  const postCompactCommand = codexHooks.hooks.PostCompact[0].hooks[0].command.replaceAll("${PLUGIN_ROOT}", packageRoot);
+  const postCompact = spawnSync(postCompactCommand, {
     cwd: root,
     encoding: "utf8",
     env,
@@ -217,5 +246,15 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   assert.equal(JSON.parse(daemon.stdout).running, true);
   const stopped = runInstalled(["daemon", "stop", "--json"]);
   assert.equal(stopped.status, 0, stopped.stderr);
+  const removed = runInstalled(["remove", "codex", "--json"]);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.equal(JSON.parse(removed.stdout).hooks.changed, false);
+  assert.deepEqual(fs.readFileSync(fakeLog, "utf8").trim().split("\n").map((line) => JSON.parse(line)), [
+    ["plugin", "list"],
+    ["plugin", "marketplace", "add", fs.realpathSync(packageRoot)],
+    ["plugin", "add", "agent-lcm@agent-lcm"],
+    ["plugin", "list"],
+    ["plugin", "remove", "agent-lcm@agent-lcm"],
+  ]);
   assert.equal(JSON.parse(stopped.stdout).running, false);
 });

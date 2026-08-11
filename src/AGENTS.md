@@ -10,6 +10,8 @@
 - `storage-graph.ts` derives bounded graph slices from indexed events and summary lineage; it does not persist a graph projection.
 - `overflow.ts` owns bounded, content-addressed overflow storage and recovery checks.
 
+- `setup.ts`, `setup-adapters.ts`, `setup-hooks.ts`, and `setup-hook-status.ts` own harness lifecycle reports, native CLI adapters, exact-owned hook edits, and setup status. `setup-files.ts` owns validation, per-file locks, backups, and atomic setup-file publication.
+
 ## Storage invariants
 
 - Sanitize and normalize input before inbox publication. Only the daemon drains inbox files into storage.
@@ -38,6 +40,21 @@
 - Do not silently skip malformed lines during destructive reconciliation.
 - Do not let a derived-index transaction cover raw appends, or keep the raw-log lock during expensive work.
 - Do not turn a read path into an implicit migration or backfill.
+
+## Harness setup safety
+
+- Probe and invoke only documented commands: Codex uses `codex plugin`; Copilot and VS Code use the shared `copilot plugin` store; Cursor and Kiro use version-only probes and keep plugin changes manual.
+- Spawn native executables directly. On Windows only, resolve npm `.cmd` or `.bat` shims from `PATH`, reject command-shell metacharacters, and pass the resolved shim through `cmd.exe` with the shell option still disabled.
+- Codex and Cursor native hooks depend on the packed npm artifact omitting the repository-root Agent Plugins manifest. Never add `plugin.json` back to `package.json#files` without redesigning native package selection.
+- Native Codex setup removes exact legacy fallback hooks after install and never creates a user hook file.
+- Generate the Copilot-format package at setup time so hooks and MCP use the validated absolute Agent LCM command. Keep its source basename `agent-lcm` so repeat direct installs update one native plugin.
+- Validate existing setup JSON before starting a native process. Match owned hooks by harness, event, and command shape; preserve unrelated and near-matching entries.
+- Native lifecycle state and hook JSON are not one transaction. If the file changes during native work, preserve its bytes and throw an explicit error that says whether the native action completed or setup stopped, then tells the user to repair and rerun.
+- Keep setup-file reads, backups, locks, and publication inside the helper process anchored to the validated target directory. A later path identity check does not make a path-based write safe. Refuse symlinked directory components, lock paths, targets, and non-regular files. Use a unique `wx` temporary file, restrictive permissions, fsync, rename, and directory fsync. Backups use the collision-safe `-pre-agent-lcm-` name.
+- Build native plugin sources only from the current local package, never from a mutable remote ref. Treat only `ENOENT` as an unavailable CLI; all other native probe or command failures must stop before hook mutation and must not echo client stderr.
+- Require an absolute hook binary path and reject shell metacharacters before writing configuration.
+- Never uninstall the shared Copilot plugin for a single `copilot` or `vscode` removal; report `shared-retained` instead.
+- `setup status` reports legacy/setup-managed `hooksConfigured` state only. Doctor must report native Copilot/VS Code health as unknown unless it has direct native evidence; it must not recommend setup from a missing legacy hook file.
 
 ## Test routing
 

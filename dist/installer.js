@@ -9,8 +9,9 @@ export function readStatus(options = {}) {
     const configText = readOptional(configPath);
     const hooksText = readOptional(hooksPath);
     const pluginManifestText = readOptional(path.join(root, ".codex-plugin", "plugin.json"));
+    const portableManifestText = readOptional(path.join(root, "plugin.json"));
     const pluginManifestAvailable = pluginManifestText !== undefined;
-    const mcpManifestAvailable = fs.existsSync(path.join(root, "mcp.json"));
+    const mcpManifestAvailable = fs.existsSync(path.join(root, ".mcp.json"));
     const hookManifestAvailable = fs.existsSync(path.join(root, "hooks", "codex.json"));
     const pluginDeclaresMcp = pluginManifestText !== undefined && /"mcpServers"\s*:/u.test(pluginManifestText);
     const pluginDeclaresHooks = pluginManifestText !== undefined && /"hooks"\s*:/u.test(pluginManifestText);
@@ -19,6 +20,8 @@ export function readStatus(options = {}) {
     const manualMcpConfigured = configText !== undefined && /mcp_servers\.(?:"agent-lcm"|agent-lcm)|command\s*=\s*".*agent-lcm/u.test(configText);
     const manualHooksConfigured = hooksText !== undefined && hooksText.includes("agent-lcm");
     const pluginOwnedWiringAvailable = pluginConfigured && pluginManifestAvailable;
+    const nativeHooksSelected = portableManifestText === undefined
+        || !/"\$schema"\s*:\s*"https:\/\/agent-plugins\.org\/schemas\//u.test(portableManifestText);
     return {
         codex_home: home,
         config_exists: configText !== undefined,
@@ -33,7 +36,8 @@ export function readStatus(options = {}) {
         manual_mcp_configured: manualMcpConfigured,
         manual_hooks_configured: manualHooksConfigured,
         mcp_configured: manualMcpConfigured || (pluginOwnedWiringAvailable && pluginDeclaresMcp && mcpManifestAvailable),
-        hooks_configured: manualHooksConfigured || (pluginOwnedWiringAvailable && pluginDeclaresHooks && hookManifestAvailable),
+        hooks_configured: manualHooksConfigured
+            || (pluginOwnedWiringAvailable && nativeHooksSelected && pluginDeclaresHooks && hookManifestAvailable),
         recall_skill_available: fs.existsSync(path.join(root, "skills", "lcm-recall", "SKILL.md")),
     };
 }

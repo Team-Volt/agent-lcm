@@ -10,7 +10,8 @@ agent-lcm daemon status
 
 `doctor` checks Codex plugin wiring, the recall skill, the shared daemon, the
 capture queue, quarantine, SQLite, and summary indexing. `setup status` reports
-the harness hook files separately.
+`hooksConfigured` for setup-managed or legacy hook files; it does not claim to
+check native plugin health.
 
 ## The MCP server is missing
 
@@ -32,7 +33,7 @@ prefer native plugin installation when that happens.
 
 ## Hooks are not capturing
 
-Install or repair the harness hook file, then restart the harness:
+Install or repair Agent LCM, then restart the harness:
 
 ```sh
 agent-lcm setup all
@@ -45,13 +46,16 @@ home, configure it explicitly and pass that directory:
 agent-lcm setup codex --home /path/to/codex-home
 ```
 
-Codex loads `~/.codex/hooks.json`; Cursor loads `~/.cursor/hooks.json`. VS Code and GitHub Copilot share
-`~/.copilot/hooks/agent-lcm.json`, and the generated hook detects which one sent
-the event. Setup refuses malformed existing JSON instead of overwriting it.
-Before changing a valid existing file, setup saves a timestamped
-`-pre-agent-lcm-` backup in the same directory.
+Codex loads hooks from its native plugin; `~/.codex/hooks.json` is only an older
+fallback. Kiro uses `~/.kiro/hooks/agent-lcm.json`. Cursor, VS Code, and GitHub
+Copilot native plugins carry their own hooks. Cursor setup preserves an older
+`~/.cursor/hooks.json` fallback until native installation is complete. A
+successful Copilot or VS Code native setup removes only exact older Agent LCM
+entries from the shared fallback so capture does not run twice. Setup refuses
+malformed existing JSON instead of overwriting it. Before changing a valid
+existing file, setup saves a timestamped `-pre-agent-lcm-` backup beside it.
 
-Codex and Cursor may ask you to review or trust plugin-owned commands. Capture
+Codex, Cursor, VS Code, and Copilot may ask you to review or trust plugin-owned commands. Capture
 will not run until the harness allows those hooks.
 
 Check whether events reach the queue and daemon:
@@ -65,6 +69,60 @@ agent-lcm health --json
 A nonzero `queue_depth` means capture succeeded but the daemon has not drained
 the inbox. A nonzero `quarantine_count` means the daemon rejected one or more
 queue records; inspect `~/.agent-lcm/quarantine/` before removing them.
+
+## Setup or removal needs manual work
+
+Run the harness-specific command and read its report:
+
+```sh
+agent-lcm setup codex
+agent-lcm setup copilot
+agent-lcm setup vscode
+agent-lcm setup cursor
+agent-lcm setup kiro
+agent-lcm remove codex
+```
+
+Replace `codex` with the harness you want to remove.
+
+Exit status `0` means the requested work completed. Exit status `2` means the
+native step is `manual-required`, or Copilot/VS Code removal returned
+`shared-retained` so the shared plugin was left in place. Exit status `1` means
+the command failed; Agent LCM reports the fixed command, exit status, and a
+suppressed-stderr marker so a client cannot leak secrets into logs. Use
+`--json` for stable automation fields.
+
+Codex setup probes `codex plugin list`, then runs the marketplace-add and
+plugin-add commands against the installed npm package. That package omits the
+portable root manifest so Codex selects its native hook manifest. Removal runs
+`codex plugin remove agent-lcm@agent-lcm`.
+Copilot and VS Code probe and install through `copilot plugin`; they share the
+same native plugin store, so either `agent-lcm remove copilot` or `agent-lcm
+remove vscode` is intentionally conservative and does not uninstall the shared
+plugin. A legacy `~/.copilot/hooks/agent-lcm.json` fallback is separate and is
+left unchanged. Review both clients before using the documented Copilot
+uninstall command. Cursor Marketplace and Kiro Powers installation/removal
+stay manual.
+
+Setup validates the existing JSON before starting a native CLI. It changes only
+exact Agent LCM-owned hook entries and preserves unrelated or near-matching
+entries. A changed file gets a collision-safe `-pre-agent-lcm-` backup. Setup
+also refuses symlinked directory components, lock paths, targets, and
+non-regular files. It uses an atomic lock directory at `<target>.lock`, with a
+ten-second bound, plus unique, fsynced
+temporary publication; a predictable temporary symlink cannot redirect the
+write. Hook commands must use an absolute shell-safe binary path. If validation
+fails, the original file and native CLI invocation remain unchanged.
+
+If another process changes the hook file after that preflight while a native
+command is running, Agent LCM does not overwrite the new bytes. It exits `1`
+and states whether the native action completed or setup stopped. Repair the
+named file if needed, then rerun the same `agent-lcm setup <harness>` or
+`agent-lcm remove <harness>` command.
+
+If setup times out on `<target>.lock`, first confirm that no Agent LCM setup or
+remove process is running. You may then remove that empty lock directory and
+retry. Do not remove it while another process is active.
 
 ## Isolate a storage problem
 

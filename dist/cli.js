@@ -9,7 +9,7 @@ import { runCapture, runHook } from "./hook.js";
 import { readStatus } from "./installer.js";
 import { startMcpServer } from "./mcp.js";
 import { packageVersion } from "./release.js";
-import { setupHarness, setupStatus } from "./setup.js";
+import { removeHarness, setupHarness, setupStatus } from "./setup.js";
 import { detectedHarnesses } from "./setup-targets.js";
 export async function main(argv) {
     const [command, ...rest] = argv;
@@ -46,9 +46,20 @@ export async function main(argv) {
             return;
         }
         const harness = captureHarness(rest[0]);
+        const home = optionValue(rest, "--home");
         printSetupReports(setupHarness(harness, {
-            home: optionValue(rest, "--home"),
+            home,
             command: commandPath,
+            ...(home ? { env: lifecycleEnvironment(home) } : {}),
+        }), rest.includes("--json"));
+        return;
+    }
+    if (command === "remove") {
+        const harness = captureHarness(rest[0], "remove");
+        const home = optionValue(rest, "--home");
+        printSetupReports(removeHarness(harness, {
+            home,
+            ...(home ? { env: lifecycleEnvironment(home) } : {}),
         }), rest.includes("--json"));
         return;
     }
@@ -258,6 +269,7 @@ Commands:
   agent-lcm setup all
   agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]
   agent-lcm setup status
+  agent-lcm remove <codex|cursor|vscode|copilot|kiro> [--home PATH]
   agent-lcm status [--codex-home PATH] [--json]
   agent-lcm doctor [--codex-home PATH] [--json]  Diagnose install, storage, and capture state
   agent-lcm health [--json]
@@ -273,10 +285,10 @@ Commands:
   agent-lcm import-codex-sessions [--from PATH] [--dry-run] [--progress] [--json]
 `);
 }
-function captureHarness(value) {
+function captureHarness(value, action = "setup") {
     if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro")
         return value;
-    throw new Error("Usage: agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]");
+    throw new Error(`Usage: agent-lcm ${action} <codex|cursor|vscode|copilot|kiro> [--home PATH]`);
 }
 function importHarness(value) {
     if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro")
@@ -307,15 +319,36 @@ function printObjectOrText(value) {
 function printSetupReports(value, json) {
     if (json) {
         printObjectOrText(value);
-        return;
+    }
+    else {
+        const reports = Array.isArray(value) ? value : [value];
+        if (reports.length === 0) {
+            process.stdout.write("No supported harnesses were detected. Configure one with agent-lcm setup <harness>.\n");
+            return;
+        }
+        for (const report of reports) {
+            process.stdout.write(`${report.harness} ${report.action}: ${report.status}\n`);
+            process.stdout.write(`Hooks ${report.hooks.changed ? "changed" : "unchanged"}: ${report.hooks.path}\n`);
+            if (report.status === "manual-required") {
+                process.stdout.write(report.nativeCli === null
+                    ? "Native CLI unavailable.\n"
+                    : `${report.nativeCli} is installed, but it has no supported noninteractive plugin ${report.action} command.\n`);
+            }
+            if (report.status !== "complete")
+                process.stdout.write(`Manual steps: ${report.guide}\n`);
+        }
     }
     const reports = Array.isArray(value) ? value : [value];
-    if (reports.length === 0) {
-        process.stdout.write("No supported harnesses were detected. Configure one with agent-lcm setup <harness>.\n");
-        return;
-    }
-    for (const report of reports) {
-        const state = report.changed ? "have been configured" : "are already configured";
-        process.stdout.write(`${report.harness} hooks ${state}: ${report.path}\n`);
-    }
+    if (reports.some((report) => report.status !== "complete"))
+        process.exitCode = 2;
+}
+function lifecycleEnvironment(home) {
+    return {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        CODEX_HOME: home,
+        COPILOT_HOME: home,
+        AGENT_LCM_HOME: path.join(home, "agent-lcm"),
+    };
 }

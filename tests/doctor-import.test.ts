@@ -47,10 +47,11 @@ test("CLI storage commands use the daemon and daemon status controls its lifetim
 test("doctor reports actionable recommendations for an unwired empty install", () => {
   const codexHome = tempHome("codex-home-");
   const lcmHome = tempHome("agent-lcm-home-");
+  const harnessHome = tempHome("agent-lcm-harness-home-");
   fs.writeFileSync(path.join(codexHome, "config.toml"), "");
 
   const result = runCli(["doctor", "--codex-home", codexHome, "--json"], {
-    env: { AGENT_LCM_HOME: lcmHome },
+    env: { AGENT_LCM_HOME: lcmHome, HOME: harnessHome, USERPROFILE: harnessHome },
   });
 
   assertCliOk(result);
@@ -63,6 +64,16 @@ test("doctor reports actionable recommendations for an unwired empty install", (
     state: "not_configured",
     detail: "Not configured.",
     setup_gap: "Run `agent-lcm setup cursor`, then restart Cursor.",
+  });
+  assert.deepEqual(report.adapter_status.vscode, {
+    configured: null,
+    state: "unknown",
+    detail: "VS Code native plugin health is not checked by doctor. Run `copilot plugin list` or use the client's installed-plugin view.",
+  });
+  assert.deepEqual(report.adapter_status.copilot, {
+    configured: null,
+    state: "unknown",
+    detail: "Copilot native plugin health is not checked by doctor. Run `copilot plugin list` or use the client's installed-plugin view.",
   });
   assert.equal(report.adapter_status.codex.configured, false);
   assert.equal(report.recommendations.some((text: string) => text.includes("Install the Agent LCM plugin")), true);

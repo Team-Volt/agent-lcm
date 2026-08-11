@@ -3,5 +3,9 @@
   "name": "agent-lcm",
   "version": "0.0.6",
   "description": "Shared local context memory for agent harnesses.",
+  "author": {
+    "name": "Team Volt"
+  },
+  "keywords": ["agent-memory", "context", "recall", "sessions"],
   "homepage": "https://github.com/Team-Volt/agent-lcm"
 }

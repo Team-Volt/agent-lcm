@@ -29,14 +29,14 @@
     ".agents/plugins/marketplace.json",
     ".codex-plugin/",
     ".cursor-plugin/",
+    ".mcp.json",
     "bin/",
     "dist/",
     "hooks/",
     "skills/",
     "hooks.json",
     "mcp.cursor.json",
-    "mcp.json",
-    "plugin.json"
+    "mcp.json"
   ],
   "scripts": {
     "compile": "tsc --project tsconfig.build.json",
