@@ -27,6 +27,7 @@
   },
   "files": [
     ".agents/plugins/marketplace.json",
+    ".claude-plugin/",
     ".codex-plugin/",
     ".cursor-plugin/",
     ".mcp.json",
@@ -35,6 +36,7 @@
     "hooks/",
     "skills/",
     "hooks.json",
+    "mcp.claude.json",
     "mcp.cursor.json",
     "mcp.json"
   ],
