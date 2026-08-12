@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
 import test from "node:test";
 
 import { loadConfig } from "../src/config.ts";
 import { daemonStatus, ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
-import { normalizeHookEvent } from "../src/events.ts";
+import { normalizeHookEvent, type NormalizedEvent } from "../src/events.ts";
 import { publishInboxEvent } from "../src/inbox.ts";
-import { clearDerivedSummaries, runCli, runMcp, tempHome } from "./helpers.ts";
+import { assertCliOk, clearDerivedSummaries, readJsonl, runCli, runMcp, tempHome } from "./helpers.ts";
 
 type FramedMcpResponse = {
   readonly id: unknown;
@@ -34,6 +37,119 @@ test("MCP bridge drains queued events from every harness through the daemon", as
 
   const matches = responses[1].result.structuredContent.matches as Array<{ harness: string }>;
   assert.deepEqual(matches.map((match) => match.harness).sort(), ["codex", "cursor"]);
+  assert.equal((await daemonStatus(config)).running, false);
+});
+
+test("Claude capture keeps secrets out of durable and MCP surfaces while draining duplicates and quarantine", async (t) => {
+  const home = tempHome("agent-lcm-claude-runtime-");
+  const config = loadConfig({ home });
+  const env = { AGENT_LCM_HOME: home };
+  const cwd = "/tmp/claude-runtime-proof";
+  const uriPassword = "claude-runtime-uri-password";
+  const bearerToken = "claude-runtime-bearer-token";
+  const assignmentSecret = "claude-runtime-assignment-secret";
+  const privateKey = "claude-runtime-private-key";
+  const secrets = [uriPassword, bearerToken, assignmentSecret, privateKey];
+  t.after(() => stopDaemon(config));
+
+  const captures = [
+    ["SessionStart", { session_id: "claude-runtime", cwd, source: "startup" }],
+    [
+      "UserPromptSubmit",
+      {
+        session_id: "claude-runtime",
+        cwd,
+        prompt: `claude runtime proof marker ${"x".repeat(512 * 1024)}`,
+        credentials: {
+          uri: `postgres://agent:${uriPassword}@db.example.test/proof`,
+          authorization: `Bearer ${bearerToken}`,
+          assignment: `api_key=${assignmentSecret}`,
+          private_key: `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`,
+        },
+      },
+    ],
+    ["PostToolUse", { session_id: "claude-runtime", cwd, tool_name: "Read", tool_input: { path: "proof.txt" } }],
+    ["Stop", { session_id: "claude-runtime", cwd, reason: "complete" }],
+  ] as const;
+  for (const [nativeEvent, payload] of captures) {
+    const result = runCli(["capture", "--harness", "claude", nativeEvent], {
+      input: JSON.stringify(payload),
+      env,
+      keepDaemon: true,
+      timeout: 15_000,
+    });
+    assertCliOk(result);
+  }
+
+  const duplicate: NormalizedEvent = {
+    ...normalizeHookEvent({
+      hookEvent: "UserPromptSubmit",
+      rawInput: JSON.stringify({
+        session_id: "claude-runtime-duplicate",
+        cwd,
+        prompt: `duplicate claude runtime proof marker Bearer ${bearerToken}`,
+        credentials: { uri: `redis://:${uriPassword}@cache.example.test/0`, assignment: `token=${assignmentSecret}` },
+      }),
+      now: () => new Date("2026-08-11T12:00:00.000Z"),
+    }),
+    event_id: "claude-runtime-duplicate-event",
+    harness: "claude",
+    native_event: "UserPromptSubmit",
+    session_id: "claude:claude-runtime-duplicate",
+  };
+  fs.mkdirSync(config.inboxDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(config.inboxDir, "000-malformed.json"), "{not-json", { mode: 0o600 });
+  publishInboxEvent(config, duplicate);
+  const inbox = JSON.stringify(fs.readdirSync(config.inboxDir).map((name) => fs.readFileSync(path.join(config.inboxDir, name), "utf8")));
+  for (const secret of secrets) assert.doesNotMatch(inbox, new RegExp(secret, "u"));
+
+  runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "lcm_grep", arguments: { query: "claude runtime proof marker", harnesses: ["claude"] } } },
+  ], env);
+  publishInboxEvent(config, duplicate);
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 3, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "lcm_grep", arguments: { query: "claude runtime proof marker", harnesses: ["claude"] } } },
+    { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "lcm_stats", arguments: {} } },
+  ], env);
+
+  const raw = readJsonl(path.join(home, "events.jsonl")) as Array<{
+    event_id: string;
+    harness: string;
+    native_event: string;
+    session_id: string;
+    redactions: readonly unknown[];
+    payload: { overflow_ref?: { path: string; sha256: string } };
+  }>;
+  assert.deepEqual(raw.filter((event) => event.session_id === "claude:claude-runtime").map((event) => event.native_event).sort(), ["PostToolUse", "SessionStart", "Stop", "UserPromptSubmit"]);
+  assert.equal(raw.filter((event) => event.event_id === duplicate.event_id).length, 1);
+  assert.equal(raw.every((event) => event.harness === "claude"), true);
+  assert.equal(raw.some((event) => event.redactions.length > 0), true);
+  const overflow = raw.find((event) => event.native_event === "UserPromptSubmit")?.payload.overflow_ref;
+  assert.notEqual(overflow, undefined);
+  assert.equal(overflow?.path, path.join(home, "overflow", `${overflow?.sha256}.json`));
+  assert.equal(fs.statSync(overflow?.path ?? "").mode & 0o777, 0o600);
+  const durable = `${JSON.stringify(raw)}\n${fs.readFileSync(overflow?.path ?? "", "utf8")}`;
+  for (const secret of secrets) assert.doesNotMatch(durable, new RegExp(secret, "u"));
+  assert.equal(fs.readdirSync(config.quarantineDir).filter((name) => name === "000-malformed.json").length, 1);
+
+  const db = new DatabaseSync(path.join(home, "index.sqlite"));
+  try {
+    const duplicateRow = db.prepare("SELECT COUNT(*) AS count FROM events WHERE event_id = ?1").get(duplicate.event_id);
+    assert.ok(duplicateRow);
+    assert.equal(duplicateRow.count, 1);
+    const indexed = JSON.stringify(db.prepare("SELECT raw_json FROM events ORDER BY rowid").all());
+    for (const secret of secrets) assert.doesNotMatch(indexed, new RegExp(secret, "u"));
+  } finally {
+    db.close();
+  }
+  const query = JSON.stringify(responses);
+  for (const secret of secrets) assert.doesNotMatch(query, new RegExp(secret, "u"));
+  const matches = responses[1].result.structuredContent.matches as Array<{ harness: string }>;
+  assert.equal(matches.length > 0, true);
+  assert.equal(matches.every((match) => match.harness === "claude"), true);
+  assert.equal(responses[2].result.structuredContent.stats.event_count, 5);
   assert.equal((await daemonStatus(config)).running, false);
 });
 
