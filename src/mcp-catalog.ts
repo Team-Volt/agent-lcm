@@ -17,7 +17,7 @@ export const TOOLS = [
   {
     name: "lcm_list_sessions",
     title: "LCM List Sessions",
-    description: "List sessions across projects with time, root/child, pagination, and optional compact summary filters.",
+    description: "List recent sessions across all harnesses for cross-harness handoffs when query terms are uncertain, with time, root/child, pagination, and optional compact summaries.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,7 +56,7 @@ export const TOOLS = [
   {
     name: "lcm_grep",
     title: "LCM Grep",
-    description: "Preferred standard workflow step 1 (grep): search the requested cwd or repo first, then retry globally when scoped memory and overflow results are both empty",
+    description: "Preferred workflow for cross-harness handoffs, step 1 (grep): search the shared store across all harnesses by default; when cwd or repo is supplied, retry globally if scoped memory and overflow results are both empty.",
     inputSchema: {
       type: "object",
       properties: {
@@ -226,7 +226,7 @@ export const TOOLS = [
   {
     name: "lcm_get_recent_context",
     title: "LCM Get Recent Context",
-    description: "Retrieve recent events for a session or latest cwd-matching session.",
+    description: "Retrieve recent events from one session only, selected by session ID or latest cwd match. Do not use for cross-session or cross-harness recall.",
     inputSchema: {
       type: "object",
       properties: {

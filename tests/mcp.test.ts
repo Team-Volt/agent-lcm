@@ -276,6 +276,7 @@ test("MCP server initializes and exposes a stable tool catalog", () => {
 
   assert.equal(responses[0].result.protocolVersion, SUPPORTED_PROTOCOL_VERSION);
   assert.equal(responses[0].result.serverInfo.name, "agent-lcm");
+  assert.match(responses[0].result.instructions, /shared store spans all harnesses/u);
   const toolNames = responses[1].result.tools.map((tool: { name: string }) => tool.name);
   assert.deepEqual(
     toolNames,
@@ -302,6 +303,7 @@ test("MCP server initializes and exposes a stable tool catalog", () => {
     assert.equal(toolNames.includes(name), true, `${name} missing from tools/list`);
   }
   const grepTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_grep");
+  const recentTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_get_recent_context");
   const describeTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_describe");
   const expandTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_expand");
   assert.deepEqual(grepTool.inputSchema.properties.contentScope, {
@@ -309,6 +311,8 @@ test("MCP server initializes and exposes a stable tool catalog", () => {
     enum: ["memory", "overflow", "both"],
     default: "memory",
   });
+  assert.match(grepTool.description, /cross-harness handoffs/u);
+  assert.match(recentTool.description, /one session only/u);
   assert.equal(describeTool.inputSchema.properties.includeLineage.type, "boolean");
   assert.deepEqual(expandTool.inputSchema.required, ["nodeId"]);
   const expandQueryTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_expand_query");
