@@ -81,6 +81,45 @@ test("Claude setup stops after a conflicting marketplace source", (t) => {
   assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
 });
 
+test("Claude setup stops when a valid marketplace precedes a conflicting duplicate", (t) => {
+  // Given: two Agent LCM marketplace records, with the valid record first.
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(PACKAGE_ROOT), claudeMarketplace(path.join(PACKAGE_ROOT, "other"))],
+    plugins: [],
+  });
+
+  // When: Claude setup checks the marketplace registry.
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), NativeLifecycleCommandError);
+  // Then: it stops before any add, install, or update command.
+  assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
+});
+
+test("Claude setup stops when a conflicting marketplace precedes a valid duplicate", (t) => {
+  // Given: two Agent LCM marketplace records, with the conflicting record first.
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(path.join(PACKAGE_ROOT, "other")), claudeMarketplace(PACKAGE_ROOT)],
+    plugins: [],
+  });
+
+  // When: Claude setup checks the marketplace registry.
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), NativeLifecycleCommandError);
+  // Then: it stops before any add, install, or update command.
+  assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
+});
+
+test("Claude setup stops when a valid marketplace has a malformed duplicate", (t) => {
+  // Given: a valid Agent LCM marketplace record and a malformed duplicate.
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(PACKAGE_ROOT), { name: "agent-lcm" }],
+    plugins: [],
+  });
+
+  // When: Claude setup checks the marketplace registry.
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), NativeLifecycleCommandError);
+  // Then: it stops before any add, install, or update command.
+  assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
+});
+
 test("Claude lifecycle rejects malformed JSON and records", (t) => {
   const malformedJson = fakeClaudeCli(t, { marketplaces: "{not json", plugins: [] }, { rawMarketplace: true });
   const malformedRecord = fakeClaudeCli(t, { marketplaces: [{ name: "agent-lcm" }], plugins: [] });

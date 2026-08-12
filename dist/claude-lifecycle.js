@@ -17,7 +17,10 @@ export function runClaudeLifecycle(action, packageRoot, run) {
     }
     const marketplaceArgv = ["plugin", "marketplace", "list", "--json"];
     const marketplaces = parseRecords(run(marketplaceArgv), marketplaceArgv, isRecord);
-    const marketplace = marketplaces.find((entry) => entry.name === "agent-lcm");
+    const ownedMarketplaces = marketplaces.filter((entry) => entry.name === "agent-lcm");
+    if (ownedMarketplaces.length > 1)
+        throw new ClaudeLifecycleOutputError(marketplaceArgv);
+    const marketplace = ownedMarketplaces[0];
     if (marketplace !== undefined) {
         if (!isClaudeMarketplace(marketplace) || path.resolve(marketplace.path) !== packageRoot) {
             throw new ClaudeLifecycleOutputError(marketplaceArgv);
