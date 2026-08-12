@@ -6,6 +6,5 @@
   "homepage": "https://github.com/Team-Volt/agent-lcm",
   "keywords": ["agent-memory", "context", "recall", "sessions"],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "mcpServers": "./mcp.claude.json"
 }

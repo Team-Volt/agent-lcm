@@ -88,9 +88,9 @@ test("Claude Code plugin artifacts use isolated native components", () => {
   assert.deepEqual(plugin, {
     ...portablePlugin,
     skills: "./skills/",
-    hooks: "./hooks/hooks.json",
     mcpServers: "./mcp.claude.json",
   });
+  assert.equal("hooks" in plugin, false);
   assert.equal(plugin.version, packageJson.version);
 
   const marketplace = readJson(".claude-plugin/marketplace.json");
