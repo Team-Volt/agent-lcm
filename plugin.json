@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "agent-lcm",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Shared local context memory for agent harnesses.",
   "author": {
     "name": "Team Volt"
