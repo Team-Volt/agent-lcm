@@ -12,16 +12,19 @@ skills/lcm-recall/            portable recall skill
 hooks.json                    shared lower-camel hook shape for client adapters
 .codex-plugin/plugin.json     Codex native compatibility manifest
 .cursor-plugin/plugin.json    Cursor native compatibility manifest
+.claude-plugin/plugin.json    Claude Code native compatibility manifest
+.claude-plugin/marketplace.json Claude Code local marketplace catalog
 hooks/                        harness-specific hook manifests
+mcp.claude.json               Claude Code MCP server configuration
 bin/agent-lcm                 source and npm CLI entry point
 dist/                         generated npm runtime
 ```
 
 Agent Plugins 1.0 standardizes skills and MCP servers, not hooks. The npm
-artifact therefore omits the root `plugin.json`: Codex and Cursor then select
-their native manifests and load bundled hooks. The GitHub repository keeps the
-root manifest for Kiro Powers. Copilot and VS Code receive a generated native
-package with absolute local commands.
+artifact therefore omits the root `plugin.json`: Codex, Cursor, and Claude Code
+then select their native manifests and load bundled hooks. The GitHub
+repository keeps the root manifest for Kiro Powers. Copilot and VS Code receive
+a generated native package with absolute local commands.
 
 The npm package and each native plugin copy can start the same per-user daemon.
 Daemon protocol compatibility, not package release version, decides whether a
@@ -44,13 +47,23 @@ Cursor and Kiro run version-only probes for `cursor-agent` and `kiro-cli`.
 Their Marketplace or Powers steps remain manual, so their native result is
 `manual-required`. Cursor loads `.cursor-plugin/plugin.json` from the npm
 package; Kiro loads the repository-root Agent Plugin and uses a separate Kiro
-hook file because hooks are not portable.
+hook file because hooks are not portable. Claude Code probes its JSON plugin
+lists, adds the installed package as the user-scoped local marketplace when
+needed, then installs or updates `agent-lcm@agent-lcm`. Its native package uses
+`.claude-plugin/plugin.json`, `hooks/hooks.json`, and `mcp.claude.json`.
 
 `agent-lcm remove <harness>` removes only exact Agent LCM-owned legacy hooks.
 Codex runs `codex plugin remove agent-lcm@agent-lcm`. Copilot and VS Code share a
 native store, so either single-harness removal returns `shared-retained` and
 does not invoke an uninstall. Deliberate shared removal remains a documented
 manual Copilot action after both clients are reviewed.
+
+Claude Code removal lists plugins and uninstalls only the user-scoped
+`agent-lcm@agent-lcm` plugin. It leaves the `agent-lcm` marketplace configured.
+Claude Code setup does not read or write `settings.json`; its setup status uses
+that path only for display and reports `hooksConfigured: false`. `doctor` leaves
+Claude native plugin health as `unknown`, so use Claude's plugin list or its
+installed-plugin view for the native check.
 
 Lifecycle reports use exit status `0` for `complete`, `2` for
 `manual-required` or `shared-retained`, and `1` for an error. Existing hook
@@ -84,6 +97,10 @@ receive a collision-safe `-pre-agent-lcm-` backup.
    archive, and updates the derived SQLite index.
 7. MCP bridges and storage CLI commands authenticate over local IPC and use the
    same daemon.
+
+Claude Code's native hook manifest maps exactly `SessionStart`,
+`UserPromptSubmit`, `PostToolUse`, and `Stop` to live capture. Agent LCM does not
+provide a historical Claude Code importer.
 
 The inbox separates fast harness hooks from database work. Atomic publication
 also gives the daemon a clear rule: a `.json` file is complete, while temporary
@@ -194,7 +211,7 @@ create one inbox file per event; hooks still use the durable inbox.
 Codex, GitHub Copilot, and Kiro have default local search paths. Cursor accepts
 chat Markdown exports. VS Code accepts JSON conversation exports or OTLP JSON.
 Malformed JSONL records are rejected individually so later valid records still
-import.
+import. Claude Code is live-only and has no historical import path.
 
 ## MCP protocol
 

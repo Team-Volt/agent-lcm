@@ -9,9 +9,11 @@ agent-lcm daemon status
 ```
 
 `doctor` checks Codex plugin wiring, the recall skill, the shared daemon, the
-capture queue, quarantine, SQLite, and summary indexing. `setup status` reports
-`hooksConfigured` for setup-managed or legacy hook files; it does not claim to
-check native plugin health.
+capture queue, quarantine, SQLite, and summary indexing. Claude native plugin
+health remains `unknown` in that report. `setup status` reports
+`hooksConfigured` for setup-managed or legacy hook files; Claude always reports
+`hooksConfigured: false` with its `settings.json` display path. It does not claim
+to check native plugin health.
 
 ## The MCP server is missing
 
@@ -55,8 +57,14 @@ entries from the shared fallback so capture does not run twice. Setup refuses
 malformed existing JSON instead of overwriting it. Before changing a valid
 existing file, setup saves a timestamped `-pre-agent-lcm-` backup beside it.
 
-Codex, Cursor, VS Code, and Copilot may ask you to review or trust plugin-owned commands. Capture
+Claude Code, Codex, Cursor, VS Code, and Copilot may ask you to review or trust
+plugin-owned commands. Claude Code's hooks cover `SessionStart`,
+`UserPromptSubmit`, `PostToolUse`, and `Stop`. Capture
 will not run until the harness allows those hooks.
+
+After installing or updating the Claude Code plugin, run `/reload-plugins` in
+Claude Code. Start a new session or restart the client if the plugin still does
+not appear.
 
 Check whether events reach the queue and daemon:
 
@@ -80,7 +88,9 @@ agent-lcm setup copilot
 agent-lcm setup vscode
 agent-lcm setup cursor
 agent-lcm setup kiro
+agent-lcm setup claude
 agent-lcm remove codex
+agent-lcm remove claude
 ```
 
 Replace `codex` with the harness you want to remove.
@@ -102,7 +112,10 @@ remove vscode` is intentionally conservative and does not uninstall the shared
 plugin. A legacy `~/.copilot/hooks/agent-lcm.json` fallback is separate and is
 left unchanged. Review both clients before using the documented Copilot
 uninstall command. Cursor Marketplace and Kiro Powers installation/removal
-stay manual.
+stay manual. Claude Code setup uses its marketplace and plugin JSON lists; a
+repeat setup updates the user plugin. Claude removal retains the marketplace and
+only uninstalls the user plugin. If `--home PATH` is supplied for Claude, it is
+the Claude config directory passed through `CLAUDE_CONFIG_DIR`.
 
 Setup validates the existing JSON before starting a native CLI. It changes only
 exact Agent LCM-owned hook entries and preserves unrelated or near-matching
@@ -165,7 +178,8 @@ agent-lcm import --harness vscode /path/to/export.json --dry-run
 Codex defaults to `~/.codex/sessions`, GitHub Copilot to
 `~/.copilot/session-state`, and Kiro to `~/.kiro/sessions/cli`. `CODEX_HOME`
 changes the Codex root. The JSON report separates missing files, rejected
-records, duplicates, and harnesses that need an export.
+records, duplicates, and harnesses that need an export. Claude Code has no
+historical importer in Agent LCM, so older Claude sessions are not scanned.
 
 Imports do not edit source files. Repeating a successful import is safe.
 
