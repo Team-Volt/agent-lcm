@@ -75,6 +75,11 @@ test("doctor reports actionable recommendations for an unwired empty install", (
     state: "unknown",
     detail: "Copilot native plugin health is not checked by doctor. Run `copilot plugin list` or use the client's installed-plugin view.",
   });
+  assert.deepEqual(report.adapter_status.claude, {
+    configured: null,
+    state: "unknown",
+    detail: "Claude native plugin health is not checked by doctor. Run `claude plugin list --json` or use the client's installed-plugin view.",
+  });
   assert.equal(report.adapter_status.codex.configured, false);
   assert.equal(report.recommendations.some((text: string) => text.includes("Install the Agent LCM plugin")), true);
   assert.equal(report.recommendations.some((text: string) => text.includes("import --all")), true);

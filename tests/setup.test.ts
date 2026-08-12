@@ -578,6 +578,72 @@ test("setup all configures only harnesses already installed for the user", () =>
   assert.equal(fs.existsSync(path.join(userHome, ".kiro")), false);
 });
 
+test("Claude setup, removal, and status never inspect or mutate settings", (t) => {
+  const configDir = tempHome("agent-lcm-claude-config-");
+  const settings = path.join(configDir, "settings.json");
+  const original = Buffer.from("{not json\n");
+  fs.writeFileSync(settings, original);
+  const fake = fakeClaudeLifecycleCli(t);
+
+  const setup = setupHarness("claude", { home: configDir, command: "not-an-absolute-command", env: fake.env });
+  const status = setupStatus({ home: configDir }).claude;
+  const remove = removeHarness("claude", { home: configDir, env: fake.env });
+
+  assert.equal(setup.status, "complete");
+  assert.equal(remove.status, "complete");
+  assert.deepEqual(setup.hooks, { path: settings, changed: false });
+  assert.deepEqual(remove.hooks, { path: settings, changed: false });
+  assert.deepEqual(status, { hooksConfigured: false, path: settings });
+  assert.deepEqual(fs.readFileSync(settings), original);
+  assert.equal(fs.existsSync(path.join(configDir, "hooks")), false);
+});
+
+test("Claude setup does not follow a symlinked settings path", { skip: process.platform === "win32" }, (t) => {
+  const configDir = tempHome("agent-lcm-claude-symlink-");
+  const victim = path.join(tempHome("agent-lcm-claude-victim-"), "victim.json");
+  fs.writeFileSync(victim, "victim bytes\n");
+  fs.symlinkSync(victim, path.join(configDir, "settings.json"));
+  const fake = fakeClaudeLifecycleCli(t);
+
+  setupHarness("claude", { home: configDir, command: "/unused/agent-lcm", env: fake.env });
+
+  assert.equal(fs.readFileSync(victim, "utf8"), "victim bytes\n");
+  assert.equal(fs.readlinkSync(path.join(configDir, "settings.json")), victim);
+  assert.equal(fs.existsSync(path.join(configDir, "hooks")), false);
+});
+
+test("Claude CLI --home sets only the Claude config directory lifecycle override", (t) => {
+  const configDir = tempHome("agent-lcm-claude-cli-home-");
+  const fake = fakeClaudeLifecycleCli(t);
+
+  const result = runCli(["setup", "claude", "--home", configDir, "--json"], { env: fake.env });
+
+  assertCliOk(result);
+  const calls = readSetupCalls(fake.log) as Array<{ argv: string[]; claudeConfigDir: string | null }>;
+  assert.equal(calls[0]?.claudeConfigDir, configDir);
+  assert.deepEqual(calls.map((call) => call.argv), [
+    ["plugin", "marketplace", "list", "--json"],
+    ["plugin", "marketplace", "add", PACKAGE_ROOT, "--scope", "user"],
+    ["plugin", "list", "--json"],
+    ["plugin", "install", "agent-lcm@agent-lcm", "--scope", "user"],
+  ]);
+});
+
+test("setup all detects a Claude config directory", (t) => {
+  const userHome = tempHome("agent-lcm-detected-claude-");
+  fs.mkdirSync(path.join(userHome, ".claude"));
+  const fake = fakeClaudeLifecycleCli(t);
+
+  const result = runCli(["setup", "all", "--json"], {
+    env: { ...fake.env, HOME: userHome, USERPROFILE: userHome },
+  });
+
+  assertCliOk(result);
+  const reports = JSON.parse(result.stdout);
+  assert.deepEqual(reports.map((report: { harness: string }) => report.harness), ["claude"]);
+  assert.equal(reports[0].hooks.path, path.join(userHome, ".claude", "settings.json"));
+});
+
 test("setup prints a clear result for people and keeps JSON output for scripts", () => {
   const userHome = tempHome("agent-lcm-output-");
   const text = runCli(["setup", "codex", "--home", userHome], { env: { PATH: "" } });
@@ -824,6 +890,22 @@ if (${String(failProbe)} && JSON.stringify(process.argv.slice(2)) === JSON.strin
     path: `${bin}${path.delimiter}${path.dirname(process.execPath)}`,
     log,
   };
+}
+
+function fakeClaudeLifecycleCli(t: test.TestContext): { readonly env: NodeJS.ProcessEnv; readonly log: string; readonly path: string } {
+  const bin = fs.mkdtempSync(path.join(tempHome("agent-lcm-claude-lifecycle-parent-"), "bin-"));
+  const log = path.join(bin, "calls.jsonl");
+  const script = `#!/usr/bin/env node
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+fs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify({ argv, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null }) + "\\n");
+if (JSON.stringify(argv) === JSON.stringify(["plugin", "marketplace", "list", "--json"])) process.stdout.write('[{"name":"claude-plugins-official","source":"github","repo":"anthropics/claude-plugins-official","installLocation":"/tmp/claude-plugins-official"}]');
+if (JSON.stringify(argv) === JSON.stringify(["plugin", "list", "--json"])) process.stdout.write("[]");
+`;
+  writeFakeSetupCli(bin, "claude", script);
+  t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
+  const executablePath = `${bin}${path.delimiter}${path.dirname(process.execPath)}`;
+  return { env: { AGENT_LCM_FAKE_LOG: log, PATH: executablePath }, log, path: executablePath };
 }
 
 function writeFakeSetupCli(bin: string, name: string, script: string): void {

@@ -17,7 +17,7 @@ export const TOOLS = [
   {
     name: "lcm_list_sessions",
     title: "LCM List Sessions",
-    description: "List sessions across projects with time, root/child, pagination, and optional compact summary filters.",
+    description: "List recent sessions across all harnesses for cross-harness handoffs when query terms are uncertain, with time, root/child, pagination, and optional compact summaries.",
     inputSchema: {
       type: "object",
       properties: {
@@ -26,7 +26,7 @@ export const TOOLS = [
         cwd: { type: "string" },
         repoRoot: { type: "string" },
         parentSessionId: { type: "string" },
-        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"] } },
+        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"] } },
         rootsOnly: { type: "boolean", default: false },
         includeSummaries: { type: "boolean", default: false, description: "Include compact titles, overviews, prompts, outcomes, and topics in this one response." },
         limit: { type: "number", default: 50 },
@@ -47,7 +47,7 @@ export const TOOLS = [
         cwd: { type: "string" },
         repoRoot: { type: "string" },
         parentSessionId: { type: "string" },
-        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"] } },
+        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"] } },
         rootsOnly: { type: "boolean", default: false },
       },
     },
@@ -56,7 +56,7 @@ export const TOOLS = [
   {
     name: "lcm_grep",
     title: "LCM Grep",
-    description: "Preferred standard workflow step 1 (grep): search the requested cwd or repo first, then retry globally when scoped memory and overflow results are both empty",
+    description: "Preferred workflow for cross-harness handoffs, step 1 (grep): search the shared store across all harnesses by default; when cwd or repo is supplied, retry globally if scoped memory and overflow results are both empty.",
     inputSchema: {
       type: "object",
       properties: {
@@ -67,7 +67,7 @@ export const TOOLS = [
         contentScope: { type: "string", enum: ["memory", "overflow", "both"], default: "memory" },
         excludeCurrentSession: { type: "boolean", default: false },
         excludeSessionIds: { type: "array", items: { type: "string" } },
-        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"] } },
+        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"] } },
       },
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -116,7 +116,7 @@ export const TOOLS = [
         cwd: { type: "string" },
         repoRoot: { type: "string" },
         sessionIds: { type: "array", items: { type: "string" } },
-        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"] } },
+        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"] } },
         budgetTokens: { type: "number", default: 2000 },
         limit: { type: "number", default: 4 },
         sourceLimit: { type: "number", default: 6, description: "Maximum source events or source summary nodes considered per matched node." },
@@ -176,7 +176,7 @@ export const TOOLS = [
         repoRoot: { type: "string" },
         excludeCurrentSession: { type: "boolean", default: false },
         excludeSessionIds: { type: "array", items: { type: "string" } },
-        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"] } },
+        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"] } },
       },
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -226,7 +226,7 @@ export const TOOLS = [
   {
     name: "lcm_get_recent_context",
     title: "LCM Get Recent Context",
-    description: "Retrieve recent events for a session or latest cwd-matching session.",
+    description: "Retrieve recent events from one session only, selected by session ID or latest cwd match. Do not use for cross-session or cross-harness recall.",
     inputSchema: {
       type: "object",
       properties: {
@@ -249,7 +249,7 @@ export const TOOLS = [
         sessionIds: { type: "array", items: { type: "string" } },
         budgetTokens: { type: "number", default: 1200 },
         cwd: { type: "string" },
-        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"] } },
+        harnesses: { type: "array", items: { type: "string", enum: ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"] } },
       },
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

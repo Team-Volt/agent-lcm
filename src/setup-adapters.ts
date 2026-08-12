@@ -5,10 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { withCopilotPluginSource } from "./copilot-plugin.ts";
+import { ClaudeLifecycleOutputError, runClaudeLifecycle } from "./claude-lifecycle.ts";
 import type { CaptureHarness } from "./harnesses.ts";
 
 export type HarnessLifecycleAction = "setup" | "remove";
-export type HarnessCli = "codex" | "copilot" | "cursor-agent" | "kiro-cli";
+export type HarnessCli = "codex" | "copilot" | "cursor-agent" | "kiro-cli" | "claude";
 
 export type HarnessLifecycleOutcome = {
   readonly harness: CaptureHarness;
@@ -55,6 +56,12 @@ type CopilotLifecycleAdapter = {
   readonly probeArgv: readonly string[];
 };
 
+type ClaudeLifecycleAdapter = {
+  readonly kind: "claude";
+  readonly executable: "claude";
+  readonly guide: string;
+};
+
 type ManualLifecycleAdapter = {
   readonly kind: "manual";
   readonly executable: "cursor-agent" | "kiro-cli";
@@ -62,7 +69,7 @@ type ManualLifecycleAdapter = {
   readonly guide: string;
 };
 
-export type HarnessLifecycleAdapter = CodexLifecycleAdapter | CopilotLifecycleAdapter | ManualLifecycleAdapter;
+export type HarnessLifecycleAdapter = CodexLifecycleAdapter | CopilotLifecycleAdapter | ClaudeLifecycleAdapter | ManualLifecycleAdapter;
 
 const GUIDE_ROOT = "https://github.com/Team-Volt/agent-lcm/blob/main/docs/install";
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -94,6 +101,7 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
     probeArgv: ["plugin", "list"],
   },
   kiro: { kind: "manual", executable: "kiro-cli", probeArgv: ["--version"], guide: `${GUIDE_ROOT}/kiro.md` },
+  claude: { kind: "claude", executable: "claude", guide: `${GUIDE_ROOT}/claude.md` },
 } satisfies Record<CaptureHarness, HarnessLifecycleAdapter>;
 
 export function runHarnessLifecycle(
@@ -110,10 +118,49 @@ export function runHarnessLifecycle(
       return runNative(harness, action, adapter, options.env, options.command);
     case "codex":
       return runNative(harness, action, adapter, options.env);
+    case "claude":
+      try {
+        return runClaude("claude", action, adapter, options.env);
+      } catch (error) {
+        if (error instanceof ClaudeCliUnavailableError) {
+          return outcome(harness, action, "manual-required", null, adapter.guide);
+        }
+        throw error;
+      }
     default:
       return assertNever(adapter);
   }
 }
+
+function runClaude(harness: "claude", action: HarnessLifecycleAction, adapter: ClaudeLifecycleAdapter, env: NodeJS.ProcessEnv | undefined): HarnessLifecycleOutcome {
+  try {
+    runClaudeLifecycle(action, PACKAGE_ROOT, (argv) => runClaudeCommand(adapter.executable, argv, env));
+  } catch (error) {
+    if (error instanceof ClaudeLifecycleOutputError) {
+      throw new NativeLifecycleCommandError(adapter.executable, error.argv, 0, SUPPRESSED_STDERR);
+    }
+    throw error;
+  }
+  return outcome(harness, action, "native-complete", adapter.executable, adapter.guide);
+}
+
+function runClaudeCommand(
+  executable: "claude",
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv | undefined,
+): string {
+  const result = spawnLifecycleCommand(executable, argv, env);
+  if (isEnoent(result.error)) throw new ClaudeCliUnavailableError();
+  if (result.error !== undefined || result.status !== 0) {
+    throw new NativeLifecycleCommandError(executable, argv, result.status, SUPPRESSED_STDERR);
+  }
+  return result.stdout;
+}
+
+class ClaudeCliUnavailableError extends Error {
+  readonly name = "ClaudeCliUnavailableError";
+}
+
 
 function runNative(
   harness: CaptureHarness,
@@ -157,7 +204,7 @@ function manualOutcome(
   return outcome(harness, action, "manual-required", adapter.executable, adapter.guide);
 }
 
-function runNativeCommand(executable: "codex" | "copilot", argv: readonly string[], env: NodeJS.ProcessEnv | undefined): void {
+function runNativeCommand(executable: "codex" | "copilot" | "claude", argv: readonly string[], env: NodeJS.ProcessEnv | undefined): void {
   const result = spawnLifecycleCommand(executable, argv, env);
   if (result.status === 0) return;
   throw new NativeLifecycleCommandError(executable, argv, result.status, SUPPRESSED_STDERR);

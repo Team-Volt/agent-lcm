@@ -3,8 +3,7 @@
     "agent-lcm": {
       "type": "stdio",
       "command": "node",
-      "args": ["./bin/agent-lcm", "mcp"],
-      "cwd": "."
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/agent-lcm", "mcp"]
     }
   }
 }

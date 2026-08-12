@@ -111,6 +111,7 @@ async function handleMessage(message, framing) {
             serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
             instructions: [
                 "Use Agent LCM for sanitized local evidence from prior agent sessions.",
+                "The shared store spans all harnesses; the current harness is provenance, not a default search boundary.",
                 "Preferred standard workflow: lcm_grep -> lcm_describe -> lcm_expand.",
                 "Use lcm_expand_query for focused recursive evidence. For recovery after compaction, interruption, or handoff, call lcm_pack_context once and consume structuredContent.markdown from that result.",
                 "For multi-session reviews, call lcm_list_sessions once with includeSummaries; for exact long-session detail, use lcm_describe before bounded graph or paged event reads.",

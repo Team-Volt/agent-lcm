@@ -1,7 +1,7 @@
 import { DEFAULT_LIMITS, type LcmLimits } from "./config.ts";
 import { sanitizeForStorage, sha256 } from "./redact.ts";
 
-export const HARNESS_NAMES = ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"] as const;
+export const HARNESS_NAMES = ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"] as const;
 export type HarnessName = (typeof HARNESS_NAMES)[number];
 
 export function harnessSessionId(harness: HarnessName, nativeId: string): string {

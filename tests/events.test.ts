@@ -31,8 +31,9 @@ test("normalizes Codex-style hook payloads without project as primary boundary",
 });
 
 test("namespaces native session identifiers by harness", () => {
-  assert.deepEqual(HARNESS_NAMES, ["codex", "cursor", "vscode", "copilot", "kiro", "mcp", "import"]);
+  assert.deepEqual(HARNESS_NAMES, ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"]);
   assert.equal(harnessSessionId("cursor", "  abc  "), "cursor:abc");
+  assert.equal(harnessSessionId("claude", "  native-session  "), "claude:native-session");
   assert.throws(() => harnessSessionId("codex", "  "), /native session id must not be empty/u);
 });
 
@@ -67,7 +68,7 @@ test("accepts camelCase session and tool keys", () => {
   assert.deepEqual(event.payload.toolResult, { textResultForLlm: "hello" });
 });
 
-test("uses only Codex session environment fallback keys", () => {
+test("Codex normalization ignores CLAUDE_SESSION_ID and uses only its own fallback key", () => {
   const codexEvent = normalizeHookEvent({
     hookEvent: "UserPromptSubmit",
     rawInput: JSON.stringify({

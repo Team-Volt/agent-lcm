@@ -1,0 +1,6 @@
+{
+  "name": "agent-lcm",
+  "description": "Shared local context memory for agent harnesses.",
+  "owner": { "name": "Team Volt" },
+  "plugins": [{ "name": "agent-lcm", "source": "." }]
+}

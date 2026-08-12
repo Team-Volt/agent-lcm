@@ -107,7 +107,7 @@ function captureArguments(args: string[]): { harness: CaptureHarness | "auto"; n
   const index = args.indexOf("--harness");
   if (index < 0 || !args[index + 1]) throw new Error("Usage: agent-lcm capture --harness <harness> [event]");
   const requested = args[index + 1];
-  if (requested !== "auto" && requested !== "codex" && requested !== "cursor" && requested !== "vscode" && requested !== "copilot" && requested !== "kiro") {
+  if (requested !== "auto" && requested !== "codex" && requested !== "cursor" && requested !== "vscode" && requested !== "copilot" && requested !== "kiro" && requested !== "claude") {
     throw new Error(`Unknown capture harness: ${requested}`);
   }
   const remaining = args.filter((_, position) => position !== index && position !== index + 1);

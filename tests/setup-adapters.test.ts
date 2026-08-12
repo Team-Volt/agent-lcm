@@ -10,6 +10,194 @@ import { NativeLifecycleCommandError, runHarnessLifecycle } from "../src/setup-a
 const GUIDE_ROOT = "https://github.com/Team-Volt/agent-lcm/blob/main/docs/install";
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+test("Claude setup adds its marketplace and installs the user plugin when both are absent", (t) => {
+  const fake = fakeClaudeCli(t, { marketplaces: [], plugins: [] });
+
+  const report = runHarnessLifecycle("claude", "setup", { env: fake.env });
+
+  assert.deepEqual(report, {
+    harness: "claude",
+    action: "setup",
+    status: "native-complete",
+    nativeCli: "claude",
+    guide: `${GUIDE_ROOT}/claude.md`,
+  });
+  assert.deepEqual(readCalls(fake.log), [
+    ["plugin", "marketplace", "list", "--json"],
+    ["plugin", "marketplace", "add", PACKAGE_ROOT, "--scope", "user"],
+    ["plugin", "list", "--json"],
+    ["plugin", "install", "agent-lcm@agent-lcm", "--scope", "user"],
+  ]);
+});
+
+test("Claude setup ignores an unrelated marketplace without a local path", (t) => {
+  // Given: Claude's normal remote marketplace shape and no Agent LCM plugin.
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [{
+      name: "claude-plugins-official",
+      source: "github",
+      repo: "anthropics/claude-plugins-official",
+      installLocation: "/tmp/claude-plugins-official",
+    }],
+    plugins: [],
+  });
+
+  // When: Agent LCM configures the native Claude lifecycle.
+  const report = runHarnessLifecycle("claude", "setup", { env: fake.env });
+
+  // Then: it adds only its marketplace and installs its user plugin.
+  assert.equal(report.status, "native-complete");
+  assert.deepEqual(readCalls(fake.log), [
+    ["plugin", "marketplace", "list", "--json"],
+    ["plugin", "marketplace", "add", PACKAGE_ROOT, "--scope", "user"],
+    ["plugin", "list", "--json"],
+    ["plugin", "install", "agent-lcm@agent-lcm", "--scope", "user"],
+  ]);
+});
+
+test("Claude setup updates an existing user plugin from the matching marketplace", (t) => {
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(PACKAGE_ROOT)],
+    plugins: [claudePlugin()],
+  });
+
+  const report = runHarnessLifecycle("claude", "setup", { env: fake.env });
+
+  assert.equal(report.status, "native-complete");
+  assert.deepEqual(readCalls(fake.log), [
+    ["plugin", "marketplace", "list", "--json"],
+    ["plugin", "list", "--json"],
+    ["plugin", "update", "agent-lcm@agent-lcm", "--scope", "user"],
+  ]);
+});
+
+test("Claude setup stops after a conflicting marketplace source", (t) => {
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(path.join(PACKAGE_ROOT, "other"))],
+    plugins: [],
+  });
+
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), NativeLifecycleCommandError);
+  assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
+});
+
+test("Claude setup stops when a valid marketplace precedes a conflicting duplicate", (t) => {
+  // Given: two Agent LCM marketplace records, with the valid record first.
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(PACKAGE_ROOT), claudeMarketplace(path.join(PACKAGE_ROOT, "other"))],
+    plugins: [],
+  });
+
+  // When: Claude setup checks the marketplace registry.
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), NativeLifecycleCommandError);
+  // Then: it stops before any add, install, or update command.
+  assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
+});
+
+test("Claude setup stops when a conflicting marketplace precedes a valid duplicate", (t) => {
+  // Given: two Agent LCM marketplace records, with the conflicting record first.
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(path.join(PACKAGE_ROOT, "other")), claudeMarketplace(PACKAGE_ROOT)],
+    plugins: [],
+  });
+
+  // When: Claude setup checks the marketplace registry.
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), NativeLifecycleCommandError);
+  // Then: it stops before any add, install, or update command.
+  assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
+});
+
+test("Claude setup stops when a valid marketplace has a malformed duplicate", (t) => {
+  // Given: a valid Agent LCM marketplace record and a malformed duplicate.
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(PACKAGE_ROOT), { name: "agent-lcm" }],
+    plugins: [],
+  });
+
+  // When: Claude setup checks the marketplace registry.
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), NativeLifecycleCommandError);
+  // Then: it stops before any add, install, or update command.
+  assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
+});
+
+test("Claude lifecycle rejects malformed JSON and records", (t) => {
+  const malformedJson = fakeClaudeCli(t, { marketplaces: "{not json", plugins: [] }, { rawMarketplace: true });
+  const malformedRecord = fakeClaudeCli(t, { marketplaces: [{ name: "agent-lcm" }], plugins: [] });
+
+  for (const fake of [malformedJson, malformedRecord]) {
+    assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), (error: unknown) => {
+      assert.ok(error instanceof NativeLifecycleCommandError);
+      assert.equal(error.stderr, "suppressed");
+      return true;
+    });
+    assert.deepEqual(readCalls(fake.log), [["plugin", "marketplace", "list", "--json"]]);
+  }
+});
+
+test("Claude setup rejects malformed plugin records before mutation", (t) => {
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [claudeMarketplace(PACKAGE_ROOT)],
+    plugins: [{ id: "agent-lcm@agent-lcm", scope: "user" }],
+  });
+
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), NativeLifecycleCommandError);
+  assert.deepEqual(readCalls(fake.log), [
+    ["plugin", "marketplace", "list", "--json"],
+    ["plugin", "list", "--json"],
+  ]);
+});
+
+test("Claude setup reports a missing CLI as manual-required", (t) => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-no-claude-"));
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+
+  const report = runHarnessLifecycle("claude", "setup", { env: { PATH: bin } });
+
+  assert.deepEqual(report, {
+    harness: "claude",
+    action: "setup",
+    status: "manual-required",
+    nativeCli: null,
+    guide: `${GUIDE_ROOT}/claude.md`,
+  });
+});
+
+test("Claude removal uninstalls only an exact user plugin and otherwise does nothing", (t) => {
+  const installed = fakeClaudeCli(t, { marketplaces: [], plugins: [claudePlugin()] });
+  const absent = fakeClaudeCli(t, { marketplaces: [], plugins: [{ ...claudePlugin(), scope: "project" }] });
+
+  assert.equal(runHarnessLifecycle("claude", "remove", { env: installed.env }).status, "native-complete");
+  assert.equal(runHarnessLifecycle("claude", "remove", { env: absent.env }).status, "native-complete");
+  assert.deepEqual(readCalls(installed.log), [
+    ["plugin", "list", "--json"],
+    ["plugin", "uninstall", "agent-lcm@agent-lcm", "--scope", "user"],
+  ]);
+  assert.deepEqual(readCalls(absent.log), [["plugin", "list", "--json"]]);
+});
+
+test("Claude command failures suppress client stderr", (t) => {
+  const fake = fakeClaudeCli(t, { marketplaces: [], plugins: [] }, {
+    fails: ["plugin", "marketplace", "list", "--json"],
+  });
+
+  assert.throws(() => runHarnessLifecycle("claude", "setup", { env: fake.env }), (error: unknown) => {
+    assert.ok(error instanceof NativeLifecycleCommandError);
+    assert.equal(error.status, 23);
+    assert.equal(error.stderr, "suppressed");
+    assert.doesNotMatch(error.message, /secret-token/u);
+    return true;
+  });
+});
+
+test("Claude lifecycle resolves a Windows command shim without a shell spawn", { skip: process.platform !== "win32" }, (t) => {
+  const fake = fakeClaudeCli(t, { marketplaces: [], plugins: [] });
+
+  const report = runHarnessLifecycle("claude", "setup", { env: fake.env });
+
+  assert.equal(report.status, "native-complete");
+  assert.deepEqual(readCalls(fake.log)[0], ["plugin", "marketplace", "list", "--json"]);
+});
+
 test("Codex setup and remove send the exact argv", (t) => {
   // Given: a capable fake Codex CLI that records each argv vector.
   const fake = fakeCli(t, "codex");
@@ -273,6 +461,39 @@ function fakeCli(
     },
     log,
     pluginLog,
+  };
+}
+
+function fakeClaudeCli(
+  t: test.TestContext,
+  responses: { readonly marketplaces: unknown; readonly plugins: unknown },
+  options: { readonly rawMarketplace?: boolean; readonly fails?: readonly string[] } = {},
+): { readonly env: NodeJS.ProcessEnv; readonly log: string } {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-fake-claude-"));
+  const log = path.join(bin, "calls.jsonl");
+  const marketplaceOutput = options.rawMarketplace ? String(responses.marketplaces) : JSON.stringify(responses.marketplaces);
+  const script = `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst argv = process.argv.slice(2);\nfs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify(argv) + "\\n");\nif (${JSON.stringify(options.fails ?? null)} && JSON.stringify(argv) === JSON.stringify(${JSON.stringify(options.fails ?? null)})) { process.stderr.write("secret-token\\n"); process.exit(23); }\nif (JSON.stringify(argv) === JSON.stringify(["plugin", "marketplace", "list", "--json"])) process.stdout.write(${JSON.stringify(marketplaceOutput)});\nif (JSON.stringify(argv) === JSON.stringify(["plugin", "list", "--json"])) process.stdout.write(${JSON.stringify(JSON.stringify(responses.plugins))});\n`;
+  writeFakeCli(bin, "claude", script);
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+  return {
+    env: { AGENT_LCM_FAKE_LOG: log, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+    log,
+  };
+}
+
+function claudeMarketplace(marketplacePath: string): Record<string, unknown> {
+  return { name: "agent-lcm", source: marketplacePath, path: marketplacePath, installLocation: "user" };
+}
+
+function claudePlugin(): Record<string, unknown> {
+  return {
+    id: "agent-lcm@agent-lcm",
+    version: "0.0.7",
+    scope: "user",
+    enabled: true,
+    installPath: "/tmp/agent-lcm",
+    installedAt: "2026-08-11T00:00:00.000Z",
+    lastUpdated: "2026-08-11T00:00:00.000Z",
   };
 }
 

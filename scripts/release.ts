@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const PACKAGE_NAME = "@team-volt/agent-lcm";
-const MANIFESTS = ["plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"] as const;
+const MANIFESTS = ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"] as const;
 const VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 type JsonRecord = Record<string, unknown>;

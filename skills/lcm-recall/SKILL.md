@@ -11,7 +11,7 @@ description: >-
 
 # LCM Recall
 
-Treat Agent LCM as the first lookup for local work memory. Search it before asking the user to repeat durable facts or answering from recollection when earlier work could change the answer. Skip it only when the request is self-contained and prior agent work cannot matter.
+Treat Agent LCM as the first lookup for local work memory. Its shared store spans every supported harness, so the current harness is provenance, not a search boundary. Search it before asking the user to repeat durable facts or answering from recollection when earlier work could change the answer. Skip it only when the request is self-contained and prior agent work cannot matter.
 
 ## Workflow
 
@@ -32,6 +32,7 @@ For multi-session reviews, call `lcm_list_sessions` once with `includeSummaries:
 ## Rules
 
 - Search all harnesses by default. Pass `harnesses` only when the user asks for a narrower source.
+- Use `lcm_get_recent_context` only for one known session. For cross-session or cross-harness handoffs, use `lcm_grep`; if the wording is uncertain, list recent sessions across all harnesses and inspect the few likely candidates.
 - Use the MCP tools. Do not inspect `~/.agent-lcm`, SQLite, or raw segments directly unless the user asks for storage forensics or MCP is broken.
 - Keep LCM calls sequential and bounded. Do not fan out one call per session.
 - `lcm_grep` retries globally when a cwd- or repo-scoped search is empty. Check `search_scope` to distinguish scoped, global, and fallback results; use `lcm_search_sessions` only when scope must remain strict.

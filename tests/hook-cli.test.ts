@@ -58,6 +58,50 @@ test("capture publishes a mapped harness event before starting the shared daemon
   assert.equal(JSON.parse(status.stdout).running, false);
 });
 
+test("Claude Code capture persists a canonical event and rejects unsupported events before publication", () => {
+  const home = tempHome("agent-lcm-claude-capture-");
+  const env = { AGENT_LCM_HOME: home };
+  const captured = runCli(["capture", "--harness", "claude", "UserPromptSubmit"], {
+    input: JSON.stringify({ session_id: "claude-capture", cwd: "/tmp/claude-capture", prompt: "capture through queue" }),
+    env,
+    timeout: 15_000,
+  });
+  assertCliOk(captured);
+  const [event] = readJsonl(path.join(home, "events.jsonl")) as Array<{
+    harness: string;
+    native_event: string;
+    hook_event: string;
+    session_id: string;
+  }>;
+  assert.equal(event.harness, "claude");
+  assert.equal(event.native_event, "UserPromptSubmit");
+  assert.equal(event.hook_event, "UserPromptSubmit");
+  assert.equal(event.session_id, "claude:claude-capture");
+
+  const rejectedHome = tempHome("agent-lcm-claude-rejected-");
+  const rejected = runCli(["capture", "--harness", "claude", "MessageDisplay"], {
+    input: JSON.stringify({ session_id: "claude-rejected", cwd: "/tmp/claude-rejected" }),
+    env: { AGENT_LCM_HOME: rejectedHome },
+    timeout: 15_000,
+  });
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /Unsupported claude capture event: MessageDisplay/u);
+  assert.equal(fs.existsSync(path.join(rejectedHome, "inbox")), false);
+  assert.equal(fs.existsSync(path.join(rejectedHome, "events.jsonl")), false);
+});
+
+test("import help and harness support exclude Claude Code", () => {
+  const home = tempHome("agent-lcm-claude-import-");
+  const help = runCli(["--help"], { env: { AGENT_LCM_HOME: home } });
+  assertCliOk(help);
+  assert.match(help.stdout, /import --all\|--harness codex\|cursor\|vscode\|copilot\|kiro/u);
+  assert.doesNotMatch(help.stdout, /import --all\|--harness [^\n]*claude/u);
+
+  const importResult = runCli(["import", "--harness", "claude"], { env: { AGENT_LCM_HOME: home } });
+  assert.equal(importResult.status, 1);
+  assert.match(importResult.stderr, /codex\|cursor\|vscode\|copilot\|kiro/u);
+});
+
 test("daemon restart replaces the running daemon", (t) => {
   // Given: an isolated home with a running daemon.
   const home = tempHome();

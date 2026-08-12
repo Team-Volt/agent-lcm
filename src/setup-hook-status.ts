@@ -2,12 +2,14 @@ import path from "node:path";
 
 import type { CaptureHarness } from "./harnesses.ts";
 
+type SetupHookHarness = Exclude<CaptureHarness, "claude">;
+
 export const CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "PostCompact", "SubagentStop", "Stop"] as const;
 
 export type KiroHook = { name: string; trigger: string; action: { type: "command"; command: string } };
 
 export function setupHooksConfigured(
-  harness: CaptureHarness,
+  harness: SetupHookHarness,
   configuration: Record<string, unknown> | undefined,
 ): boolean {
   if (!configuration) return false;
@@ -34,7 +36,7 @@ export function setupHooksConfigured(
   });
 }
 
-export function eventsFor(harness: CaptureHarness): string[] {
+export function eventsFor(harness: SetupHookHarness): string[] {
   return isSharedHookHarness(harness)
     ? ["sessionStart", "userPromptSubmitted", "postToolUse", "sessionEnd"]
     : ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
@@ -50,7 +52,7 @@ export function isSharedHookHarness(harness: CaptureHarness): harness is "copilo
   return harness === "copilot" || harness === "vscode";
 }
 
-export function setupCaptureHarness(harness: CaptureHarness): CaptureHarness | "auto" {
+export function setupCaptureHarness(harness: SetupHookHarness): SetupHookHarness | "auto" {
   return isSharedHookHarness(harness) ? "auto" : harness;
 }
 

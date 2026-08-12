@@ -2,7 +2,7 @@ import type { LcmLimits } from "./config.ts";
 import { harnessSessionId, normalizeHookEvent, type HarnessName, type NormalizedEvent, type RepoMetadata } from "./events.ts";
 import { sha256 } from "./redact.ts";
 
-export type CaptureHarness = "codex" | "cursor" | "vscode" | "copilot" | "kiro";
+export type CaptureHarness = "codex" | "cursor" | "vscode" | "copilot" | "kiro" | "claude";
 
 const EVENT_MAP: Record<CaptureHarness, Record<string, string>> = {
   codex: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
@@ -10,6 +10,7 @@ const EVENT_MAP: Record<CaptureHarness, Record<string, string>> = {
   vscode: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
   copilot: { sessionStart: "SessionStart", userPromptSubmitted: "UserPromptSubmit", postToolUse: "PostToolUse", sessionEnd: "Stop" },
   kiro: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
+  claude: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
 };
 
 const KIRO_ALIASES: Record<string, string> = {
@@ -121,7 +122,7 @@ function stripHarnessPrefix(sessionId: string): string {
 }
 
 function isHarness(value: string): value is HarnessName {
-  return value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "mcp" || value === "import";
+  return value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude" || value === "mcp" || value === "import";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

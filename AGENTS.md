@@ -33,10 +33,11 @@ docs/                       architecture and troubleshooting
 
 ## Harness setup and removal
 
-- `agent-lcm setup <harness>` uses native lifecycle commands only for Codex and
-  the shared Copilot/VS Code store; Cursor Marketplace and Kiro Powers remain
-  manual. `agent-lcm remove <harness>` removes only exact Agent LCM-owned hook
-  entries.
+- `agent-lcm setup <harness>` uses native lifecycle commands for Codex, Claude
+  Code, and the shared Copilot/VS Code store; Cursor Marketplace and Kiro Powers
+  remain manual. `agent-lcm remove <harness>` removes only exact Agent
+  LCM-owned hook entries, except Claude Code, whose native removal uninstalls
+  only the user-scoped plugin and leaves its marketplace configured.
 - Setup reports `complete` with exit `0`; `manual-required` and
   `shared-retained` use exit `2`; command errors use exit `1`.
 - Copilot and VS Code share the native plugin store. Single-harness removal
@@ -48,6 +49,10 @@ docs/                       architecture and troubleshooting
   executable.
 - Successful native Codex setup must not create `~/.codex/hooks.json`; it may
   remove only exact Agent LCM fallback entries from an existing file.
+- Claude Code uses `.claude-plugin/plugin.json`, a local marketplace source `.`,
+  `hooks/hooks.json`, and `mcp.claude.json` with `${CLAUDE_PLUGIN_ROOT}`. Its
+  setup status reports `hooksConfigured: false` and does not inspect or mutate
+  `settings.json`; native plugin health remains unknown to `doctor`.
 - Setup-file mutation runs through the directory-anchored helper. Do not
   replace it with path checks followed by later path-based writes.
 - Validate existing setup JSON before native work. Preserve unrelated and

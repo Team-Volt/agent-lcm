@@ -22,6 +22,7 @@ test("the npm package contains the complete plugin and no development files", (t
 
   for (const required of [
     ".agents/plugins/marketplace.json",
+    ".claude-plugin/marketplace.json", ".claude-plugin/plugin.json",
     ".codex-plugin/plugin.json",
     ".cursor-plugin/marketplace.json",
     ".cursor-plugin/plugin.json",
@@ -30,6 +31,7 @@ test("the npm package contains the complete plugin and no development files", (t
     "README.md",
     "bin/agent-lcm",
     "hooks.json",
+    "hooks/hooks.json", "mcp.claude.json",
     "mcp.cursor.json",
     "mcp.json",
     "package.json",
@@ -55,9 +57,9 @@ test("package and native plugin versions stay in sync", () => {
   const packageJson = readJson("package.json");
   const version = packageJson.version;
   assert.equal(packageJson.name, "@team-volt/agent-lcm");
-  assert.equal(readJson("plugin.json").version, version);
-  assert.equal(readJson(".codex-plugin/plugin.json").version, version);
-  assert.equal(readJson(".cursor-plugin/plugin.json").version, version);
+  for (const file of ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"]) {
+    assert.equal(readJson(file).version, version, file);
+  }
 });
 
 test("the publish workflow passes the release tag to the shell as data", () => {
@@ -84,9 +86,7 @@ test("the release script updates every versioned package file", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lcm-version-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const files = [
-    "package.json",
-    "package-lock.json",
-    "plugin.json",
+    "package.json", "package-lock.json", "plugin.json", ".claude-plugin/plugin.json",
     ".codex-plugin/plugin.json",
     ".cursor-plugin/plugin.json",
   ];
@@ -182,30 +182,21 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
     "agent-lcm",
   );
   assert.equal(fs.existsSync(path.join(packageRoot, "plugin.json")), false);
+  for (const file of [".claude-plugin/marketplace.json", ".claude-plugin/plugin.json", "hooks/hooks.json", "mcp.claude.json"]) {
+    assert.equal(fs.existsSync(path.join(packageRoot, file)), true, file);
+  }
   assert.equal(JSON.parse(fs.readFileSync(path.join(packageRoot, ".codex-plugin/plugin.json"), "utf8")).hooks, "./hooks/codex.json");
   assert.equal(JSON.parse(fs.readFileSync(path.join(packageRoot, ".cursor-plugin/plugin.json"), "utf8")).hooks, "./hooks/cursor.json");
-  const mcpConfiguration = JSON.parse(fs.readFileSync(path.join(packageRoot, "mcp.json"), "utf8"))
-    .mcpServers["agent-lcm"] as { command: string; args: string[] };
-  const mcp = spawnSync(mcpConfiguration.command, mcpConfiguration.args.map((arg) => arg.replaceAll("${PLUGIN_ROOT}", packageRoot)), {
-    cwd: packageRoot,
-    encoding: "utf8",
-    env,
-    input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })}\n`,
-    timeout: 15_000,
-  });
-  assert.equal(mcp.status, 0, mcp.stderr);
-  assert.equal(JSON.parse(mcp.stdout).result.serverInfo.version, readJson("package.json").version);
-  const cursorMcpConfiguration = JSON.parse(fs.readFileSync(path.join(packageRoot, "mcp.cursor.json"), "utf8"))
-    .mcpServers["agent-lcm"] as { command: string; args: string[] };
-  const cursorMcp = spawnSync(cursorMcpConfiguration.command, cursorMcpConfiguration.args.map((arg) => arg.replaceAll("${CURSOR_PLUGIN_ROOT}", packageRoot)), {
-    cwd: packageRoot,
-    encoding: "utf8",
-    env,
-    input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })}\n`,
-    timeout: 15_000,
-  });
-  assert.equal(cursorMcp.status, 0, cursorMcp.stderr);
-  assert.equal(JSON.parse(cursorMcp.stdout).result.serverInfo.version, readJson("package.json").version);
+  for (const [file, token] of [[".mcp.json", "${PLUGIN_ROOT}"], ["mcp.claude.json", "${CLAUDE_PLUGIN_ROOT}"], ["mcp.cursor.json", "${CURSOR_PLUGIN_ROOT}"]]) {
+    const configuration = JSON.parse(fs.readFileSync(path.join(packageRoot, file), "utf8"))
+      .mcpServers["agent-lcm"] as { command: string; args: string[] };
+    const mcp = spawnSync(configuration.command, configuration.args.map((arg) => arg.replaceAll(token, packageRoot)), {
+      cwd: packageRoot, encoding: "utf8", env, timeout: 15_000,
+      input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })}\n`,
+    });
+    assert.equal(mcp.status, 0, mcp.stderr);
+    assert.equal(JSON.parse(mcp.stdout).result.serverInfo.version, readJson("package.json").version);
+  }
   const importRoot = path.join(root, "empty-codex-sessions");
   fs.mkdirSync(importRoot);
   const imported = runInstalled(["import", "--harness", "codex", importRoot, "--dry-run", "--json"]);
@@ -241,6 +232,18 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   });
   assert.equal(postCompact.status, 0, postCompact.stderr);
   assert.equal(fs.readdirSync(path.join(env.AGENT_LCM_HOME, "post-compact-recovery")).length, 1);
+  const claudeHooks = JSON.parse(fs.readFileSync(path.join(packageRoot, "hooks/hooks.json"), "utf8")).hooks;
+  for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]) {
+    const hook = claudeHooks[event][0].hooks[0] as { command: string; args: string[] };
+    const capture = spawnSync(hook.command, hook.args.map((arg) => arg.replaceAll("${CLAUDE_PLUGIN_ROOT}", packageRoot)), {
+      cwd: root, encoding: "utf8", env, timeout: 15_000,
+      input: JSON.stringify({ session_id: `distribution-claude-${event}`, cwd: root, prompt: event, tool_name: "Read" }),
+    });
+    assert.equal(capture.status, 0, capture.stderr);
+  }
+  const claudeEvents = fs.readFileSync(path.join(env.AGENT_LCM_HOME, "events.jsonl"), "utf8").trim().split("\n")
+    .map((line) => JSON.parse(line)).filter((event) => event.harness === "claude");
+  assert.deepEqual(claudeEvents.map((event) => event.native_event), ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]);
   const daemon = runInstalled(["daemon", "start", "--json"]);
   assert.equal(daemon.status, 0, daemon.stderr);
   assert.equal(JSON.parse(daemon.stdout).running, true);

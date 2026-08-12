@@ -28,7 +28,7 @@ import { clearDerivedSummaries, readJsonl, tempHome } from "./helpers.ts";
 
 const now = () => new Date("2026-06-09T12:00:00.000Z");
 
-function harnessEvent(eventId: string, harness: "codex" | "cursor", sessionId: string, text: string): NormalizedEvent {
+function harnessEvent(eventId: string, harness: "codex" | "cursor" | "claude", sessionId: string, text: string): NormalizedEvent {
   return {
     ...normalizeHookEvent({
       hookEvent: "UserPromptSubmit",
@@ -637,22 +637,35 @@ test("appends JSONL and indexes searchable cross-session events", () => {
 });
 
 test("storage scopes cross-harness retrieval only when requested", () => {
+  // Given
   const home = tempHome();
   const storage = createStorage({ home });
   const codex = harnessEvent("c1", "codex", "codex:one", "shared needle");
   const cursor = harnessEvent("u1", "cursor", "cursor:two", "shared needle");
+  const claude = harnessEvent("a1", "claude", "claude:three", "shared needle");
   storage.ingest(codex);
   storage.ingest(cursor);
+  storage.ingest(claude);
 
-  assert.deepEqual(storage.searchSessions({ query: "shared needle" }).map((session) => session.harness).sort(), ["codex", "cursor"]);
+  // When
+  const defaultSearch = storage.searchSessions({ query: "shared needle" });
+  const claudeSearch = storage.searchSessions({ query: "shared needle", harnesses: ["claude"] });
+
+  // Then
+  assert.deepEqual(defaultSearch.map((session) => session.harness).sort(), ["claude", "codex", "cursor"]);
+  assert.deepEqual(claudeSearch.map((session) => session.session_id), ["claude:three"]);
   assert.deepEqual(storage.searchSessions({ query: "shared needle", harnesses: ["cursor"] }).map((session) => session.session_id), ["cursor:two"]);
-  assert.deepEqual(storage.listSessions().sessions.map((session) => session.harness).sort(), ["codex", "cursor"]);
+  assert.deepEqual(storage.listSessions().sessions.map((session) => session.harness).sort(), ["claude", "codex", "cursor"]);
+  assert.deepEqual(storage.listSessions({ harnesses: ["claude"] }).sessions.map((session) => session.session_id), ["claude:three"]);
   assert.deepEqual(storage.listSessions({ harnesses: ["cursor"] }).sessions.map((session) => session.session_id), ["cursor:two"]);
-  assert.equal(storage.usage().totals.sessions, 2);
+  assert.equal(storage.usage().totals.sessions, 3);
+  assert.equal(storage.usage({ harnesses: ["claude"] }).totals.sessions, 1);
   assert.equal(storage.usage({ harnesses: ["cursor"] }).totals.sessions, 1);
-  assert.deepEqual([...new Set(storage.expandQuery({ query: "shared needle", budgetTokens: 2_000 }).sources.map((source) => source.harness))].sort(), ["codex", "cursor"]);
+  assert.deepEqual([...new Set(storage.expandQuery({ query: "shared needle", budgetTokens: 2_000 }).sources.map((source) => source.harness))].sort(), ["claude", "codex", "cursor"]);
+  assert.deepEqual([...new Set(storage.expandQuery({ query: "shared needle", harnesses: ["claude"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["claude"]);
   assert.deepEqual([...new Set(storage.expandQuery({ query: "shared needle", harnesses: ["cursor"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["cursor"]);
-  assert.deepEqual([...new Set(storage.packContext({ query: "shared needle", budgetTokens: 2_000 }).sources.map((source) => source.harness))].sort(), ["codex", "cursor"]);
+  assert.deepEqual([...new Set(storage.packContext({ query: "shared needle", budgetTokens: 2_000 }).sources.map((source) => source.harness))].sort(), ["claude", "codex", "cursor"]);
+  assert.deepEqual([...new Set(storage.packContext({ query: "shared needle", harnesses: ["claude"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["claude"]);
   assert.deepEqual([...new Set(storage.packContext({ query: "shared needle", harnesses: ["cursor"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["cursor"]);
 
   const db = new DatabaseSync(path.join(home, "index.sqlite"));
@@ -667,6 +680,22 @@ test("storage scopes cross-harness retrieval only when requested", () => {
   );
 
   storage.close();
+
+  const reopened = createStorage({ home });
+  assert.equal(reopened.getSession("claude:three").events[0]?.harness, "claude");
+  assert.deepEqual(reopened.searchSessions({ query: "shared needle", harnesses: ["claude"] }).map((session) => session.session_id), ["claude:three"]);
+  reopened.close();
+
+  fs.rmSync(path.join(home, "index.sqlite"));
+  const rawOnly = createStorage({ home, readOnly: true });
+  assert.deepEqual(rawOnly.searchSessions({ query: "shared needle" }).map((session) => session.harness).sort(), ["claude", "codex", "cursor"]);
+  assert.deepEqual(rawOnly.searchSessions({ query: "shared needle", harnesses: ["claude"] }).map((session) => session.session_id), ["claude:three"]);
+  assert.deepEqual(rawOnly.listSessions().sessions.map((session) => session.harness).sort(), ["claude", "codex", "cursor"]);
+  assert.deepEqual(rawOnly.listSessions({ harnesses: ["claude"] }).sessions.map((session) => session.session_id), ["claude:three"]);
+  assert.equal(rawOnly.usage({ harnesses: ["claude"] }).totals.sessions, 1);
+  assert.deepEqual([...new Set(rawOnly.packContext({ query: "shared needle", budgetTokens: 2_000 }).sources.map((source) => source.harness))].sort(), ["claude", "codex", "cursor"]);
+  assert.deepEqual([...new Set(rawOnly.packContext({ query: "shared needle", harnesses: ["claude"], budgetTokens: 2_000 }).sources.map((source) => source.harness))], ["claude"]);
+  rawOnly.close();
 });
 
 test("stats reports aggregate summary and graph shape without raw content", () => {
