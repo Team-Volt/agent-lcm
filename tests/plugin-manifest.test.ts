@@ -78,3 +78,60 @@ test("client hook manifests invoke explicit or detected harness capture", () => 
   assert.deepEqual(Object.keys(portableHooks.hooks).sort(), ["postToolUse", "sessionEnd", "sessionStart", "userPromptSubmitted"]);
   assert.match(JSON.stringify(portableHooks), /capture --harness auto/u);
 });
+
+test("Claude Code plugin artifacts use isolated native components", () => {
+  const packageJson = readJson("package.json");
+  const portablePlugin = readJson("plugin.json");
+  assert.equal(portablePlugin.version, packageJson.version);
+  delete portablePlugin.$schema;
+  const plugin = readJson(".claude-plugin/plugin.json");
+  assert.deepEqual(plugin, {
+    ...portablePlugin,
+    skills: "./skills/",
+    hooks: "./hooks/hooks.json",
+    mcpServers: "./mcp.claude.json",
+  });
+  assert.equal(plugin.version, packageJson.version);
+
+  const marketplace = readJson(".claude-plugin/marketplace.json");
+  assert.deepEqual(marketplace, {
+    name: "agent-lcm",
+    description: "Shared local context memory for agent harnesses.",
+    owner: { name: "Team Volt" },
+    plugins: [{ name: "agent-lcm", source: "." }],
+  });
+  assert.equal(marketplace.plugins.length, 1);
+
+  const expectedEvents = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
+  const hooks = readJson("hooks/hooks.json");
+  assert.deepEqual(Object.keys(hooks.hooks).sort(), [...expectedEvents].sort());
+  for (const event of expectedEvents) {
+    assert.equal(hooks.hooks[event].length, 1);
+    assert.deepEqual(Object.keys(hooks.hooks[event][0]).sort(), ["hooks"]);
+    assert.deepEqual(hooks.hooks[event][0].hooks, [{
+      type: "command",
+      command: "node",
+      args: ["${CLAUDE_PLUGIN_ROOT}/bin/agent-lcm", "capture", "--harness", "claude", event],
+    }]);
+  }
+
+  const mcp = readJson("mcp.claude.json");
+  assert.deepEqual(Object.keys(mcp).sort(), ["mcpServers"]);
+  assert.deepEqual(Object.keys(mcp.mcpServers), ["agent-lcm"]);
+  assert.deepEqual(mcp.mcpServers["agent-lcm"], {
+    type: "stdio",
+    command: "node",
+    args: ["${CLAUDE_PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+  });
+  assert.doesNotMatch(JSON.stringify({ plugin, hooks, mcp }), /\$\{PLUGIN_ROOT\}/u);
+  assert.doesNotMatch(JSON.stringify(hooks), /node ["']/u);
+  assert.deepEqual(readJson(".mcp.json"), {
+    mcpServers: {
+      "agent-lcm": {
+        type: "stdio",
+        command: "node",
+        args: ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+      },
+    },
+  });
+});
