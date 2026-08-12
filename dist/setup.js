@@ -3,8 +3,19 @@ import { runHarnessLifecycle } from "./setup-adapters.js";
 import { ensureSetupDirectory, mutateSetupConfiguration, readSetupConfiguration, readSetupConfigurationSnapshot, SetupConfigurationChangedError, } from "./setup-files.js";
 import { assertSafeSetupCommand, setupHooksConfigured } from "./setup-hook-status.js";
 import { mergeSetupHooks, removeSetupHooks, removeSharedSetupHooks, validateSetupHooks, } from "./setup-hooks.js";
-import { SETUP_HARNESSES, setupPath } from "./setup-targets.js";
+import { claudeConfigPath, SETUP_HARNESSES, setupPath } from "./setup-targets.js";
 export function setupHarness(harness, options) {
+    if (harness === "claude") {
+        const native = runHarnessLifecycle(harness, "setup", options.env ? { env: options.env } : {});
+        return {
+            harness,
+            action: "setup",
+            status: native.status === "native-complete" ? "complete" : "manual-required",
+            nativeCli: native.nativeCli,
+            hooks: { path: claudeConfigPath(options.home), changed: false },
+            guide: native.guide,
+        };
+    }
     const target = setupPath(harness, options.home);
     const command = options.command.trim();
     assertSafeSetupCommand(command);
@@ -24,6 +35,17 @@ export function setupHarness(harness, options) {
     };
 }
 export function removeHarness(harness, options = {}) {
+    if (harness === "claude") {
+        const native = runHarnessLifecycle(harness, "remove", options.env ? { env: options.env } : {});
+        return {
+            harness,
+            action: "remove",
+            status: native.status === "native-complete" ? "complete" : "manual-required",
+            nativeCli: native.nativeCli,
+            hooks: { path: claudeConfigPath(options.home), changed: false },
+            guide: native.guide,
+        };
+    }
     const target = setupPath(harness, options.home);
     const snapshot = readSetupConfigurationSnapshot(target);
     const existing = snapshot.configuration;
@@ -41,6 +63,9 @@ export function removeHarness(harness, options = {}) {
 }
 export function setupStatus(options = {}) {
     return Object.fromEntries(SETUP_HARNESSES.map((harness) => {
+        if (harness === "claude") {
+            return [harness, { hooksConfigured: false, path: claudeConfigPath(options.home) }];
+        }
         const target = setupPath(harness, options.home);
         return [harness, { hooksConfigured: setupHooksConfigured(harness, readConfigurationForStatus(target)), path: target }];
     }));

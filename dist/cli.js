@@ -50,7 +50,7 @@ export async function main(argv) {
         printSetupReports(setupHarness(harness, {
             home,
             command: commandPath,
-            ...(home ? { env: lifecycleEnvironment(home) } : {}),
+            ...(home ? { env: lifecycleEnvironment(harness, home) } : {}),
         }), rest.includes("--json"));
         return;
     }
@@ -59,7 +59,7 @@ export async function main(argv) {
         const home = optionValue(rest, "--home");
         printSetupReports(removeHarness(harness, {
             home,
-            ...(home ? { env: lifecycleEnvironment(home) } : {}),
+            ...(home ? { env: lifecycleEnvironment(harness, home) } : {}),
         }), rest.includes("--json"));
         return;
     }
@@ -265,11 +265,11 @@ Commands:
   agent-lcm daemon run|start|restart|status|stop
   agent-lcm mcp
   agent-lcm hook <event>
-  agent-lcm capture --harness codex|cursor|vscode|copilot|kiro|auto [event]
+  agent-lcm capture --harness codex|cursor|vscode|copilot|kiro|claude|auto [event]
   agent-lcm setup all
-  agent-lcm setup <codex|cursor|vscode|copilot|kiro> [--home PATH]
+  agent-lcm setup <codex|cursor|vscode|copilot|kiro|claude> [--home PATH]
   agent-lcm setup status
-  agent-lcm remove <codex|cursor|vscode|copilot|kiro> [--home PATH]
+  agent-lcm remove <codex|cursor|vscode|copilot|kiro|claude> [--home PATH]
   agent-lcm status [--codex-home PATH] [--json]
   agent-lcm doctor [--codex-home PATH] [--json]  Diagnose install, storage, and capture state
   agent-lcm health [--json]
@@ -286,9 +286,9 @@ Commands:
 `);
 }
 function captureHarness(value, action = "setup") {
-    if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro")
+    if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude")
         return value;
-    throw new Error(`Usage: agent-lcm ${action} <codex|cursor|vscode|copilot|kiro> [--home PATH]`);
+    throw new Error(`Usage: agent-lcm ${action} <codex|cursor|vscode|copilot|kiro|claude> [--home PATH]`);
 }
 function importHarness(value) {
     if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro")
@@ -342,7 +342,9 @@ function printSetupReports(value, json) {
     if (reports.some((report) => report.status !== "complete"))
         process.exitCode = 2;
 }
-function lifecycleEnvironment(home) {
+function lifecycleEnvironment(harness, home) {
+    if (harness === "claude")
+        return { ...process.env, CLAUDE_CONFIG_DIR: home };
     return {
         ...process.env,
         HOME: home,

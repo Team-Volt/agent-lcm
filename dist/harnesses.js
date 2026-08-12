@@ -6,6 +6,7 @@ const EVENT_MAP = {
     vscode: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
     copilot: { sessionStart: "SessionStart", userPromptSubmitted: "UserPromptSubmit", postToolUse: "PostToolUse", sessionEnd: "Stop" },
     kiro: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
+    claude: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
 };
 const KIRO_ALIASES = {
     sessionStart: "SessionStart",
@@ -109,7 +110,7 @@ function stripHarnessPrefix(sessionId) {
     return isHarness(prefix[1]) ? prefix[2] : sessionId;
 }
 function isHarness(value) {
-    return value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "mcp" || value === "import";
+    return value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude" || value === "mcp" || value === "import";
 }
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);

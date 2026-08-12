@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withCopilotPluginSource } from "./copilot-plugin.js";
+import { ClaudeLifecycleOutputError, runClaudeLifecycle } from "./claude-lifecycle.js";
 export class NativeLifecycleCommandError extends Error {
     name = "NativeLifecycleCommandError";
     executable;
@@ -46,6 +47,7 @@ export const HARNESS_LIFECYCLE_ADAPTERS = {
         probeArgv: ["plugin", "list"],
     },
     kiro: { kind: "manual", executable: "kiro-cli", probeArgv: ["--version"], guide: `${GUIDE_ROOT}/kiro.md` },
+    claude: { kind: "claude", executable: "claude", guide: `${GUIDE_ROOT}/claude.md` },
 };
 export function runHarnessLifecycle(harness, action, options = {}) {
     const adapter = HARNESS_LIFECYCLE_ADAPTERS[harness];
@@ -58,9 +60,43 @@ export function runHarnessLifecycle(harness, action, options = {}) {
             return runNative(harness, action, adapter, options.env, options.command);
         case "codex":
             return runNative(harness, action, adapter, options.env);
+        case "claude":
+            try {
+                return runClaude("claude", action, adapter, options.env);
+            }
+            catch (error) {
+                if (error instanceof ClaudeCliUnavailableError) {
+                    return outcome(harness, action, "manual-required", null, adapter.guide);
+                }
+                throw error;
+            }
         default:
             return assertNever(adapter);
     }
+}
+function runClaude(harness, action, adapter, env) {
+    try {
+        runClaudeLifecycle(action, PACKAGE_ROOT, (argv) => runClaudeCommand(adapter.executable, argv, env));
+    }
+    catch (error) {
+        if (error instanceof ClaudeLifecycleOutputError) {
+            throw new NativeLifecycleCommandError(adapter.executable, error.argv, 0, SUPPRESSED_STDERR);
+        }
+        throw error;
+    }
+    return outcome(harness, action, "native-complete", adapter.executable, adapter.guide);
+}
+function runClaudeCommand(executable, argv, env) {
+    const result = spawnLifecycleCommand(executable, argv, env);
+    if (isEnoent(result.error))
+        throw new ClaudeCliUnavailableError();
+    if (result.error !== undefined || result.status !== 0) {
+        throw new NativeLifecycleCommandError(executable, argv, result.status, SUPPRESSED_STDERR);
+    }
+    return result.stdout;
+}
+class ClaudeCliUnavailableError extends Error {
+    name = "ClaudeCliUnavailableError";
 }
 function runNative(harness, action, adapter, env, command) {
     const probe = spawnLifecycleCommand(adapter.executable, adapter.probeArgv, env);

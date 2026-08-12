@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "claude-fixture",
+  "cwd": "/tmp/claude-fixture",
+  "prompt": "claude capture"
+}

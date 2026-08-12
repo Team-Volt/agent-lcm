@@ -12,9 +12,11 @@ import {
   type KiroHook,
 } from "./setup-hook-status.ts";
 
+type SetupHookHarness = Exclude<CaptureHarness, "claude">;
+
 export function mergeSetupHooks(
   existing: Record<string, unknown> | undefined,
-  harness: CaptureHarness,
+  harness: SetupHookHarness,
   command: string,
   target: string,
 ): Record<string, unknown> {
@@ -162,7 +164,7 @@ function invalidConfiguration(target: string): Error {
 }
 
 export function validateSetupHooks(
-  harness: CaptureHarness,
+  harness: SetupHookHarness,
   configuration: Record<string, unknown> | undefined,
   target: string,
 ): void {

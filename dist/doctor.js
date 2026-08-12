@@ -39,6 +39,11 @@ function adapterStatus(status) {
         vscode: nativePluginAdapter("VS Code", setups.vscode.hooksConfigured),
         copilot: nativePluginAdapter("Copilot", setups.copilot.hooksConfigured),
         kiro: setupAdapter("kiro", setups.kiro.hooksConfigured),
+        claude: {
+            configured: null,
+            state: "unknown",
+            detail: "Claude native plugin health is not checked by doctor. Run `claude plugin list --json` or use the client's installed-plugin view.",
+        },
     };
 }
 function nativePluginAdapter(harness, legacyHooksConfigured) {

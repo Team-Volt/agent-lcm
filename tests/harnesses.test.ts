@@ -8,13 +8,33 @@ import { mapHarnessEvent } from "../src/harnesses.ts";
 const FIXTURES = path.join("tests", "fixtures", "hooks");
 
 test("maps each supported harness into a namespaced sanitized event", () => {
-  for (const harness of ["codex", "cursor", "vscode", "copilot", "kiro"] as const) {
+  for (const harness of ["codex", "cursor", "vscode", "copilot", "kiro", "claude"] as const) {
     const mapped = mapHarnessEvent(harness, undefined, readFixture(harness));
     assert.equal(mapped.harness, harness);
     assert.match(mapped.session_id, new RegExp(`^${harness}:`, "u"));
     assert.ok(mapped.native_event.length > 0);
     assert.equal(mapped.hook_event, "UserPromptSubmit");
   }
+});
+
+test("Claude Code maps its four supported native hook events without aliases", () => {
+  for (const nativeEvent of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]) {
+    const event = mapHarnessEvent("claude", nativeEvent, {
+      session_id: "claude-native-session",
+      cwd: "/tmp/claude-events",
+    });
+    assert.equal(event.harness, "claude");
+    assert.equal(event.native_event, nativeEvent);
+    assert.equal(event.hook_event, nativeEvent);
+    assert.equal(event.session_id, "claude:claude-native-session");
+  }
+});
+
+test("Claude Code rejects unsupported native hook events", () => {
+  assert.throws(
+    () => mapHarnessEvent("claude", "MessageDisplay", { session_id: "claude-message", cwd: "/tmp/claude" }),
+    /Unsupported claude capture event: MessageDisplay/u,
+  );
 });
 
 test("auto capture separates documented VS Code and Copilot payloads", () => {

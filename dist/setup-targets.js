@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-export const SETUP_HARNESSES = ["codex", "cursor", "vscode", "copilot", "kiro"];
+export const SETUP_HARNESSES = ["codex", "cursor", "vscode", "copilot", "kiro", "claude"];
+export function claudeConfigPath(configDir = path.join(os.homedir(), ".claude")) {
+    return path.join(path.resolve(configDir), "settings.json");
+}
 export function setupPath(harness, home) {
+    if (harness === "claude")
+        return claudeConfigPath(home);
     const harnessHome = path.resolve(home ?? defaultHarnessHome(harness, os.homedir()));
     return harness === "codex" || harness === "cursor"
         ? path.join(harnessHome, "hooks.json")
@@ -20,6 +25,8 @@ export function detectedHarnesses(userHome = os.homedir()) {
         detected.push("vscode");
     if (fs.existsSync(defaultHarnessHome("kiro", userHome)))
         detected.push("kiro");
+    if (fs.existsSync(defaultHarnessHome("claude", userHome)))
+        detected.push("claude");
     return detected;
 }
 function defaultHarnessHome(harness, userHome) {
@@ -29,6 +36,7 @@ function defaultHarnessHome(harness, userHome) {
         case "vscode":
         case "copilot": return path.join(userHome, ".copilot");
         case "kiro": return path.join(userHome, ".kiro");
+        case "claude": return path.join(userHome, ".claude");
     }
 }
 function vscodeHomes(userHome) {
