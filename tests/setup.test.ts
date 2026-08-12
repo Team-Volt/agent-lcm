@@ -899,7 +899,7 @@ function fakeClaudeLifecycleCli(t: test.TestContext): { readonly env: NodeJS.Pro
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 fs.appendFileSync(process.env.AGENT_LCM_FAKE_LOG, JSON.stringify({ argv, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null }) + "\\n");
-if (JSON.stringify(argv) === JSON.stringify(["plugin", "marketplace", "list", "--json"])) process.stdout.write("[]");
+if (JSON.stringify(argv) === JSON.stringify(["plugin", "marketplace", "list", "--json"])) process.stdout.write('[{"name":"claude-plugins-official","source":"github","repo":"anthropics/claude-plugins-official","installLocation":"/tmp/claude-plugins-official"}]');
 if (JSON.stringify(argv) === JSON.stringify(["plugin", "list", "--json"])) process.stdout.write("[]");
 `;
   writeFakeSetupCli(bin, "claude", script);

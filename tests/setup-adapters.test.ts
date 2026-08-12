@@ -30,6 +30,31 @@ test("Claude setup adds its marketplace and installs the user plugin when both a
   ]);
 });
 
+test("Claude setup ignores an unrelated marketplace without a local path", (t) => {
+  // Given: Claude's normal remote marketplace shape and no Agent LCM plugin.
+  const fake = fakeClaudeCli(t, {
+    marketplaces: [{
+      name: "claude-plugins-official",
+      source: "github",
+      repo: "anthropics/claude-plugins-official",
+      installLocation: "/tmp/claude-plugins-official",
+    }],
+    plugins: [],
+  });
+
+  // When: Agent LCM configures the native Claude lifecycle.
+  const report = runHarnessLifecycle("claude", "setup", { env: fake.env });
+
+  // Then: it adds only its marketplace and installs its user plugin.
+  assert.equal(report.status, "native-complete");
+  assert.deepEqual(readCalls(fake.log), [
+    ["plugin", "marketplace", "list", "--json"],
+    ["plugin", "marketplace", "add", PACKAGE_ROOT, "--scope", "user"],
+    ["plugin", "list", "--json"],
+    ["plugin", "install", "agent-lcm@agent-lcm", "--scope", "user"],
+  ]);
+});
+
 test("Claude setup updates an existing user plugin from the matching marketplace", (t) => {
   const fake = fakeClaudeCli(t, {
     marketplaces: [claudeMarketplace(PACKAGE_ROOT)],

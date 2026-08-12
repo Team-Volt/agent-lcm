@@ -16,10 +16,12 @@ export function runClaudeLifecycle(action, packageRoot, run) {
         return;
     }
     const marketplaceArgv = ["plugin", "marketplace", "list", "--json"];
-    const marketplaces = parseRecords(run(marketplaceArgv), marketplaceArgv, isClaudeMarketplace);
+    const marketplaces = parseRecords(run(marketplaceArgv), marketplaceArgv, isRecord);
     const marketplace = marketplaces.find((entry) => entry.name === "agent-lcm");
-    if (marketplace !== undefined && path.resolve(marketplace.path) !== packageRoot) {
-        throw new ClaudeLifecycleOutputError(marketplaceArgv);
+    if (marketplace !== undefined) {
+        if (!isClaudeMarketplace(marketplace) || path.resolve(marketplace.path) !== packageRoot) {
+            throw new ClaudeLifecycleOutputError(marketplaceArgv);
+        }
     }
     if (marketplace === undefined)
         run(["plugin", "marketplace", "add", packageRoot, "--scope", "user"]);
@@ -45,9 +47,7 @@ function hasUserPlugin(plugins) {
 function isClaudeMarketplace(value) {
     return isRecord(value)
         && typeof value.name === "string"
-        && typeof value.source === "string"
-        && typeof value.path === "string"
-        && typeof value.installLocation === "string";
+        && typeof value.path === "string";
 }
 function isClaudePlugin(value) {
     return isRecord(value)

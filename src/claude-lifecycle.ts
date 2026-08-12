@@ -12,9 +12,7 @@ export class ClaudeLifecycleOutputError extends Error {
 
 type ClaudeMarketplace = {
   readonly name: string;
-  readonly source: string;
   readonly path: string;
-  readonly installLocation: string;
 };
 
 type ClaudePlugin = {
@@ -40,10 +38,12 @@ export function runClaudeLifecycle(
   }
 
   const marketplaceArgv = ["plugin", "marketplace", "list", "--json"] as const;
-  const marketplaces = parseRecords(run(marketplaceArgv), marketplaceArgv, isClaudeMarketplace);
+  const marketplaces = parseRecords(run(marketplaceArgv), marketplaceArgv, isRecord);
   const marketplace = marketplaces.find((entry) => entry.name === "agent-lcm");
-  if (marketplace !== undefined && path.resolve(marketplace.path) !== packageRoot) {
-    throw new ClaudeLifecycleOutputError(marketplaceArgv);
+  if (marketplace !== undefined) {
+    if (!isClaudeMarketplace(marketplace) || path.resolve(marketplace.path) !== packageRoot) {
+      throw new ClaudeLifecycleOutputError(marketplaceArgv);
+    }
   }
   if (marketplace === undefined) run(["plugin", "marketplace", "add", packageRoot, "--scope", "user"]);
 
@@ -70,9 +70,7 @@ function hasUserPlugin(plugins: readonly ClaudePlugin[]): boolean {
 function isClaudeMarketplace(value: unknown): value is ClaudeMarketplace {
   return isRecord(value)
     && typeof value.name === "string"
-    && typeof value.source === "string"
-    && typeof value.path === "string"
-    && typeof value.installLocation === "string";
+    && typeof value.path === "string";
 }
 
 function isClaudePlugin(value: unknown): value is ClaudePlugin {
