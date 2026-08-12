@@ -37,7 +37,8 @@ test("client hook manifests invoke explicit or detected harness capture", () => 
   assert.deepEqual(readJson(".mcp.json").mcpServers["agent-lcm"], {
     type: "stdio",
     command: "node",
-    args: ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+    args: ["./bin/agent-lcm", "mcp"],
+    cwd: ".",
   });
   const codexManifest = readJson("hooks/codex.json");
   const codexHooks = JSON.stringify(codexManifest);
@@ -130,7 +131,8 @@ test("Claude Code plugin artifacts use isolated native components", () => {
       "agent-lcm": {
         type: "stdio",
         command: "node",
-        args: ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+        args: ["./bin/agent-lcm", "mcp"],
+        cwd: ".",
       },
     },
   });
