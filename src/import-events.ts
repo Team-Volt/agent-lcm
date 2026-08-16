@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { harnessSessionId, type NormalizedEvent } from "./events.ts";
 import { mapHarnessEvent } from "./harnesses.ts";
-import type { ImportHarness } from "./import.ts";
+import type { ImportHarness } from "./import-types.ts";
 import { sha256 } from "./redact.ts";
 
 export function mapImportedEvent(

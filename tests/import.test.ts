@@ -23,6 +23,7 @@ test("imports supported exported sessions idempotently without changing sources"
     { options: { harness: "kiro", paths: [fixtures("import/kiro")], config }, paths: [fixtures("import/kiro/session.jsonl"), fixtures("import/kiro/session.json")] },
     { options: { harness: "vscode", paths: [fixtures("import/vscode/chat.json")], config }, paths: [fixtures("import/vscode/chat.json")] },
     { options: { harness: "cursor", paths: [fixtures("import/cursor/chat.md")], config }, paths: [fixtures("import/cursor/chat.md")] },
+    { options: { harness: "claude", paths: [fixtures("import/claude/projects")], config }, paths: [fixtures("import/claude/projects/example-project/11111111-1111-4111-8111-111111111111.jsonl")] },
   ];
 
   for (const source of sources) {
@@ -38,8 +39,41 @@ test("imports supported exported sessions idempotently without changing sources"
 
   const events = readJsonl(config.rawLogPath) as Array<{ session_id: string; event_id: string }>;
   assert.ok(events.length > 0);
-  assert.ok(events.every((event) => /^(codex|copilot|kiro|vscode|cursor):/u.test(event.session_id)));
+  assert.ok(events.every((event) => /^(codex|copilot|kiro|vscode|cursor|claude):/u.test(event.session_id)));
   assert.equal(new Set(events.map((event) => event.event_id)).size, events.length);
+});
+
+test("imports Claude Code visible conversation and completed tools while ignoring private metadata", async (t) => {
+  // Given
+  const source = fixtures("import/claude/projects/example-project/11111111-1111-4111-8111-111111111111.jsonl");
+  const before = fs.readFileSync(source);
+  const config = loadConfig({ home: tempHome("agent-lcm-import-claude-") });
+  t.after(() => stopDaemon(config));
+  await ensureDaemon(config);
+
+  // When
+  const first = await importSessions({ harness: "claude", paths: [source], config });
+  const second = await importSessions({ harness: "claude", paths: [source], config });
+
+  // Then
+  assert.equal(first.sessions_imported, 1);
+  assert.equal(first.events_imported, 4);
+  assert.equal(first.records_rejected, 1);
+  assert.equal(first.failures.length, 1);
+  assert.equal(second.events_imported, 0);
+  assert.equal(second.events_skipped_duplicate, 4);
+  assert.deepEqual(fs.readFileSync(source), before);
+  const events = readJsonl(config.rawLogPath).filter(isRecord);
+  assert.deepEqual(events.map((event) => event.hook_event), ["UserPromptSubmit", "Stop", "PostToolUse", "Stop"]);
+  assert.ok(events.every((event) => event.session_id === "claude:11111111-1111-4111-8111-111111111111"));
+  const payloads = events.map((event) => event.payload).filter(isRecord);
+  assert.equal(payloads[0]?.prompt, "Explain the parser");
+  assert.equal(payloads[1]?.last_assistant_message, "Visible answer");
+  assert.equal(payloads[2]?.tool_name, "Read");
+  assert.deepEqual(payloads[2]?.tool_input, { file_path: "/tmp/example.ts" });
+  assert.equal(payloads[2]?.tool_response, "file contents");
+  assert.equal(payloads[3]?.last_assistant_message, "After malformed record");
+  assert.doesNotMatch(JSON.stringify(events), /SYSTEM_SENTINEL|META_SENTINEL|THINKING_SENTINEL|THINKING_ONLY_SENTINEL|ORPHAN_SENTINEL|SIDECHAIN_SENTINEL/u);
 });
 
 test("imports Codex rollouts whose filename ends with the session UUID", async (t) => {
@@ -293,4 +327,8 @@ function writeCodexSession(file: string, sessionId: string, messageCount: number
     }));
   }
   fs.writeFileSync(file, `${records.join("\n")}\n`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
