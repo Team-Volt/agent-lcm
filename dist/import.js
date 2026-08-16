@@ -4,9 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { defaultCodexSessionsPath, readCodexSessions } from "./codex-import.js";
 import { daemonRequest, ensureDaemon } from "./daemon-client.js";
-import { harnessSessionId } from "./events.js";
-import { mapHarnessEvent } from "./harnesses.js";
-import { sha256 } from "./redact.js";
+import { mapImportedEvent } from "./import-events.js";
 const BATCH_SIZE = 5000;
 const DAEMON_REQUEST_OVERHEAD_BYTES = 1024;
 export async function importSessions(options) {
@@ -382,15 +380,6 @@ function knownEvent(harness, candidate, role) {
     if (role === "assistant")
         return harness === "copilot" ? "sessionEnd" : "Stop";
     return undefined;
-}
-function mapImportedEvent(harness, nativeEvent, payload, source, position, at) {
-    const event = mapHarnessEvent(harness, nativeEvent, payload, { now: () => new Date(at), env: {} });
-    return stableEvent(harness, event, source, position);
-}
-function stableEvent(harness, event, source, position) {
-    const nativeSessionId = event.session_id.replace(new RegExp(`^${harness}:`, "u"), "");
-    const eventId = sha256([harness, nativeSessionId, path.resolve(source), String(position), sha256(JSON.stringify(event.payload))].join("\0"));
-    return { ...event, session_id: harnessSessionId(harness, nativeSessionId), event_id: eventId };
 }
 function timestamp(value) {
     const candidate = stringValue(value.timestamp) ?? stringValue(value.created_at) ?? "1970-01-01T00:00:00.000Z";

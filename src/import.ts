@@ -6,9 +6,8 @@ import readline from "node:readline";
 import { defaultCodexSessionsPath, readCodexSessions } from "./codex-import.ts";
 import type { LcmConfig } from "./config.ts";
 import { daemonRequest, ensureDaemon } from "./daemon-client.ts";
-import { harnessSessionId, type HarnessName, type NormalizedEvent } from "./events.ts";
-import { mapHarnessEvent, type CaptureHarness } from "./harnesses.ts";
-import { sha256 } from "./redact.ts";
+import type { NormalizedEvent } from "./events.ts";
+import { mapImportedEvent } from "./import-events.ts";
 import type { IngestManyResult } from "./storage-types.ts";
 
 export type ImportHarness = "codex" | "cursor" | "vscode" | "copilot" | "kiro";
@@ -394,24 +393,6 @@ function knownEvent(harness: ImportHarness, candidate: string | undefined, role:
   if (role === "user") return harness === "copilot" ? "userPromptSubmitted" : "UserPromptSubmit";
   if (role === "assistant") return harness === "copilot" ? "sessionEnd" : "Stop";
   return undefined;
-}
-
-function mapImportedEvent(
-  harness: ImportHarness,
-  nativeEvent: string,
-  payload: Record<string, unknown>,
-  source: string,
-  position: number,
-  at: string,
-): NormalizedEvent {
-  const event = mapHarnessEvent(harness as CaptureHarness, nativeEvent, payload, { now: () => new Date(at), env: {} });
-  return stableEvent(harness, event, source, position);
-}
-
-function stableEvent(harness: ImportHarness, event: NormalizedEvent, source: string, position: number): NormalizedEvent {
-  const nativeSessionId = event.session_id.replace(new RegExp(`^${harness}:`, "u"), "");
-  const eventId = sha256([harness, nativeSessionId, path.resolve(source), String(position), sha256(JSON.stringify(event.payload))].join("\0"));
-  return { ...event, session_id: harnessSessionId(harness as HarnessName, nativeSessionId), event_id: eventId };
 }
 
 function timestamp(value: Record<string, unknown>): string {
