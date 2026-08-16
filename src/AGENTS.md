@@ -9,6 +9,7 @@
 - `storage-context.ts`, `storage-search.ts`, `storage-sessions.ts`, and `storage-summaries.ts` own read/query and deterministic derived views.
 - `storage-graph.ts` derives bounded graph slices from indexed events and summary lineage; it does not persist a graph projection.
 - `overflow.ts` owns bounded, content-addressed overflow storage and recovery checks.
+- `import.ts` owns import orchestration, progress, batching, and daemon writes. `import-sources.ts` owns discovery and file selection, `import-formats.ts` owns legacy format adapters, `claude-import.ts` owns Claude JSONL parsing, `codex-import.ts` owns Codex rollout parsing, and `import-events.ts` owns stable imported event mapping.
 
 - `setup.ts`, `setup-adapters.ts`, `setup-hooks.ts`, and `setup-hook-status.ts` own harness lifecycle reports, native CLI adapters, exact-owned hook edits, and setup status. `setup-files.ts` owns validation, per-file locks, backups, and atomic setup-file publication.
 
@@ -55,6 +56,19 @@
 - Require an absolute hook binary path and reject shell metacharacters before writing configuration.
 - Never uninstall the shared Copilot plugin for a single `copilot` or `vscode` removal; report `shared-retained` instead.
 - `setup status` reports legacy/setup-managed `hooksConfigured` state only. Doctor must report native Copilot/VS Code health as unknown unless it has direct native evidence; it must not recommend setup from a missing legacy hook file.
+
+## Import safety
+
+- Keep each source reader independent of daemon and storage code. Return
+  normalized events and per-record errors to the orchestrator.
+- Treat imported JSON and JSONL as untrusted input. Reject malformed records
+  without dropping later valid records, and keep event IDs stable across runs.
+- Claude import reads the primary project JSONL stream only. Exclude sidechain
+  and `subagents` records, metadata, thinking blocks, orphan tool results, and
+  incomplete tool calls. Correlate a tool result only with a prior tool use in
+  the same file.
+- Do not change imported source files. Keep all real-data checks on copied
+  transcripts and use a temporary `AGENT_LCM_HOME`.
 
 ## Test routing
 

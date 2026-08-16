@@ -21,8 +21,8 @@ hosted memory service.
   harness or repository.
 - Import sessions that existed before Agent LCM was installed when that harness
   has a supported importer.
-- Capture Claude Code sessions through its live hooks. Claude Code has no
-  historical importer in Agent LCM.
+- Capture Claude Code sessions through live hooks and import sessions already
+  stored under `~/.claude/projects`.
 - Rebuild the SQLite index from the raw archive if the derived data is damaged.
 - Run without embeddings, external APIs, or cloud storage.
 
@@ -246,11 +246,13 @@ agent-lcm import --harness codex --dry-run
 agent-lcm import --harness codex
 ```
 
-Known default locations are available for Codex, GitHub Copilot, and Kiro:
+Known default locations are available for Codex, GitHub Copilot, Kiro, and
+Claude Code:
 
 ```sh
 agent-lcm import --harness copilot
 agent-lcm import --harness kiro
+agent-lcm import --harness claude
 ```
 
 Cursor and VS Code need an exported file because their local session formats
@@ -278,8 +280,10 @@ Codex-only command remains available during initial migration work:
 agent-lcm import-codex-sessions --dry-run --json
 ```
 
-Claude Code is live-only in Agent LCM. It is not included in the historical
-import scan.
+The Claude importer reads the primary project session JSONL files. It imports
+visible user and assistant text plus completed tool calls. It skips Claude
+metadata, private thinking blocks, sidechain records, and `subagents`
+transcripts.
 
 ## Local storage
 

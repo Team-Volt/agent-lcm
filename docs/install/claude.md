@@ -61,18 +61,27 @@ also reports Claude native plugin health as `unknown`. Use
 `claude plugin list --json` or Claude Code's installed-plugin view for that
 check.
 
-## Capture scope
+## Capture and import scope
 
-Claude Code support is live capture only. Agent LCM receives these four native
-events:
+Agent LCM receives these four native events during live sessions:
 
 - `SessionStart`
 - `UserPromptSubmit`
 - `PostToolUse`
 - `Stop`
 
-Agent LCM has no historical Claude Code importer. Sessions from before the
-plugin was installed remain outside the shared store.
+Import sessions that Claude Code already saved under `~/.claude/projects`:
+
+```sh
+agent-lcm import --harness claude --dry-run
+agent-lcm import --harness claude
+```
+
+Pass another project-session directory or JSONL file as the final argument when
+Claude uses a different location. The importer reads visible user and assistant
+text and completed tool calls. It ignores metadata, thinking blocks, sidechain
+records, and `subagents` transcripts. Import does not change Claude's files, and
+repeating it skips events already stored by Agent LCM.
 
 ## Remove Agent LCM
 
