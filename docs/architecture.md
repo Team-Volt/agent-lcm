@@ -99,8 +99,7 @@ receive a collision-safe `-pre-agent-lcm-` backup.
    same daemon.
 
 Claude Code's native hook manifest maps exactly `SessionStart`,
-`UserPromptSubmit`, `PostToolUse`, and `Stop` to live capture. Agent LCM does not
-provide a historical Claude Code importer.
+`UserPromptSubmit`, `PostToolUse`, and `Stop` to live capture.
 
 The inbox separates fast harness hooks from database work. Atomic publication
 also gives the daemon a clear rule: a `.json` file is complete, while temporary
@@ -208,10 +207,12 @@ daemon. The daemon bulk-ingests each batch, defers summary work, and rebuilds
 each touched session once after the import. Imports are idempotent and do not
 create one inbox file per event; hooks still use the durable inbox.
 
-Codex, GitHub Copilot, and Kiro have default local search paths. Cursor accepts
-chat Markdown exports. VS Code accepts JSON conversation exports or OTLP JSON.
-Malformed JSONL records are rejected individually so later valid records still
-import. Claude Code is live-only and has no historical import path.
+Codex, GitHub Copilot, Kiro, and Claude Code have default local search paths.
+Cursor accepts chat Markdown exports. VS Code accepts JSON conversation exports
+or OTLP JSON. The Claude reader imports visible conversation text and completed
+tool calls from primary project JSONL files. It excludes metadata, thinking,
+sidechain records, and `subagents` transcripts. Malformed JSONL records are
+rejected individually so later valid records still import.
 
 ## MCP protocol
 

@@ -18,6 +18,9 @@ framework, fixture library, or custom runner.
   and symlink-safe publication belong in `setup.test.ts`.
 - Keep manifest, event, redaction, summary, and import coverage in their
   existing focused files instead of growing a catch-all suite.
+- Keep import behavior in `import.test.ts`. Cover source discovery and the real
+  `bin/agent-lcm` boundary there; keep help and general command validation in
+  `hook-cli.test.ts`.
 
 ## Isolation and fixtures
 
@@ -33,6 +36,10 @@ framework, fixture library, or custom runner.
   the OS temp directory, never inside the repository.
 - Reuse helpers from `helpers.ts` (`tempHome`, `runCli`, `runMcp`,
   `readJsonl`, and `assertCliOk`) before adding another test utility.
+- Import fixtures must be synthetic and must not contain copied user prompts,
+  assistant responses, paths, tokens, or other private Claude data. Claude
+  fixtures belong under `tests/fixtures/import/claude/projects/<project>/` and
+  use fixed session IDs and timestamps.
 
 ## Real boundaries
 

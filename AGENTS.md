@@ -14,7 +14,9 @@ mcp.json                    portable MCP server
 skills/                     portable Agent Skills
 .codex-plugin/              Codex compatibility manifest
 .cursor-plugin/             Cursor compatibility manifest
+.claude-plugin/             Claude Code compatibility manifests
 hooks.json, hooks/          capture hook manifests
+mcp.claude.json              Claude Code MCP configuration
 bin/agent-lcm               executable entry point
 src/                        TypeScript implementation
 tests/                      Node test suite
@@ -30,6 +32,20 @@ docs/                       architecture and troubleshooting
 - Retrieval is cross-harness by default. Optional harness filters must preserve
   provenance in every result.
 - Do not add `lcm_record_note`; Agent LCM has no note-writing MCP tool.
+
+## Import boundaries
+
+- `src/import.ts` owns import progress, batching, daemon ingestion, and summary
+  rebuilds. Keep source discovery and transcript parsing out of it.
+- `src/import-sources.ts` owns default paths and file selection;
+  `src/import-formats.ts` dispatches format readers; `src/claude-import.ts` owns
+  Claude JSONL semantics; `src/import-events.ts` owns stable imported event IDs.
+- Claude historical import reads primary `~/.claude/projects` JSONL files. It
+  excludes `subagents`, sidechains, metadata, thinking, orphan tool results,
+  and incomplete tool calls. Never import `~/.claude/history.jsonl` as a
+  session transcript.
+- Import tests and manual checks must use synthetic fixtures or a copy of user
+  data. Never edit source transcripts or test against the live Agent LCM store.
 
 ## Harness setup and removal
 

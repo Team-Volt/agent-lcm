@@ -90,16 +90,11 @@ test("Claude Code capture persists a canonical event and rejects unsupported eve
   assert.equal(fs.existsSync(path.join(rejectedHome, "events.jsonl")), false);
 });
 
-test("import help and harness support exclude Claude Code", () => {
+test("import help lists Claude Code", () => {
   const home = tempHome("agent-lcm-claude-import-");
   const help = runCli(["--help"], { env: { AGENT_LCM_HOME: home } });
   assertCliOk(help);
-  assert.match(help.stdout, /import --all\|--harness codex\|cursor\|vscode\|copilot\|kiro/u);
-  assert.doesNotMatch(help.stdout, /import --all\|--harness [^\n]*claude/u);
-
-  const importResult = runCli(["import", "--harness", "claude"], { env: { AGENT_LCM_HOME: home } });
-  assert.equal(importResult.status, 1);
-  assert.match(importResult.stderr, /codex\|cursor\|vscode\|copilot\|kiro/u);
+  assert.match(help.stdout, /import --all\|--harness codex\|cursor\|vscode\|copilot\|kiro\|claude/u);
 });
 
 test("daemon restart replaces the running daemon", (t) => {

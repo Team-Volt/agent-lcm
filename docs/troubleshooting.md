@@ -176,10 +176,15 @@ agent-lcm import --harness vscode /path/to/export.json --dry-run
 ```
 
 Codex defaults to `~/.codex/sessions`, GitHub Copilot to
-`~/.copilot/session-state`, and Kiro to `~/.kiro/sessions/cli`. `CODEX_HOME`
-changes the Codex root. The JSON report separates missing files, rejected
-records, duplicates, and harnesses that need an export. Claude Code has no
-historical importer in Agent LCM, so older Claude sessions are not scanned.
+`~/.copilot/session-state`, Kiro to `~/.kiro/sessions/cli`, and Claude Code to
+`~/.claude/projects`. `CODEX_HOME` changes the Codex root. The JSON report
+separates missing files, rejected records, duplicates, and harnesses that need
+an export. For another Claude location, pass its project-session directory or a
+session JSONL file:
+
+```sh
+agent-lcm import --harness claude /path/to/projects --dry-run
+```
 
 Imports do not edit source files. Repeating a successful import is safe.
 

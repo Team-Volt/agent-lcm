@@ -281,7 +281,7 @@ Commands:
   agent-lcm context-plan [--session-id ID] [--cwd PATH] [--repo-root PATH] [--model-context-window N] [--auto-compact-token-limit N] [--recent-event-limit N] [--json]
   agent-lcm benchmark long-context [--events N] [--budget-tokens N] [--home PATH] [--json]
   agent-lcm benchmark retrieval-quality [--home PATH] [--json]
-  agent-lcm import --all|--harness codex|cursor|vscode|copilot|kiro [path] [--dry-run] [--json]
+  agent-lcm import --all|--harness codex|cursor|vscode|copilot|kiro|claude [path] [--dry-run] [--json]
   agent-lcm import-codex-sessions [--from PATH] [--dry-run] [--progress] [--json]
 `);
 }
@@ -291,9 +291,9 @@ function captureHarness(value, action = "setup") {
     throw new Error(`Usage: agent-lcm ${action} <codex|cursor|vscode|copilot|kiro|claude> [--home PATH]`);
 }
 function importHarness(value) {
-    if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro")
+    if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude")
         return value;
-    throw new Error("Usage: agent-lcm import --all|--harness codex|cursor|vscode|copilot|kiro [path]");
+    throw new Error("Usage: agent-lcm import --all|--harness codex|cursor|vscode|copilot|kiro|claude [path]");
 }
 function optionValue(args, flag) {
     const index = args.indexOf(flag);
