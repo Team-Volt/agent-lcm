@@ -24,6 +24,7 @@ export function importSources(options: ImportOptions): ImportSource[] {
     { harness: "codex", paths: roots.flatMap((root) => [path.join(root, "codex", "sessions"), path.join(root, ".codex", "sessions")]), optional: true },
     { harness: "copilot", paths: roots.flatMap((root) => [path.join(root, "copilot", "session-state"), path.join(root, ".copilot", "session-state")]), optional: true },
     { harness: "kiro", paths: roots.flatMap((root) => [path.join(root, "kiro", "sessions", "cli"), path.join(root, ".kiro", "sessions", "cli")]), optional: true },
+    { harness: "claude", paths: roots.map((root) => path.join(root, ".claude", "projects")), optional: true },
   ];
 }
 
@@ -43,6 +44,7 @@ function defaultImportPath(harness: ImportHarness): string {
   if (harness === "codex") return defaultCodexSessionsPath();
   if (harness === "copilot") return path.join(os.homedir(), ".copilot", "session-state");
   if (harness === "kiro") return path.join(os.homedir(), ".kiro", "sessions", "cli");
+  if (harness === "claude") return path.join(os.homedir(), ".claude", "projects");
   return "";
 }
 

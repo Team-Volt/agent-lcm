@@ -15,6 +15,7 @@ export function importSources(options) {
         { harness: "codex", paths: roots.flatMap((root) => [path.join(root, "codex", "sessions"), path.join(root, ".codex", "sessions")]), optional: true },
         { harness: "copilot", paths: roots.flatMap((root) => [path.join(root, "copilot", "session-state"), path.join(root, ".copilot", "session-state")]), optional: true },
         { harness: "kiro", paths: roots.flatMap((root) => [path.join(root, "kiro", "sessions", "cli"), path.join(root, ".kiro", "sessions", "cli")]), optional: true },
+        { harness: "claude", paths: roots.map((root) => path.join(root, ".claude", "projects")), optional: true },
     ];
 }
 export function importFiles(harness, sources) {
@@ -40,6 +41,8 @@ function defaultImportPath(harness) {
         return path.join(os.homedir(), ".copilot", "session-state");
     if (harness === "kiro")
         return path.join(os.homedir(), ".kiro", "sessions", "cli");
+    if (harness === "claude")
+        return path.join(os.homedir(), ".claude", "projects");
     return "";
 }
 function walkFiles(source) {

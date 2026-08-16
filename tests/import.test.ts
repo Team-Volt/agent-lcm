@@ -110,20 +110,26 @@ test("keeps valid sessions when one source file is malformed", async (t) => {
   assert.equal(report.failures[0]?.source, malformed);
 });
 
-test("all discovers local Codex, Copilot, and Kiro homes", async (t) => {
+test("all discovers local Codex, Copilot, Kiro, and Claude homes", async (t) => {
   const root = tempHome("agent-lcm-import-homes-");
   const codex = path.join(root, "codex");
   const copilot = path.join(root, "copilot");
   const kiro = path.join(root, "kiro");
+  const claude = path.join(root, ".claude");
   fs.mkdirSync(path.join(codex, "sessions"), { recursive: true });
   fs.mkdirSync(path.join(copilot, "session-state", "one"), { recursive: true });
   fs.mkdirSync(path.join(kiro, "sessions", "cli"), { recursive: true });
+  fs.mkdirSync(path.join(claude, "projects", "example-project"), { recursive: true });
   fs.copyFileSync(
     fixtures("import/codex/rollout-2026-08-01T10-00-00-12345678-1234-4234-8234-123456789abc.jsonl"),
     path.join(codex, "sessions", "rollout-2026-08-01T10-00-00-12345678-1234-4234-8234-123456789abc.jsonl"),
   );
   fs.copyFileSync(fixtures("import/copilot/events.jsonl"), path.join(copilot, "session-state", "one", "events.jsonl"));
   fs.copyFileSync(fixtures("import/kiro/session.jsonl"), path.join(kiro, "sessions", "cli", "session.jsonl"));
+  fs.copyFileSync(
+    fixtures("import/claude/projects/example-project/11111111-1111-4111-8111-111111111111.jsonl"),
+    path.join(claude, "projects", "example-project", "11111111-1111-4111-8111-111111111111.jsonl"),
+  );
   const config = loadConfig({ home: tempHome("agent-lcm-import-all-home-") });
   t.after(() => stopDaemon(config));
   await ensureDaemon(config);
@@ -135,11 +141,12 @@ test("all discovers local Codex, Copilot, and Kiro homes", async (t) => {
   assert.deepEqual(report.needs_export, ["vscode", "cursor"]);
   assert.deepEqual(progress[0], {
     phase: "scan",
-    totalSessions: 3,
+    totalSessions: 4,
     harnesses: [
       { harness: "codex", sessions: 1 },
       { harness: "copilot", sessions: 1 },
       { harness: "kiro", sessions: 1 },
+      { harness: "claude", sessions: 1 },
     ],
   });
   assert.deepEqual(
@@ -153,18 +160,20 @@ test("all discovers local Codex, Copilot, and Kiro homes", async (t) => {
       "copilot:harness_complete:1/1",
       "kiro:harness_start:0/1",
       "kiro:harness_complete:1/1",
+      "claude:harness_start:0/1",
+      "claude:harness_complete:1/1",
     ],
   );
   assert.deepEqual(
     progress.flatMap((event) => event.phase === "session" ? [event.sessionsCompletedTotal] : []),
-    [1, 2, 3],
+    [1, 2, 3, 4],
   );
   const cli = runCli(["import", "--all", root, "--dry-run", "--json"], {
     env: { AGENT_LCM_HOME: tempHome("agent-lcm-import-all-cli-home-") },
   });
   assertCliOk(cli);
-  assert.equal(JSON.parse(cli.stdout).sessions_scanned, 3);
-  assert.match(cli.stderr, /3 sessions across 3 harnesses/u);
+  assert.equal(JSON.parse(cli.stdout).sessions_scanned, 4);
+  assert.match(cli.stderr, /4 sessions across 4 harnesses/u);
 });
 
 test("dry-run progress reports zero discovered sessions without starting the daemon", async () => {
@@ -205,6 +214,16 @@ test("CLI imports one selected harness", () => {
 
   assertCliOk(result);
   assert.equal(JSON.parse(result.stdout).events_imported, 2);
+});
+
+test("CLI imports selected Claude Code sessions", () => {
+  const home = tempHome("agent-lcm-import-claude-cli-");
+  const result = runCli(["import", "--harness", "claude", fixtures("import/claude/projects"), "--json"], {
+    env: { AGENT_LCM_HOME: home },
+  });
+
+  assertCliOk(result);
+  assert.equal(JSON.parse(result.stdout).events_imported, 4);
 });
 
 test("CLI reports progress while importing without corrupting JSON stdout", () => {
