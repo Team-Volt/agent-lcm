@@ -1,12 +1,11 @@
 ---
 name: lcm-recall
 description: >-
-  Use first when earlier agent work may affect the current task or the user asks
-  what happened in prior sessions, including "what did we do," "last time,"
-  "you changed this before," "continue," or "resume." Reconstruct exact
-  decisions, commands, tool output, tests, file changes, and context lost after
-  compaction, interruption, or handoff from source-backed session evidence.
-  Prefer over curated memory when determining what actually happened.
+  Recover missing facts, decisions, rationale, or unfinished work from prior
+  agent sessions across harnesses. Use after context loss or handoff, when the
+  user asks about an earlier session, or when the active conversation and
+  workspace lack needed evidence. Do not trigger merely because prior work is
+  mentioned or already available in the current context.
 ---
 
 # LCM Recall
