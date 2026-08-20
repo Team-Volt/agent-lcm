@@ -1,8 +1,9 @@
 # Agent LCM
 
 Agent LCM gives coding agents one shared, local memory. It captures sessions from
-Codex, Cursor, VS Code, GitHub Copilot, Kiro, and Claude Code, then makes that history
-searchable from any of those harnesses through MCP.
+Codex, Cursor, VS Code, GitHub Copilot, Kiro, Claude Code, and OpenCode, then makes that
+history searchable from those harnesses through MCP when MCP is configured for the
+harness.
 
 LCM stands for lossless context memory. The sanitized event archive is the
 source of truth. Search indexes, summaries, and graphs are derived from it and
@@ -69,8 +70,10 @@ agent-lcm setup all
 
 The npm package provides the stable `agent-lcm` command used by capture hooks,
 imports, diagnostics, and daemon administration. Native plugins provide MCP and
-skills from their managed caches. Every copy uses the same `~/.agent-lcm` store;
-you never need to find or reference a harness cache path.
+skills from their managed caches where supported. OpenCode setup automatically
+configures its local MCP server in valid `opencode.json` or `opencode.jsonc`.
+Every copy uses the same `~/.agent-lcm` store; you never need to find or
+reference a harness cache path.
 
 ## Install in each harness
 
@@ -86,13 +89,15 @@ removal:
 | GitHub Copilot CLI | `agent-lcm setup copilot` | [Copilot guide](docs/install/copilot.md) |
 | Kiro IDE | `agent-lcm setup kiro` | [Kiro guide](docs/install/kiro.md) |
 | Claude Code | `agent-lcm setup claude` | [Claude Code guide](docs/install/claude.md) |
+| OpenCode | `agent-lcm setup opencode` | [OpenCode guide](docs/install/opencode.md) |
 
 The guides follow the current [Codex plugin](https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/installing-and-updating.md),
 [Copilot CLI plugin](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference),
 [VS Code agent plugin](https://code.visualstudio.com/docs/agent-customization/agent-plugins),
 [Cursor Marketplace](https://cursor.com/marketplace),
-[Kiro Powers](https://kiro.dev/docs/powers/), and
-[Claude Code plugins](https://code.claude.com/docs/en/plugins) documentation. If
+[Kiro Powers](https://kiro.dev/docs/powers/),
+[Claude Code plugins](https://code.claude.com/docs/en/plugins), and
+[OpenCode plugins](https://opencode.ai/docs/plugins/) documentation. If
 setup cannot run a supported native command, it reports the guide and uses the
 manual hook path when that harness needs one.
 
@@ -135,6 +140,7 @@ agent-lcm setup vscode
 agent-lcm setup copilot
 agent-lcm setup kiro
 agent-lcm setup claude
+agent-lcm setup opencode
 ```
 
 Run only the commands for the harnesses you use. A legacy VS Code and GitHub
@@ -145,7 +151,7 @@ files containing the absolute Agent LCM command when manual wiring is needed.
 If a target file already exists and needs changes, setup first saves a
 timestamped `-pre-agent-lcm-` backup beside it.
 
-Legacy or setup-managed user hook locations are:
+Legacy or setup-managed user integration paths are:
 
 | Harness | Legacy or setup path |
 | --- | --- |
@@ -155,10 +161,14 @@ Legacy or setup-managed user hook locations are:
 | GitHub Copilot | `~/.copilot/hooks/agent-lcm.json` |
 | Kiro | `~/.kiro/hooks/agent-lcm.json` |
 | Claude Code | No managed hook file; status path is `~/.claude/settings.json` |
+| OpenCode | `~/.config/opencode/plugins/agent-lcm.ts`, `.agent-lcm-opencode-plugin.state`, and `opencode.json` |
 
 Codex, Cursor, Copilot, VS Code, and Claude Code native plugins carry their own
-hooks. Setup
-does not add a second user-level copy after native installation. The Codex path
+hooks. OpenCode uses the generated global plugin for live capture and its
+managed MCP entry. Removal disables capture through a durable state marker and
+removes only the exact owned MCP entry; it does not delete the generated plugin
+path. Setup does not add a second user-level copy
+after native installation. The Codex path
 above exists only for older fallback entries, which setup removes after native
 installation succeeds.
 
@@ -203,6 +213,15 @@ Native lifecycle support is limited to the commands that each client documents:
   `claude plugin update agent-lcm@agent-lcm --scope user`. Removal uninstalls
   only that user plugin and retains the marketplace. Pass `--home PATH` to use
   a Claude config directory through `CLAUDE_CONFIG_DIR`.
+- OpenCode writes the generated global plugin to
+  `~/.config/opencode/plugins/agent-lcm.ts`. Pass `--home PATH` to use an
+  alternate OpenCode config directory; the plugin is written to
+  `<PATH>/plugins/agent-lcm.ts`. It captures stable session, prompt, and tool
+  events. Setup also adds its owned local `agent-lcm` MCP server to
+  `opencode.json` or `opencode.jsonc` while preserving unrelated settings and
+  JSONC comments. `agent-lcm remove opencode` disables the generated plugin and removes
+  only its owned MCP server. This integration targets stable OpenCode plugins,
+  not OpenCode 2 beta, and does not provide historical import.
 
 Setup validates an existing hook file before invoking a native CLI, preserves
 unrelated entries, and changes only exact Agent LCM-owned registrations. It
@@ -254,6 +273,8 @@ agent-lcm import --harness copilot
 agent-lcm import --harness kiro
 agent-lcm import --harness claude
 ```
+
+OpenCode live capture does not include a historical session importer.
 
 Cursor and VS Code need an exported file because their local session formats
 are not stable public import surfaces. Pass a Cursor chat Markdown export or a

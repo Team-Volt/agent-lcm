@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { parse } from "jsonc-parser";
+import type { ParseError } from "jsonc-parser";
 
 import { assertCliOk, clearDerivedSummaries, readJsonl, runCli, tempHome } from "./helpers.ts";
 import { normalizeHookEvent } from "../src/events.ts";
@@ -90,11 +92,347 @@ test("Claude Code capture persists a canonical event and rejects unsupported eve
   assert.equal(fs.existsSync(path.join(rejectedHome, "events.jsonl")), false);
 });
 
+test("OpenCode capture accepts sessionID and rejects unsupported event names", () => {
+  const home = tempHome("agent-lcm-opencode-capture-");
+  const env = { AGENT_LCM_HOME: home };
+  const captured = runCli(["capture", "--harness", "opencode", "UserPromptSubmit"], {
+    input: JSON.stringify({ sessionID: "opencode-capture", cwd: "/tmp/opencode-capture", prompt: "capture through queue" }),
+    env,
+    timeout: 15_000,
+  });
+  assertCliOk(captured);
+  const [event] = readJsonl(path.join(home, "events.jsonl")) as Array<{
+    harness: string;
+    native_event: string;
+    hook_event: string;
+    session_id: string;
+  }>;
+  assert.equal(event.harness, "opencode");
+  assert.equal(event.native_event, "UserPromptSubmit");
+  assert.equal(event.hook_event, "UserPromptSubmit");
+  assert.equal(event.session_id, "opencode:opencode-capture");
+
+  const rejectedHome = tempHome("agent-lcm-opencode-rejected-");
+  const rejected = runCli(["capture", "--harness", "opencode", "userPromptSubmitted"], {
+    input: JSON.stringify({ sessionID: "opencode-rejected", cwd: "/tmp/opencode-rejected" }),
+    env: { AGENT_LCM_HOME: rejectedHome },
+    timeout: 15_000,
+  });
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /Unsupported opencode capture event: userPromptSubmitted/u);
+  assert.equal(fs.existsSync(path.join(rejectedHome, "inbox")), false);
+  assert.equal(fs.existsSync(path.join(rejectedHome, "events.jsonl")), false);
+});
+
 test("import help lists Claude Code", () => {
   const home = tempHome("agent-lcm-claude-import-");
   const help = runCli(["--help"], { env: { AGENT_LCM_HOME: home } });
   assertCliOk(help);
   assert.match(help.stdout, /import --all\|--harness codex\|cursor\|vscode\|copilot\|kiro\|claude/u);
+});
+
+test("help lists OpenCode capture and setup vocabulary", () => {
+  const help = runCli(["--help"], { env: { AGENT_LCM_HOME: tempHome("agent-lcm-opencode-help-") } });
+  assertCliOk(help);
+  assert.match(help.stdout, /capture --harness codex\|cursor\|vscode\|copilot\|kiro\|claude\|opencode\|auto/u);
+  assert.match(help.stdout, /setup <codex\|cursor\|vscode\|copilot\|kiro\|claude\|opencode>/u);
+  assert.match(help.stdout, /remove <codex\|cursor\|vscode\|copilot\|kiro\|claude\|opencode>/u);
+});
+
+test("OpenCode setup, repeat, status, and remove work through the CLI boundary", () => {
+  const home = tempHome("agent-lcm-opencode-cli-");
+  const setup = runCli(["setup", "opencode", "--home", home, "--json"]);
+  assert.equal(setup.status, 0, setup.stderr);
+  const first = JSON.parse(setup.stdout) as { status: string; hooks: { changed: boolean }; mcp: { changed: boolean } };
+  assert.equal(first.status, "complete");
+  assert.equal(first.hooks.changed, true);
+  assert.equal(first.mcp.changed, true);
+  const configPath = path.join(home, "opencode.json");
+  const configured = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+    mcp: { "agent-lcm": { type: string; command: string[]; enabled: boolean } };
+  };
+  assert.deepEqual(configured.mcp["agent-lcm"], {
+    type: "local",
+    command: ["node", path.resolve("bin/agent-lcm"), "mcp"],
+    enabled: true,
+  });
+
+  const repeat = runCli(["setup", "opencode", "--home", home, "--json"]);
+  assert.equal(repeat.status, 0, repeat.stderr);
+  assert.equal((JSON.parse(repeat.stdout) as { hooks: { changed: boolean } }).hooks.changed, false);
+  assert.equal((JSON.parse(repeat.stdout) as { mcp: { changed: boolean } }).mcp.changed, false);
+
+  const status = runCli(["setup", "status", "--home", home, "--json"]);
+  assert.equal(status.status, 0, status.stderr);
+  assert.deepEqual((JSON.parse(status.stdout) as { opencode: { hooksConfigured: boolean; mcpConfigured: boolean } }).opencode, {
+    hooksConfigured: true,
+    mcpConfigured: true,
+    path: path.join(home, "plugins", "agent-lcm.ts"),
+  });
+
+  const remove = runCli(["remove", "opencode", "--home", home, "--json"]);
+  assert.equal(remove.status, 0, remove.stderr);
+  assert.equal((JSON.parse(remove.stdout) as { hooks: { changed: boolean }; mcp: { changed: boolean } }).hooks.changed, true);
+  assert.equal((JSON.parse(remove.stdout) as { mcp: { changed: boolean } }).mcp.changed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), { mcp: {} });
+  assert.equal(fs.existsSync(path.join(home, "plugins", "agent-lcm.ts")), true);
+  assert.equal(fs.readFileSync(path.join(home, "plugins", ".agent-lcm-opencode-plugin.state"), "utf8"), `disabled\n${JSON.stringify(path.resolve("bin/agent-lcm"))}\n`);
+
+  const repeatedRemove = runCli(["remove", "opencode", "--home", home, "--json"]);
+  assert.equal(repeatedRemove.status, 0, repeatedRemove.stderr);
+  assert.equal((JSON.parse(repeatedRemove.stdout) as { hooks: { changed: boolean } }).hooks.changed, false);
+  assert.equal((JSON.parse(repeatedRemove.stdout) as { mcp: { changed: boolean } }).mcp.changed, false);
+});
+
+test("OpenCode CLI setup preserves JSON and configures JSONC without losing comments", () => {
+  const preservedHome = tempHome("agent-lcm-opencode-config-");
+  fs.writeFileSync(path.join(preservedHome, "opencode.json"), JSON.stringify({
+    theme: "dark",
+    mcp: { unrelated: { type: "local", command: ["other"] } },
+  }));
+  const preserved = runCli(["setup", "opencode", "--home", preservedHome, "--json"]);
+  assert.equal(preserved.status, 0, preserved.stderr);
+  const preservedConfig = JSON.parse(fs.readFileSync(path.join(preservedHome, "opencode.json"), "utf8")) as {
+    theme: string;
+    mcp: { unrelated: unknown; "agent-lcm": unknown };
+  };
+  assert.equal(preservedConfig.theme, "dark");
+  assert.deepEqual(preservedConfig.mcp.unrelated, { type: "local", command: ["other"] });
+  assert.ok(preservedConfig.mcp["agent-lcm"]);
+
+  const malformedHome = tempHome("agent-lcm-opencode-malformed-");
+  const malformed = Buffer.from("{not valid json\n");
+  fs.writeFileSync(path.join(malformedHome, "opencode.json"), malformed);
+  const malformedResult = runCli(["setup", "opencode", "--home", malformedHome, "--json"]);
+  assert.equal(malformedResult.status, 1);
+  assert.match(malformedResult.stderr, /Cannot safely setup OpenCode configuration/u);
+  assert.deepEqual(fs.readFileSync(path.join(malformedHome, "opencode.json")), malformed);
+  assert.equal(fs.existsSync(path.join(malformedHome, "plugins")), false);
+
+  const jsoncHome = tempHome("agent-lcm-opencode-jsonc-");
+  const jsoncPath = path.join(jsoncHome, "opencode.jsonc");
+  const jsoncBytes = Buffer.from('{\n  // keep comments\n  "theme": "dark",\n}\n');
+  fs.writeFileSync(jsoncPath, jsoncBytes);
+  const jsonc = runCli(["setup", "opencode", "--home", jsoncHome, "--json"]);
+  assert.equal(jsonc.status, 0, jsonc.stderr);
+  const jsoncReport = JSON.parse(jsonc.stdout) as {
+    status: string;
+    hooks: { changed: boolean };
+    mcp: { changed: boolean; path: string };
+  };
+  assert.equal(jsoncReport.status, "complete");
+  assert.equal(jsoncReport.hooks.changed, true);
+  assert.deepEqual(jsoncReport.mcp, { changed: true, path: jsoncPath });
+  const configuredJsonc = fs.readFileSync(jsoncPath, "utf8");
+  assert.match(configuredJsonc, /\/\/ keep comments/u);
+  assert.match(configuredJsonc, /"theme": "dark",/u);
+  assert.match(configuredJsonc, /"agent-lcm"/u);
+  assert.equal(fs.existsSync(path.join(jsoncHome, "plugins", "agent-lcm.ts")), true);
+  assert.equal(fs.readFileSync(path.join(jsoncHome, "plugins", ".agent-lcm-opencode-plugin.state"), "utf8"), `enabled\n${JSON.stringify(path.resolve("bin/agent-lcm"))}\n`);
+  assert.equal(fs.existsSync(path.join(jsoncHome, "opencode.json")), false);
+  const jsoncStatus = runCli(["setup", "status", "--home", jsoncHome, "--json"]);
+  assert.equal(jsoncStatus.status, 0, jsoncStatus.stderr);
+  assert.equal((JSON.parse(jsoncStatus.stdout) as { opencode: { mcpConfigured: boolean } }).opencode.mcpConfigured, true);
+
+  const jsoncText = runCli(["setup", "opencode", "--home", jsoncHome]);
+  assert.equal(jsoncText.status, 0, jsoncText.stderr);
+  assert.doesNotMatch(jsoncText.stdout, /manual/u);
+  assert.doesNotMatch(jsoncText.stdout, /Native CLI unavailable/u);
+
+  const jsoncRemoval = runCli(["remove", "opencode", "--home", jsoncHome, "--json"]);
+  assert.equal(jsoncRemoval.status, 0, jsoncRemoval.stderr);
+  const removedJsonc = fs.readFileSync(jsoncPath, "utf8");
+  assert.match(removedJsonc, /\/\/ keep comments/u);
+  assert.match(removedJsonc, /"theme": "dark",/u);
+  assert.doesNotMatch(removedJsonc, /"agent-lcm"/u);
+
+  const malformedJsoncHome = tempHome("agent-lcm-opencode-invalid-jsonc-");
+  const malformedJsonc = Buffer.from("{ // broken\n");
+  fs.writeFileSync(path.join(malformedJsoncHome, "opencode.jsonc"), malformedJsonc);
+  const malformedJsoncResult = runCli(["setup", "opencode", "--home", malformedJsoncHome, "--json"]);
+  assert.equal(malformedJsoncResult.status, 1);
+  assert.match(malformedJsoncResult.stderr, /Cannot safely setup OpenCode configuration/u);
+  assert.deepEqual(fs.readFileSync(path.join(malformedJsoncHome, "opencode.jsonc")), malformedJsonc);
+  assert.equal(fs.existsSync(path.join(malformedJsoncHome, "plugins")), false);
+
+  const malformedJsonHome = tempHome("agent-lcm-opencode-jsonc-invalid-json-");
+  const malformedJson = Buffer.from("{not valid json\n");
+  fs.writeFileSync(path.join(malformedJsonHome, "opencode.json"), malformedJson);
+  fs.writeFileSync(path.join(malformedJsonHome, "opencode.jsonc"), "{ // valid JSONC\n}\n");
+  const malformedJsonResult = runCli(["setup", "opencode", "--home", malformedJsonHome, "--json"]);
+  assert.equal(malformedJsonResult.status, 1);
+  assert.match(malformedJsonResult.stderr, /Cannot safely setup OpenCode configuration/u);
+  assert.deepEqual(fs.readFileSync(path.join(malformedJsonHome, "opencode.json")), malformedJson);
+  assert.equal(fs.existsSync(path.join(malformedJsonHome, "plugins")), false);
+
+  const removalJsoncHome = tempHome("agent-lcm-opencode-remove-jsonc-");
+  const removalSetup = runCli(["setup", "opencode", "--home", removalJsoncHome, "--json"]);
+  assert.equal(removalSetup.status, 0, removalSetup.stderr);
+  fs.writeFileSync(path.join(removalJsoncHome, "opencode.jsonc"), "{ // manual comments\n}\n");
+  const removal = runCli(["remove", "opencode", "--home", removalJsoncHome, "--json"]);
+  assert.equal(removal.status, 0, removal.stderr);
+  assert.equal((JSON.parse(removal.stdout) as { status: string }).status, "complete");
+  assert.equal(fs.existsSync(path.join(removalJsoncHome, "plugins", "agent-lcm.ts")), true);
+  assert.equal(fs.readFileSync(path.join(removalJsoncHome, "plugins", ".agent-lcm-opencode-plugin.state"), "utf8"), `disabled\n${JSON.stringify(path.resolve("bin/agent-lcm"))}\n`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(removalJsoncHome, "opencode.json"), "utf8")), { mcp: {} });
+});
+
+test("OpenCode CLI removal cleans the exact owned MCP entry when the plugin is missing", () => {
+  const home = tempHome("agent-lcm-opencode-missing-plugin-");
+  const setup = runCli(["setup", "opencode", "--home", home, "--json"]);
+  assert.equal(setup.status, 0, setup.stderr);
+  fs.unlinkSync(path.join(home, "plugins", "agent-lcm.ts"));
+
+  const status = runCli(["setup", "status", "--home", home, "--json"]);
+  assert.equal(status.status, 0, status.stderr);
+  const openCodeStatus = (JSON.parse(status.stdout) as { opencode: { hooksConfigured: boolean; mcpConfigured: boolean } }).opencode;
+  assert.equal(openCodeStatus.hooksConfigured, false);
+  assert.equal(openCodeStatus.mcpConfigured, true);
+
+  const removal = runCli(["remove", "opencode", "--home", home, "--json"]);
+
+  assert.equal(removal.status, 0, removal.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "opencode.json"), "utf8")), { mcp: {} });
+  assert.equal(fs.readFileSync(path.join(home, "plugins", ".agent-lcm-opencode-plugin.state"), "utf8"), `disabled\n${JSON.stringify(path.resolve("bin/agent-lcm"))}\n`);
+});
+
+test("OpenCode CLI removal preserves a different MCP command when the plugin is missing", () => {
+  const home = tempHome("agent-lcm-opencode-missing-plugin-near-match-");
+  const setup = runCli(["setup", "opencode", "--home", home, "--json"]);
+  assert.equal(setup.status, 0, setup.stderr);
+  fs.unlinkSync(path.join(home, "plugins", "agent-lcm.ts"));
+  const configPath = path.join(home, "opencode.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+    mcp: { "agent-lcm": { command: string[] } };
+  };
+  config.mcp["agent-lcm"].command[1] = "/opt/other/agent-lcm";
+  fs.writeFileSync(configPath, JSON.stringify(config));
+
+  const removal = runCli(["remove", "opencode", "--home", home, "--json"]);
+
+  assert.equal(removal.status, 0, removal.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), config);
+
+  fs.unlinkSync(path.join(home, "plugins", ".agent-lcm-opencode-plugin.state"));
+  const removalWithoutMarker = runCli(["remove", "opencode", "--home", home, "--json"]);
+  assert.equal(removalWithoutMarker.status, 0, removalWithoutMarker.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), config);
+});
+
+test("OpenCode CLI refuses a near-matching Agent LCM MCP server", () => {
+  const home = tempHome("agent-lcm-opencode-mcp-owner-");
+  const original = {
+    mcp: { "agent-lcm": { type: "local", command: ["node", "/other/agent-lcm", "mcp"], enabled: true } },
+  };
+  fs.writeFileSync(path.join(home, "opencode.json"), JSON.stringify(original));
+  const result = runCli(["setup", "opencode", "--home", home, "--json"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unmanaged OpenCode MCP entry/u);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "opencode.json"), "utf8")), original);
+  assert.equal(fs.existsSync(path.join(home, "plugins")), false);
+});
+
+test("OpenCode CLI removal keeps a sole trailing-comma JSONC MCP entry valid", () => {
+  const home = tempHome("agent-lcm-opencode-jsonc-trailing-removal-");
+  const setup = runCli(["setup", "opencode", "--home", home, "--json"]);
+  assert.equal(setup.status, 0, setup.stderr);
+  const configPath = path.join(home, "opencode.jsonc");
+  const command = path.resolve("bin/agent-lcm");
+  fs.writeFileSync(configPath, `{
+  "mcp": {
+    "agent-lcm": { "type": "local", "command": ["node", ${JSON.stringify(command)}, "mcp"], "enabled": true },
+  },
+}
+`);
+
+  const removal = runCli(["remove", "opencode", "--home", home, "--json"]);
+
+  assert.equal(removal.status, 0, removal.stderr);
+  const errors: ParseError[] = [];
+  const value = parse(fs.readFileSync(configPath, "utf8"), errors, { allowTrailingComma: true });
+  assert.equal(errors.length, 0);
+  assert.deepEqual(value, { mcp: {} });
+});
+
+test("OpenCode CLI refuses an owned-shaped MCP entry with user fields", () => {
+  const home = tempHome("agent-lcm-opencode-mcp-extra-field-");
+  const configPath = path.join(home, "opencode.json");
+  const original = {
+    mcp: {
+      "agent-lcm": {
+        type: "local",
+        command: ["node", path.resolve("bin/agent-lcm"), "mcp"],
+        enabled: true,
+        userField: "preserve me",
+      },
+    },
+  };
+  fs.writeFileSync(configPath, JSON.stringify(original));
+
+  const result = runCli(["setup", "opencode", "--home", home, "--json"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unmanaged OpenCode MCP entry/u);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), original);
+  assert.equal(fs.existsSync(path.join(home, "plugins")), false);
+});
+
+test("OpenCode CLI refuses JSONC with duplicate writable keys", () => {
+  const command = JSON.stringify(path.resolve("bin/agent-lcm"));
+  const originals = [`{
+  "mcp": { "other": { "type": "local", "command": ["other"] } },
+  "mcp": {
+    "agent-lcm": { "type": "local", "command": ["node", ${command}, "mcp"], "enabled": true }
+  }
+}
+`, `{
+  "mcp": {
+    "agent-lcm": { "type": "local", "command": ["other"], "enabled": true },
+    "agent-lcm": { "type": "local", "command": ["node", ${command}, "mcp"], "enabled": true }
+  }
+}
+`];
+
+  for (const original of originals) {
+    const home = tempHome("agent-lcm-opencode-jsonc-duplicate-mcp-");
+    const configPath = path.join(home, "opencode.jsonc");
+    fs.writeFileSync(configPath, original);
+
+    const result = runCli(["setup", "opencode", "--home", home, "--json"]);
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Cannot safely setup OpenCode configuration/u);
+    assert.equal(fs.readFileSync(configPath, "utf8"), original);
+    assert.equal(fs.existsSync(path.join(home, "plugins")), false);
+  }
+});
+
+test("OpenCode CLI refuses strict JSON with duplicate writable keys", () => {
+  const command = JSON.stringify(path.resolve("bin/agent-lcm"));
+  const duplicateMcp = `{"mcp":{"other":{"type":"local","command":["other"]}},"mcp":{"agent-lcm":{"type":"local","command":["node",${command},"mcp"],"enabled":true}}}`;
+  const setupHome = tempHome("agent-lcm-opencode-json-duplicate-mcp-");
+  const setupConfigPath = path.join(setupHome, "opencode.json");
+  fs.writeFileSync(setupConfigPath, duplicateMcp);
+
+  const setup = runCli(["setup", "opencode", "--home", setupHome, "--json"]);
+
+  assert.equal(setup.status, 1);
+  assert.match(setup.stderr, /Cannot safely setup OpenCode configuration/u);
+  assert.equal(fs.readFileSync(setupConfigPath, "utf8"), duplicateMcp);
+  assert.equal(fs.existsSync(path.join(setupHome, "plugins")), false);
+
+  const removalHome = tempHome("agent-lcm-opencode-json-duplicate-agent-lcm-");
+  const initialSetup = runCli(["setup", "opencode", "--home", removalHome, "--json"]);
+  assert.equal(initialSetup.status, 0, initialSetup.stderr);
+  const removalConfigPath = path.join(removalHome, "opencode.json");
+  const duplicateAgentLcm = `{"mcp":{"agent-lcm":{"type":"local","command":["other"],"enabled":true},"agent-lcm":{"type":"local","command":["node",${command},"mcp"],"enabled":true}}}`;
+  fs.writeFileSync(removalConfigPath, duplicateAgentLcm);
+
+  const removal = runCli(["remove", "opencode", "--home", removalHome, "--json"]);
+
+  assert.equal(removal.status, 1);
+  assert.match(removal.stderr, /Cannot safely remove OpenCode configuration/u);
+  assert.equal(fs.readFileSync(removalConfigPath, "utf8"), duplicateAgentLcm);
 });
 
 test("daemon restart replaces the running daemon", (t) => {

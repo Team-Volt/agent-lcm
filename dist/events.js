@@ -1,6 +1,6 @@
 import { DEFAULT_LIMITS } from "./config.js";
 import { sanitizeForStorage, sha256 } from "./redact.js";
-export const HARNESS_NAMES = ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"];
+export const HARNESS_NAMES = ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "opencode", "mcp", "import"];
 export function harnessSessionId(harness, nativeId) {
     const id = nativeId.trim();
     if (!id)

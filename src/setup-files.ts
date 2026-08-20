@@ -39,6 +39,40 @@ export type SetupConfigurationSnapshot = {
   readonly hash: string;
 };
 
+export type SetupFileTransform = (bytes: Buffer | undefined) => Buffer | undefined;
+
+/**
+ * Publish a non-JSON setup file using the same directory-anchored lock,
+ * backup, and atomic publication as JSON setup configuration.
+ */
+export function mutateSetupFile(
+  target: string,
+  transform: SetupFileTransform,
+  expectedHash?: string,
+  backupExtension?: string,
+): boolean {
+  const directory = path.dirname(target);
+  ensureSetupDirectory(directory);
+  const directoryIdentity = fs.lstatSync(directory);
+  if (!directoryIdentity.isDirectory()) throw new Error(`Setup directory changed while updating: ${directory}`);
+  return withSetupFileLock(target, directoryIdentity, () => {
+    const current = readAnchoredSetupFile(target, directoryIdentity);
+    if (expectedHash !== undefined && setupFileHash(current) !== expectedHash) {
+      throw new SetupConfigurationChangedError(target);
+    }
+    const next = transform(current);
+    if (next === undefined || (current !== undefined && current.equals(next))) return false;
+    writeAnchoredSetupFile(
+      target,
+      directoryIdentity,
+      current === undefined ? "missing" : setupFileHash(current),
+      next,
+      backupExtension,
+    );
+    return true;
+  });
+}
+
 export function mutateSetupConfiguration(
   target: string,
   transform: (configuration: Record<string, unknown> | undefined) => Record<string, unknown> | undefined,
@@ -72,7 +106,7 @@ export function readSetupConfiguration(target: string): Record<string, unknown> 
 }
 
 export function readSetupConfigurationSnapshot(target: string): SetupConfigurationSnapshot {
-  const bytes = readSetupFile(target);
+  const bytes = readSetupFileBytes(target);
   return {
     configuration: bytes ? parseSetupConfiguration(bytes, target) : undefined,
     hash: setupConfigurationHash(bytes),
@@ -80,6 +114,10 @@ export function readSetupConfigurationSnapshot(target: string): SetupConfigurati
 }
 
 function setupConfigurationHash(bytes: Buffer | undefined): string {
+  return setupFileHash(bytes);
+}
+
+function setupFileHash(bytes: Buffer | undefined): string {
   return bytes === undefined ? "missing" : createHash("sha256").update(bytes).digest("hex");
 }
 
@@ -128,8 +166,20 @@ function readAnchoredSetupFile(target: string, directoryIdentity: fs.Stats): Buf
   return result.stdout;
 }
 
-function writeAnchoredSetupFile(target: string, directoryIdentity: fs.Stats, expectedHash: string, bytes: Buffer): void {
-  const result = runSetupFileWorker("write", target, directoryIdentity, [expectedHash, new Date().toISOString()], bytes);
+function writeAnchoredSetupFile(
+  target: string,
+  directoryIdentity: fs.Stats,
+  expectedHash: string,
+  bytes: Buffer,
+  backupExtension?: string,
+): void {
+  const result = runSetupFileWorker(
+    "write",
+    target,
+    directoryIdentity,
+    [expectedHash, new Date().toISOString(), backupExtension ?? ""],
+    bytes,
+  );
   if (result.status !== 0) throw setupFileWorkerError(result);
 }
 
@@ -164,7 +214,7 @@ function setupFileWorkerError(result: childProcess.SpawnSyncReturns<Buffer>): Er
   return new Error(message || `Setup file worker failed with status ${String(result.status)}.`);
 }
 
-function readSetupFile(target: string): Buffer | undefined {
+export function readSetupFileBytes(target: string): Buffer | undefined {
   let pathStatus: fs.Stats;
   try {
     pathStatus = fs.lstatSync(target);

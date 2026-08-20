@@ -3,14 +3,16 @@ import { harnessSessionId, normalizeHookEvent, type HarnessName, type Normalized
 import { sha256 } from "./redact.ts";
 
 export type CaptureHarness = "codex" | "cursor" | "vscode" | "copilot" | "kiro" | "claude";
+export type RuntimeCaptureHarness = CaptureHarness | "opencode";
 
-const EVENT_MAP: Record<CaptureHarness, Record<string, string>> = {
+const EVENT_MAP: Record<RuntimeCaptureHarness, Record<string, string>> = {
   codex: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
   cursor: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
   vscode: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
   copilot: { sessionStart: "SessionStart", userPromptSubmitted: "UserPromptSubmit", postToolUse: "PostToolUse", sessionEnd: "Stop" },
   kiro: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
   claude: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
+  opencode: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
 };
 
 const KIRO_ALIASES: Record<string, string> = {
@@ -35,7 +37,7 @@ type MapOptions = {
 };
 
 export function mapHarnessEvent(
-  requestedHarness: CaptureHarness | "auto",
+  requestedHarness: RuntimeCaptureHarness | "auto",
   nativeEvent: string | undefined,
   input: unknown,
   options: MapOptions = {},
@@ -66,7 +68,7 @@ export function mapHarnessEvent(
   };
 }
 
-function mappedEvent(harness: CaptureHarness, nativeEvent: string | undefined): string {
+function mappedEvent(harness: RuntimeCaptureHarness, nativeEvent: string | undefined): string {
   if (!nativeEvent) throw new Error("Capture event name is required.");
   const aliases = harness === "kiro" ? KIRO_ALIASES : harness === "vscode" ? VSCODE_ALIASES : undefined;
   const canonicalEvent = aliases?.[nativeEvent] ?? nativeEvent;
@@ -75,7 +77,7 @@ function mappedEvent(harness: CaptureHarness, nativeEvent: string | undefined): 
   return mapped;
 }
 
-function detectHarness(payload: Record<string, unknown> | undefined, nativeEvent: string | undefined): CaptureHarness {
+function detectHarness(payload: Record<string, unknown> | undefined, nativeEvent: string | undefined): RuntimeCaptureHarness {
   if (!payload) throw new Error("Unable to determine harness from capture input; pass --harness explicitly.");
   const hasSnakeCaseSession = typeof payload.session_id === "string" && payload.session_id.trim().length > 0;
   const hasCamelCaseSession = typeof payload.sessionId === "string" && payload.sessionId.trim().length > 0;
@@ -108,7 +110,7 @@ function eventNameFrom(payload: Record<string, unknown> | undefined): string | u
 
 function sessionIdFrom(payload: Record<string, unknown> | undefined): string | undefined {
   if (!payload) return undefined;
-  for (const key of ["session_id", "sessionId", "conversation_id", "conversationId"]) {
+  for (const key of ["session_id", "sessionId", "sessionID", "conversation_id", "conversationId"]) {
     const value = payload[key];
     if (typeof value === "string" && value.trim().length > 0) return value.trim();
   }
@@ -122,7 +124,7 @@ function stripHarnessPrefix(sessionId: string): string {
 }
 
 function isHarness(value: string): value is HarnessName {
-  return value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude" || value === "mcp" || value === "import";
+  return value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude" || value === "opencode" || value === "mcp" || value === "import";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

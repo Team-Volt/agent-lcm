@@ -16,6 +16,7 @@ hooks.json                    shared lower-camel hook shape for client adapters
 .claude-plugin/marketplace.json Claude Code local marketplace catalog
 hooks/                        harness-specific hook manifests
 mcp.claude.json               Claude Code MCP server configuration
+~/.config/opencode/plugins/agent-lcm.ts generated OpenCode global plugin
 bin/agent-lcm                 source and npm CLI entry point
 dist/                         generated npm runtime
 ```
@@ -65,6 +66,17 @@ that path only for display and reports `hooksConfigured: false`. `doctor` leaves
 Claude native plugin health as `unknown`, so use Claude's plugin list or its
 installed-plugin view for the native check.
 
+OpenCode setup writes a generated global plugin to
+`~/.config/opencode/plugins/agent-lcm.ts`. `--home PATH` names the OpenCode
+configuration directory and changes the target to `<PATH>/plugins/agent-lcm.ts`.
+The setup also manages the exact `mcp.agent-lcm` local server in
+`<PATH>/opencode.json` or `<PATH>/opencode.jsonc`, preserving unrelated
+configuration and JSONC comments. The plugin captures
+stable session, prompt, and tool events. Removal disables capture through the
+non-loadable `.agent-lcm-opencode-plugin.state` marker and removes only the
+exact owned MCP entry; it does not delete the generated plugin path.
+This integration targets stable OpenCode plugins, not OpenCode 2 beta.
+
 Lifecycle reports use exit status `0` for `complete`, `2` for
 `manual-required` or `shared-retained`, and `1` for an error. Existing hook
 configuration is validated before native work. Unrelated entries and
@@ -98,7 +110,8 @@ receive a collision-safe `-pre-agent-lcm-` backup.
 7. MCP bridges and storage CLI commands authenticate over local IPC and use the
    same daemon.
 
-Claude Code's native hook manifest maps exactly `SessionStart`,
+OpenCode's stable plugin integration maps session, prompt, and tool events to live
+capture and its managed MCP server. Claude Code's native hook manifest maps exactly `SessionStart`,
 `UserPromptSubmit`, `PostToolUse`, and `Stop` to live capture.
 
 The inbox separates fast harness hooks from database work. Atomic publication
@@ -213,6 +226,9 @@ or OTLP JSON. The Claude reader imports visible conversation text and completed
 tool calls from primary project JSONL files. It excludes metadata, thinking,
 sidechain records, and `subagents` transcripts. Malformed JSONL records are
 rejected individually so later valid records still import.
+
+OpenCode has no historical importer; its integration captures live events and
+configures MCP recall through the managed local server entry.
 
 ## MCP protocol
 

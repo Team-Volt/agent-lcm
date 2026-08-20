@@ -13,12 +13,19 @@ capture queue, quarantine, SQLite, and summary indexing. Claude native plugin
 health remains `unknown` in that report. `setup status` reports
 `hooksConfigured` for setup-managed or legacy hook files; Claude always reports
 `hooksConfigured: false` with its `settings.json` display path. It does not claim
-to check native plugin health.
+to check native plugin health. OpenCode setup status reports its generated
+`mcpConfigured` state and its generated OpenCode plugin state.
 
 ## The MCP server is missing
 
 An Agent Plugins client should discover `mcp.json` at the plugin root. Restart
 the harness after installing or updating the plugin.
+
+OpenCode setup configures the stable capture plugin and exact local
+`mcp.agent-lcm` entry in valid `opencode.json` or `opencode.jsonc`. JSONC edits
+preserve comments, trailing commas, and unrelated settings. Removal disables
+the plugin and deletes only exact owned MCP entries. This integration targets stable OpenCode plugins,
+not OpenCode 2 beta, and has no historical importer.
 
 For manual MCP configuration, use a stdio server with an absolute path:
 
@@ -58,7 +65,8 @@ malformed existing JSON instead of overwriting it. Before changing a valid
 existing file, setup saves a timestamped `-pre-agent-lcm-` backup beside it.
 
 Claude Code, Codex, Cursor, VS Code, and Copilot may ask you to review or trust
-plugin-owned commands. Claude Code's hooks cover `SessionStart`,
+plugin-owned commands. OpenCode's stable plugin integration captures session,
+prompt, and tool events. Claude Code's hooks cover `SessionStart`,
 `UserPromptSubmit`, `PostToolUse`, and `Stop`. Capture
 will not run until the harness allows those hooks.
 
@@ -89,8 +97,10 @@ agent-lcm setup vscode
 agent-lcm setup cursor
 agent-lcm setup kiro
 agent-lcm setup claude
+agent-lcm setup opencode
 agent-lcm remove codex
 agent-lcm remove claude
+agent-lcm remove opencode
 ```
 
 Replace `codex` with the harness you want to remove.
@@ -115,7 +125,17 @@ uninstall command. Cursor Marketplace and Kiro Powers installation/removal
 stay manual. Claude Code setup uses its marketplace and plugin JSON lists; a
 repeat setup updates the user plugin. Claude removal retains the marketplace and
 only uninstalls the user plugin. If `--home PATH` is supplied for Claude, it is
-the Claude config directory passed through `CLAUDE_CONFIG_DIR`.
+the Claude config directory passed through `CLAUDE_CONFIG_DIR`. OpenCode setup
+writes `~/.config/opencode/plugins/agent-lcm.ts`, or
+`<PATH>/plugins/agent-lcm.ts` when `--home PATH` names the OpenCode config
+directory. Setup also manages the exact MCP entry in `<PATH>/opencode.json` or
+`<PATH>/opencode.jsonc`.
+Removal deactivates the generated plugin with the durable
+`.agent-lcm-opencode-plugin.state` marker instead of deleting its path, and
+removes only the exact owned MCP entry. If setup
+or removal reports a partial update, inspect both components, repair the
+incomplete one, and retry the same command. This integration targets stable
+OpenCode plugins, not OpenCode 2 beta, and has no historical importer.
 
 Setup validates the existing JSON before starting a native CLI. It changes only
 exact Agent LCM-owned hook entries and preserves unrelated or near-matching

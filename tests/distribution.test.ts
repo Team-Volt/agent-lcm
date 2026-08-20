@@ -40,6 +40,7 @@ test("the npm package contains the complete plugin and no development files", (t
     "dist/copilot-plugin.js",
     "dist/setup-adapters.js",
     "dist/setup-file-worker.js",
+    "dist/opencode-plugin.js",
     "dist/setup-hook-status.js",
     "dist/setup-hooks.js",
   ]) assert.ok(names.includes(required), `missing ${required}`);
@@ -210,6 +211,16 @@ test("the packed CLI runs outside the checkout and sets up detected harnesses", 
   assert.equal(fs.existsSync(path.join(home, ".copilot")), false);
   assert.equal(fs.existsSync(path.join(home, ".kiro")), false);
   assert.equal(fs.existsSync(path.join(home, ".codex/hooks.json")), false);
+  const openCodeHome = path.join(home, ".config", "opencode");
+  const openCodeSetup = runInstalled(["setup", "opencode", "--home", openCodeHome, "--json"]);
+  assert.equal(openCodeSetup.status, 0, openCodeSetup.stderr);
+  assert.equal(fs.existsSync(path.join(openCodeHome, "plugins", "agent-lcm.ts")), true);
+  const openCodeConfig = readJson(path.join(openCodeHome, "opencode.json"));
+  assert.deepEqual(openCodeConfig.mcp["agent-lcm"], {
+    type: "local",
+    command: ["node", process.platform === "win32" ? path.join(packageRoot, "bin", "agent-lcm") : path.resolve(executable), "mcp"],
+    enabled: true,
+  });
   const codexHooks = JSON.parse(fs.readFileSync(path.join(packageRoot, "hooks/codex.json"), "utf8"));
   const captureCommand = codexHooks.hooks.UserPromptSubmit[0].hooks[0].command.replaceAll("${PLUGIN_ROOT}", packageRoot);
   const capture = spawnSync(captureCommand, {
