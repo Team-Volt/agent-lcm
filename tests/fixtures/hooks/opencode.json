@@ -1,0 +1,6 @@
+{
+  "eventName": "UserPromptSubmit",
+  "sessionId": "opencode-fixture-session",
+  "cwd": "/tmp/opencode-fixture",
+  "prompt": "synthetic OpenCode capture fixture"
+}

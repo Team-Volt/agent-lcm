@@ -25,6 +25,28 @@ export class SetupConfigurationChangedError extends Error {
         this.target = target;
     }
 }
+/**
+ * Publish a non-JSON setup file using the same directory-anchored lock,
+ * backup, and atomic publication as JSON setup configuration.
+ */
+export function mutateSetupFile(target, transform, expectedHash, backupExtension) {
+    const directory = path.dirname(target);
+    ensureSetupDirectory(directory);
+    const directoryIdentity = fs.lstatSync(directory);
+    if (!directoryIdentity.isDirectory())
+        throw new Error(`Setup directory changed while updating: ${directory}`);
+    return withSetupFileLock(target, directoryIdentity, () => {
+        const current = readAnchoredSetupFile(target, directoryIdentity);
+        if (expectedHash !== undefined && setupFileHash(current) !== expectedHash) {
+            throw new SetupConfigurationChangedError(target);
+        }
+        const next = transform(current);
+        if (next === undefined || (current !== undefined && current.equals(next)))
+            return false;
+        writeAnchoredSetupFile(target, directoryIdentity, current === undefined ? "missing" : setupFileHash(current), next, backupExtension);
+        return true;
+    });
+}
 export function mutateSetupConfiguration(target, transform, expectedHash) {
     const directory = path.dirname(target);
     ensureSetupDirectory(directory);
@@ -50,13 +72,16 @@ export function readSetupConfiguration(target) {
     return readSetupConfigurationSnapshot(target).configuration;
 }
 export function readSetupConfigurationSnapshot(target) {
-    const bytes = readSetupFile(target);
+    const bytes = readSetupFileBytes(target);
     return {
         configuration: bytes ? parseSetupConfiguration(bytes, target) : undefined,
         hash: setupConfigurationHash(bytes),
     };
 }
 function setupConfigurationHash(bytes) {
+    return setupFileHash(bytes);
+}
+function setupFileHash(bytes) {
     return bytes === undefined ? "missing" : createHash("sha256").update(bytes).digest("hex");
 }
 function parseSetupConfiguration(bytes, target) {
@@ -112,8 +137,8 @@ function readAnchoredSetupFile(target, directoryIdentity) {
         throw setupFileWorkerError(result);
     return result.stdout;
 }
-function writeAnchoredSetupFile(target, directoryIdentity, expectedHash, bytes) {
-    const result = runSetupFileWorker("write", target, directoryIdentity, [expectedHash, new Date().toISOString()], bytes);
+function writeAnchoredSetupFile(target, directoryIdentity, expectedHash, bytes, backupExtension) {
+    const result = runSetupFileWorker("write", target, directoryIdentity, [expectedHash, new Date().toISOString(), backupExtension ?? ""], bytes);
     if (result.status !== 0)
         throw setupFileWorkerError(result);
 }
@@ -141,7 +166,7 @@ function setupFileWorkerError(result) {
     const message = result.stderr.toString("utf8").trim();
     return new Error(message || `Setup file worker failed with status ${String(result.status)}.`);
 }
-function readSetupFile(target) {
+export function readSetupFileBytes(target) {
     let pathStatus;
     try {
         pathStatus = fs.lstatSync(target);

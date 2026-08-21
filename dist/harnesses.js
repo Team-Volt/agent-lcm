@@ -7,6 +7,7 @@ const EVENT_MAP = {
     copilot: { sessionStart: "SessionStart", userPromptSubmitted: "UserPromptSubmit", postToolUse: "PostToolUse", sessionEnd: "Stop" },
     kiro: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
     claude: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
+    opencode: { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PostToolUse: "PostToolUse", Stop: "Stop" },
 };
 const KIRO_ALIASES = {
     sessionStart: "SessionStart",
@@ -96,7 +97,7 @@ function eventNameFrom(payload) {
 function sessionIdFrom(payload) {
     if (!payload)
         return undefined;
-    for (const key of ["session_id", "sessionId", "conversation_id", "conversationId"]) {
+    for (const key of ["session_id", "sessionId", "sessionID", "conversation_id", "conversationId"]) {
         const value = payload[key];
         if (typeof value === "string" && value.trim().length > 0)
             return value.trim();
@@ -110,7 +111,7 @@ function stripHarnessPrefix(sessionId) {
     return isHarness(prefix[1]) ? prefix[2] : sessionId;
 }
 function isHarness(value) {
-    return value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude" || value === "mcp" || value === "import";
+    return value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude" || value === "opencode" || value === "mcp" || value === "import";
 }
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);

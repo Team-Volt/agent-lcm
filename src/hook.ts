@@ -5,7 +5,7 @@ import { DEFAULT_LIMITS, loadConfig } from "./config.ts";
 import { ensureDaemon } from "./daemon-client.ts";
 import { normalizeHookEvent } from "./events.ts";
 import { resolveGitMetadata } from "./git.ts";
-import { mapHarnessEvent, type CaptureHarness } from "./harnesses.ts";
+import { mapHarnessEvent, type RuntimeCaptureHarness } from "./harnesses.ts";
 import { publishInboxEvent } from "./inbox.ts";
 import { sha256 } from "./redact.ts";
 
@@ -103,11 +103,11 @@ export async function runCapture(args: string[]): Promise<void> {
   }
 }
 
-function captureArguments(args: string[]): { harness: CaptureHarness | "auto"; nativeEvent?: string } {
+function captureArguments(args: string[]): { harness: RuntimeCaptureHarness | "auto"; nativeEvent?: string } {
   const index = args.indexOf("--harness");
   if (index < 0 || !args[index + 1]) throw new Error("Usage: agent-lcm capture --harness <harness> [event]");
   const requested = args[index + 1];
-  if (requested !== "auto" && requested !== "codex" && requested !== "cursor" && requested !== "vscode" && requested !== "copilot" && requested !== "kiro" && requested !== "claude") {
+  if (requested !== "auto" && requested !== "codex" && requested !== "cursor" && requested !== "vscode" && requested !== "copilot" && requested !== "kiro" && requested !== "claude" && requested !== "opencode") {
     throw new Error(`Unknown capture harness: ${requested}`);
   }
   const remaining = args.filter((_, position) => position !== index && position !== index + 1);

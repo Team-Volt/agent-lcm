@@ -322,7 +322,7 @@ test("MCP server initializes and exposes a stable tool catalog", () => {
   assert.equal(contextPlanTool.inputSchema.properties.canControlCompaction.const, false);
   const listTool = responses[1].result.tools.find((tool: { name: string }) => tool.name === "lcm_list_sessions");
   assert.equal(listTool.inputSchema.properties.includeSummaries.type, "boolean");
-  assert.deepEqual(listTool.inputSchema.properties.harnesses.items.enum, ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"]);
+  assert.deepEqual(listTool.inputSchema.properties.harnesses.items.enum, ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "opencode", "mcp", "import"]);
   for (const tool of responses[1].result.tools) {
     assert.deepEqual(tool.annotations, {
       readOnlyHint: true,
@@ -443,7 +443,7 @@ test("MCP rejects malformed optional string arrays", () => {
   assert.deepEqual(responses.map((response) => response.error), [
     { code: -32602, message: "value must be an array of non-empty strings." },
     { code: -32602, message: "value must be an array of non-empty strings." },
-    { code: -32602, message: "harnesses must contain only: codex, cursor, vscode, copilot, kiro, claude, mcp, import." },
+    { code: -32602, message: "harnesses must contain only: codex, cursor, vscode, copilot, kiro, claude, opencode, mcp, import." },
   ]);
 });
 

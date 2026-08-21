@@ -25,7 +25,7 @@ function main() {
             return 0;
         case "read": return writeCurrentFile(name);
         case "write":
-            writeChangedFile(name, requiredArgument(6), requiredArgument(7), fs.readFileSync(0));
+            writeChangedFile(name, requiredArgument(6), requiredArgument(7), process.argv[8] ?? "", fs.readFileSync(0));
             return 0;
         default: throw new Error(`Unknown setup file operation: ${operation}`);
     }
@@ -62,13 +62,13 @@ function writeCurrentFile(name) {
     process.stdout.write(bytes);
     return 0;
 }
-function writeChangedFile(name, expectedHash, timestamp, next) {
+function writeChangedFile(name, expectedHash, timestamp, backupExtension, next) {
     const current = readAnchoredFile(name);
     const actualHash = current === undefined ? "missing" : hash(current);
     if (actualHash !== expectedHash)
         throw new Error(`Setup configuration changed while updating: ${path.resolve(name)}`);
     if (current !== undefined)
-        backupAnchoredFile(name, current, timestamp);
+        backupAnchoredFile(name, current, timestamp, backupExtension);
     writeAnchoredFile(name, next);
 }
 function readAnchoredFile(name) {
@@ -95,11 +95,7 @@ function readAnchoredFile(name) {
         throw error;
     }
     try {
-        const opened = fs.fstatSync(descriptor);
-        const current = fs.lstatSync(name);
-        if (!opened.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
-            throw new Error(`Setup configuration path changed while opening: ${path.resolve(name)}`);
-        }
+        assertAnchoredFileIdentity(descriptor, name, "opening");
         return fs.readFileSync(descriptor);
     }
     finally {
@@ -114,15 +110,23 @@ function writeAnchoredFile(name, bytes) {
         fs.fchmodSync(descriptor, 0o600);
         fs.writeFileSync(descriptor, bytes);
         fs.fsyncSync(descriptor);
-        fs.closeSync(descriptor);
-        descriptor = undefined;
+        assertAnchoredFileIdentity(descriptor, temporary, "publishing");
         fs.renameSync(temporary, name);
+        try {
+            assertAnchoredFileIdentity(descriptor, name, "publishing");
+        }
+        catch (error) {
+            removeMismatchedPublishedSymlink(name);
+            throw error;
+        }
         if (process.platform !== "win32")
             fsyncDirectory();
     }
     catch (error) {
-        if (descriptor !== undefined)
+        if (descriptor !== undefined) {
             fs.closeSync(descriptor);
+            descriptor = undefined;
+        }
         try {
             fs.unlinkSync(temporary);
         }
@@ -132,10 +136,37 @@ function writeAnchoredFile(name, bytes) {
         }
         throw error;
     }
+    finally {
+        if (descriptor !== undefined)
+            fs.closeSync(descriptor);
+    }
 }
-function backupAnchoredFile(name, bytes, timestampValue) {
-    const extension = path.extname(name);
-    const stem = extension ? name.slice(0, -extension.length) : name;
+function assertAnchoredFileIdentity(descriptor, name, action) {
+    const opened = fs.fstatSync(descriptor);
+    const current = fs.lstatSync(name);
+    if (!opened.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
+        throw new Error(`Setup configuration path changed while ${action}: ${path.resolve(name)}`);
+    }
+}
+function removeMismatchedPublishedSymlink(name) {
+    let published;
+    try {
+        published = fs.lstatSync(name);
+    }
+    catch (error) {
+        if (hasCode(error, "ENOENT"))
+            return;
+        throw error;
+    }
+    if (published.isSymbolicLink())
+        fs.unlinkSync(name);
+}
+function backupAnchoredFile(name, bytes, timestampValue, backupExtension) {
+    const originalExtension = path.extname(name);
+    const extension = backupExtension || originalExtension;
+    if (extension.includes(path.sep) || !extension.startsWith("."))
+        throw new Error("Invalid setup backup extension.");
+    const stem = originalExtension ? name.slice(0, -originalExtension.length) : name;
     const timestamp = timestampValue.replace(/[:.]/gu, "-");
     for (let suffix = 0;; suffix += 1) {
         const candidate = `${stem}-pre-agent-lcm-${timestamp}${suffix ? `-${suffix}` : ""}${extension}`;

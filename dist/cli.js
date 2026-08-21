@@ -50,7 +50,7 @@ export async function main(argv) {
         printSetupReports(setupHarness(harness, {
             home,
             command: commandPath,
-            ...(home ? { env: lifecycleEnvironment(harness, home) } : {}),
+            ...(home && harness !== "opencode" ? { env: lifecycleEnvironment(harness, home) } : {}),
         }), rest.includes("--json"));
         return;
     }
@@ -59,7 +59,7 @@ export async function main(argv) {
         const home = optionValue(rest, "--home");
         printSetupReports(removeHarness(harness, {
             home,
-            ...(home ? { env: lifecycleEnvironment(harness, home) } : {}),
+            ...(home && harness !== "opencode" ? { env: lifecycleEnvironment(harness, home) } : {}),
         }), rest.includes("--json"));
         return;
     }
@@ -265,11 +265,11 @@ Commands:
   agent-lcm daemon run|start|restart|status|stop
   agent-lcm mcp
   agent-lcm hook <event>
-  agent-lcm capture --harness codex|cursor|vscode|copilot|kiro|claude|auto [event]
+  agent-lcm capture --harness codex|cursor|vscode|copilot|kiro|claude|opencode|auto [event]
   agent-lcm setup all
-  agent-lcm setup <codex|cursor|vscode|copilot|kiro|claude> [--home PATH]
+  agent-lcm setup <codex|cursor|vscode|copilot|kiro|claude|opencode> [--home PATH]
   agent-lcm setup status
-  agent-lcm remove <codex|cursor|vscode|copilot|kiro|claude> [--home PATH]
+  agent-lcm remove <codex|cursor|vscode|copilot|kiro|claude|opencode> [--home PATH]
   agent-lcm status [--codex-home PATH] [--json]
   agent-lcm doctor [--codex-home PATH] [--json]  Diagnose install, storage, and capture state
   agent-lcm health [--json]
@@ -286,9 +286,9 @@ Commands:
 `);
 }
 function captureHarness(value, action = "setup") {
-    if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude")
+    if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude" || value === "opencode")
         return value;
-    throw new Error(`Usage: agent-lcm ${action} <codex|cursor|vscode|copilot|kiro|claude> [--home PATH]`);
+    throw new Error(`Usage: agent-lcm ${action} <codex|cursor|vscode|copilot|kiro|claude|opencode> [--home PATH]`);
 }
 function importHarness(value) {
     if (value === "codex" || value === "cursor" || value === "vscode" || value === "copilot" || value === "kiro" || value === "claude")
@@ -329,6 +329,9 @@ function printSetupReports(value, json) {
         for (const report of reports) {
             process.stdout.write(`${report.harness} ${report.action}: ${report.status}\n`);
             process.stdout.write(`Hooks ${report.hooks.changed ? "changed" : "unchanged"}: ${report.hooks.path}\n`);
+            if (report.mcp !== undefined) {
+                process.stdout.write(`MCP ${report.mcp.changed ? "changed" : "unchanged"}: ${report.mcp.path}\n`);
+            }
             if (report.status === "manual-required") {
                 process.stdout.write(report.nativeCli === null
                     ? "Native CLI unavailable.\n"

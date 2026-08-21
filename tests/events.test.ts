@@ -31,7 +31,7 @@ test("normalizes Codex-style hook payloads without project as primary boundary",
 });
 
 test("namespaces native session identifiers by harness", () => {
-  assert.deepEqual(HARNESS_NAMES, ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "mcp", "import"]);
+  assert.deepEqual(HARNESS_NAMES, ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "opencode", "mcp", "import"]);
   assert.equal(harnessSessionId("cursor", "  abc  "), "cursor:abc");
   assert.equal(harnessSessionId("claude", "  native-session  "), "claude:native-session");
   assert.throws(() => harnessSessionId("codex", "  "), /native session id must not be empty/u);

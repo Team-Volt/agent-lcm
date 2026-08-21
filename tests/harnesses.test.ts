@@ -8,7 +8,7 @@ import { mapHarnessEvent } from "../src/harnesses.ts";
 const FIXTURES = path.join("tests", "fixtures", "hooks");
 
 test("maps each supported harness into a namespaced sanitized event", () => {
-  for (const harness of ["codex", "cursor", "vscode", "copilot", "kiro", "claude"] as const) {
+  for (const harness of ["codex", "cursor", "vscode", "copilot", "kiro", "claude", "opencode"] as const) {
     const mapped = mapHarnessEvent(harness, undefined, readFixture(harness));
     assert.equal(mapped.harness, harness);
     assert.match(mapped.session_id, new RegExp(`^${harness}:`, "u"));
@@ -34,6 +34,26 @@ test("Claude Code rejects unsupported native hook events", () => {
   assert.throws(
     () => mapHarnessEvent("claude", "MessageDisplay", { session_id: "claude-message", cwd: "/tmp/claude" }),
     /Unsupported claude capture event: MessageDisplay/u,
+  );
+});
+
+test("OpenCode maps its four supported native events and sessionID into normalized capture", () => {
+  for (const nativeEvent of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]) {
+    const event = mapHarnessEvent("opencode", nativeEvent, {
+      sessionID: "opencode-native-session",
+      cwd: "/tmp/opencode-events",
+    });
+    assert.equal(event.harness, "opencode");
+    assert.equal(event.native_event, nativeEvent);
+    assert.equal(event.hook_event, nativeEvent);
+    assert.equal(event.session_id, "opencode:opencode-native-session");
+  }
+});
+
+test("OpenCode rejects unsupported native hook events without aliases", () => {
+  assert.throws(
+    () => mapHarnessEvent("opencode", "userPromptSubmitted", { sessionId: "opencode-alias", cwd: "/tmp/opencode" }),
+    /Unsupported opencode capture event: userPromptSubmitted/u,
   );
 });
 

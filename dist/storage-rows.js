@@ -2,7 +2,7 @@ export function rowToSessionSummary(row) {
     const record = recordValue(row);
     return {
         session_id: String(record.session_id),
-        harness: (record.harness === "cursor" || record.harness === "vscode" || record.harness === "copilot" || record.harness === "kiro" || record.harness === "claude" || record.harness === "mcp" || record.harness === "import") ? record.harness : "codex",
+        harness: (record.harness === "cursor" || record.harness === "vscode" || record.harness === "copilot" || record.harness === "kiro" || record.harness === "claude" || record.harness === "opencode" || record.harness === "mcp" || record.harness === "import") ? record.harness : "codex",
         first_seen: String(record.first_seen),
         last_seen: String(record.last_seen),
         cwd: String(record.cwd),

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import { generateOpenCodePluginSource } from "../src/opencode-plugin.ts";
 import { mutateSetupConfiguration } from "../src/setup-files.ts";
 import { removeHarness, setupHarness, setupStatus } from "../src/setup.ts";
 import { assertCliOk, runCli, tempHome } from "./helpers.ts";
@@ -578,6 +579,138 @@ test("setup all configures only harnesses already installed for the user", () =>
   assert.equal(fs.existsSync(path.join(userHome, ".kiro")), false);
 });
 
+test("setup all configures OpenCode capture and MCP for JSONC", () => {
+  const userHome = tempHome("agent-lcm-detected-opencode-jsonc-");
+  const openCodeHome = path.join(userHome, ".config", "opencode");
+  fs.mkdirSync(openCodeHome, { recursive: true });
+  fs.writeFileSync(path.join(openCodeHome, "opencode.jsonc"), "{ // manual\n}\n");
+  const result = runCli(["setup", "all", "--json"], {
+    env: { HOME: userHome, USERPROFILE: userHome, PATH: "" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const reports = JSON.parse(result.stdout) as Array<{ harness: string; status: string; hooks: { changed: boolean } }>;
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0]?.harness, "opencode");
+  assert.equal(reports[0]?.status, "complete");
+  assert.equal(reports[0]?.hooks.changed, true);
+  assert.equal(fs.existsSync(path.join(openCodeHome, "plugins", "agent-lcm.ts")), true);
+  assert.match(fs.readFileSync(path.join(openCodeHome, "opencode.jsonc"), "utf8"), /"agent-lcm"/u);
+});
+
+test("OpenCode setup publishes one repeatable managed plugin, backs up old versions, and removes only it", () => {
+  const configDir = tempHome("agent-lcm-opencode-");
+  const plugins = path.join(configDir, "plugins");
+  const sibling = path.join(plugins, "keep.ts");
+  fs.mkdirSync(plugins, { recursive: true });
+  const siblingBytes = Buffer.from("export const keep = true;\n");
+  fs.writeFileSync(sibling, siblingBytes);
+  const command = "/opt/agent-lcm/bin/agent-lcm";
+  const target = path.join(plugins, "agent-lcm.ts");
+
+  const first = setupHarness("opencode", { home: configDir, command });
+  const firstBytes = fs.readFileSync(target);
+  const second = setupHarness("opencode", { home: configDir, command });
+
+  assert.equal(first.status, "complete");
+  assert.equal(first.nativeCli, null);
+  assert.equal(first.hooks.path, target);
+  assert.equal(first.hooks.changed, true);
+  assert.equal(second.hooks.changed, false);
+  assert.equal(setupStatus({ home: configDir }).opencode.hooksConfigured, true);
+  assert.equal(setupStatus({ home: configDir }).opencode.mcpConfigured, true);
+  assert.deepEqual(fs.readFileSync(sibling), siblingBytes);
+
+  const configPath = path.join(configDir, "opencode.json");
+  const oldConfiguration = JSON.parse(fs.readFileSync(configPath, "utf8")) as { mcp: { "agent-lcm": { command: string[] } } };
+  oldConfiguration.mcp["agent-lcm"].command = ["node", "/old/agent-lcm", "mcp"];
+  fs.writeFileSync(configPath, JSON.stringify(oldConfiguration));
+  fs.writeFileSync(target, generateOpenCodePluginSource("/old/agent-lcm"));
+  const overwritten = setupHarness("opencode", { home: configDir, command });
+  assert.equal(overwritten.hooks.changed, true);
+  assert.deepEqual(fs.readFileSync(target), firstBytes);
+  const backups = fs.readdirSync(plugins).filter((name) => name.startsWith("agent-lcm-pre-agent-lcm-"));
+  assert.equal(backups.length, 1);
+  assert.equal(backups[0]?.endsWith(".ts.bak"), true);
+  assert.equal(fs.readFileSync(path.join(plugins, backups[0] ?? ""), "utf8"), generateOpenCodePluginSource("/old/agent-lcm"));
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")).mcp["agent-lcm"].command, ["node", command, "mcp"]);
+  const unownedBackup = path.join(plugins, "agent-lcm-pre-agent-lcm-user.ts");
+  fs.writeFileSync(unownedBackup, "export const userOwned = true;\n");
+  const legacyBackup = path.join(plugins, "agent-lcm-pre-agent-lcm-legacy.ts");
+  const stateBlock = `const AGENT_LCM_STATE = new URL("./.agent-lcm-opencode-plugin.state", import.meta.url);\n\nfunction captureEnabled() {\n  try {\n    return fs.readFileSync(AGENT_LCM_STATE, "utf8").trim() === "enabled";\n  } catch {\n    return false;\n  }\n}\n\n`;
+  const markerlessLegacy = generateOpenCodePluginSource(command)
+    .replace("// agent-lcm-opencode-plugin: 1\n", "")
+    .replace('import fs from "node:fs";\n', "")
+    .replace(stateBlock, "")
+    .replace("  if (!captureEnabled()) return;\n", "");
+  fs.writeFileSync(legacyBackup, markerlessLegacy);
+
+  const removed = removeHarness("opencode", { home: configDir });
+  const repeated = removeHarness("opencode", { home: configDir });
+  assert.deepEqual(removed.hooks, { path: target, changed: true });
+  assert.equal(repeated.hooks.changed, false);
+  assert.equal(fs.existsSync(target), true);
+  assert.equal(fs.readFileSync(path.join(plugins, ".agent-lcm-opencode-plugin.state"), "utf8"), `disabled\n${JSON.stringify(command)}\n`);
+  assert.equal(fs.existsSync(path.join(plugins, backups[0] ?? "")), true);
+  assert.equal(fs.existsSync(unownedBackup), true);
+  assert.match(fs.readFileSync(legacyBackup, "utf8"), /AGENT_LCM_STATE/u);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), { mcp: {} });
+  assert.equal(setupStatus({ home: configDir }).opencode.hooksConfigured, false);
+  assert.deepEqual(fs.readFileSync(sibling), siblingBytes);
+});
+
+test("OpenCode setup refuses malformed or symlinked plugin targets", { skip: process.platform === "win32" }, () => {
+  const configDir = tempHome("agent-lcm-opencode-invalid-");
+  const targetDirectory = path.join(configDir, "plugins");
+  const target = path.join(targetDirectory, "agent-lcm.ts");
+  fs.mkdirSync(targetDirectory, { recursive: true });
+  const malformed = Buffer.from("// Generated by Agent LCM. Do not edit.\nnot a plugin\n");
+  fs.writeFileSync(target, malformed);
+  assert.throws(() => setupHarness("opencode", { home: configDir, command: "/opt/agent-lcm/bin/agent-lcm" }), /unmanaged OpenCode plugin/u);
+  assert.deepEqual(fs.readFileSync(target), malformed);
+
+  const markerOnly = Buffer.from("// agent-lcm-opencode-plugin: 1\nconst AGENT_LCM_COMMAND = \"/opt/agent-lcm/bin/agent-lcm\";\nexport const unrelated = true;\n");
+  fs.writeFileSync(target, markerOnly);
+  assert.throws(() => setupHarness("opencode", { home: configDir, command: "/opt/agent-lcm/bin/agent-lcm" }), /unmanaged OpenCode plugin/u);
+  assert.deepEqual(fs.readFileSync(target), markerOnly);
+
+  const victim = path.join(configDir, "victim.ts");
+  fs.writeFileSync(victim, "victim\n");
+  fs.unlinkSync(target);
+  fs.symlinkSync(victim, target);
+  assert.throws(() => setupHarness("opencode", { home: configDir, command: "/opt/agent-lcm/bin/agent-lcm" }), /symlink/u);
+  assert.equal(fs.readFileSync(victim, "utf8"), "victim\n");
+});
+
+test("OpenCode setup reports which component completed when capture publication fails", { skip: process.platform === "win32" }, () => {
+  const configDir = tempHome("agent-lcm-opencode-partial-");
+  const preload = path.join(configDir, "fail-plugin-publication.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const originalRename = fs.renameSync;
+fs.renameSync = function(source, target) {
+  if (target === "agent-lcm.ts") throw new Error("forced capture plugin publication failure");
+  return originalRename(source, target);
+};
+`);
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `--require=${preload}`;
+  try {
+    assert.throws(
+      () => setupHarness("opencode", { home: configDir, command: "/opt/agent-lcm/bin/agent-lcm" }),
+      /MCP configuration completed.*repair.*retry/u,
+    );
+  } finally {
+    if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = originalNodeOptions;
+  }
+  assert.equal(fs.existsSync(path.join(configDir, "plugins", "agent-lcm.ts")), false);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(configDir, "opencode.json"), "utf8")).mcp["agent-lcm"]);
+
+  const retry = setupHarness("opencode", { home: configDir, command: "/opt/agent-lcm/bin/agent-lcm" });
+  assert.equal(retry.status, "complete");
+  assert.equal(retry.mcp?.changed, false);
+  assert.equal(retry.hooks.changed, true);
+});
+
 test("Claude setup, removal, and status never inspect or mutate settings", (t) => {
   const configDir = tempHome("agent-lcm-claude-config-");
   const settings = path.join(configDir, "settings.json");
@@ -662,6 +795,12 @@ test("setup prints a clear result for people and keeps JSON output for scripts",
     hooks: { path: path.join(userHome, "hooks.json"), changed: false },
     guide: `${GUIDE_ROOT}/codex.md`,
   });
+
+  const openCodeHome = tempHome("agent-lcm-output-opencode-");
+  const openCode = runCli(["setup", "opencode", "--home", openCodeHome]);
+  assert.equal(openCode.status, 0, openCode.stderr);
+  assert.match(openCode.stdout, /Hooks changed: .*plugins[\\/]agent-lcm\.ts/u);
+  assert.match(openCode.stdout, /MCP changed: .*opencode\.json/u);
 });
 
 test("CLI setup and remove use native Codex with an isolated explicit home", (t) => {
@@ -763,6 +902,74 @@ test("setup writes never follow a predictable temporary symlink", { skip: proces
 
   assert.equal(fs.readFileSync(victim, "utf8"), "do not overwrite");
   assert.deepEqual(JSON.parse(fs.readFileSync(setupPath, "utf8")), { hooks: {} });
+});
+
+test("setup rejects a temporary file swapped before publication", { skip: process.platform === "win32" }, () => {
+  // Given: a same-user process replaces the unique temporary file at the rename boundary.
+  const clientHome = tempHome("agent-lcm-temp-publication-swap-");
+  const setupPath = path.join(clientHome, "hooks.json");
+  const victim = path.join(clientHome, "victim.txt");
+  const preload = path.join(clientHome, "swap-publication-temp.cjs");
+  fs.writeFileSync(victim, "do not overwrite");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const originalRename = fs.renameSync;
+fs.renameSync = function(source, target) {
+  if (String(source).endsWith(".tmp") && target === "hooks.json") {
+    fs.unlinkSync(source);
+    fs.symlinkSync(${JSON.stringify(victim)}, source);
+  }
+  return originalRename(source, target);
+};
+`);
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `--require=${preload}`;
+
+  // When: setup attempts atomic publication through the worker.
+  try {
+    assert.throws(
+      () => mutateSetupConfiguration(setupPath, () => ({ hooks: {} })),
+      /path changed while publishing/u,
+    );
+  } finally {
+    if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = originalNodeOptions;
+  }
+
+  // Then: setup does not acknowledge the swapped temporary file and does not alter its victim.
+  assert.equal(fs.existsSync(setupPath), false);
+  assert.equal(fs.readFileSync(victim, "utf8"), "do not overwrite");
+});
+
+test("setup preserves a regular file that replaces the publication temporary file", { skip: process.platform === "win32" }, () => {
+  const clientHome = tempHome("agent-lcm-temp-publication-regular-swap-");
+  const setupPath = path.join(clientHome, "hooks.json");
+  const replacement = path.join(clientHome, "concurrent.json");
+  const replacementBytes = Buffer.from('{"unrelated":true}\n');
+  const preload = path.join(clientHome, "swap-publication-temp.cjs");
+  fs.writeFileSync(replacement, replacementBytes);
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const originalRename = fs.renameSync;
+fs.renameSync = function(source, target) {
+  if (String(source).endsWith(".tmp") && target === "hooks.json") {
+    fs.unlinkSync(source);
+    originalRename(${JSON.stringify(replacement)}, source);
+  }
+  return originalRename(source, target);
+};
+`);
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `--require=${preload}`;
+  try {
+    assert.throws(
+      () => mutateSetupConfiguration(setupPath, () => ({ hooks: {} })),
+      /path changed while publishing/u,
+    );
+  } finally {
+    if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = originalNodeOptions;
+  }
+
+  assert.deepEqual(fs.readFileSync(setupPath), replacementBytes);
 });
 
 test("Kiro setup updates its owned hooks after a binary move", () => {
