@@ -1,9 +1,10 @@
 import { decodePersistedEvent } from "./event-codec.js";
 import { overflowReferenceFromEvent, searchOverflowContent } from "./overflow.js";
 import { readRawEvents } from "./raw-log.js";
+import { eventSearchText } from "./storage-context.js";
 import { parseStringArray, recordValue, rowToSessionSummary } from "./storage-rows.js";
 import { STORED_EVENT_JSON_SQL } from "./stored-event.js";
-import { getCurrentStoredSession, summarizeSessions } from "./storage-sessions.js";
+import { getCurrentStoredSession, isCodexLcmToolEvent, summarizeSessions } from "./storage-sessions.js";
 export { searchSummaryNodes } from "./storage-summaries.js";
 import { harnessSet, harnessSqlFragment, matchesHarness } from "./storage-types.js";
 import { eventSignalText, isGeneratedSuggestionEvent, isSummarySourceEvent, matchesQueryText, queryTermHitCount, toFtsQueries } from "./summary.js";
@@ -164,6 +165,8 @@ function isSearchDiscoveryRow(row, query) {
 function isSearchDiscoveryEvent(event, query) {
     if (isGeneratedSuggestionEvent(event))
         return isExplicitSuggestionQuery(query);
+    if (event.hook_event === "PostToolUse")
+        return !isCodexLcmToolEvent(event);
     return isSummarySourceEvent(event);
 }
 function isExplicitSuggestionQuery(query) {
@@ -218,7 +221,7 @@ function searchMatchText(kind, value) {
         return value;
     try {
         const event = decodePersistedEvent(value);
-        return eventSignalText(event) || `${event.hook_event}: ${JSON.stringify(event.payload)}`;
+        return eventSignalText(event) || eventSearchText(event);
     }
     catch {
         return value;
@@ -292,7 +295,7 @@ export function searchStoredSessions(db, rawLogPath, args) {
             .filter((event) => matchesHarness(event, selectedHarnesses))
             .filter((event) => !excludedSessionIds.has(event.session_id))
             .filter((event) => isSearchDiscoveryEvent(event, query))
-            .filter((event) => matchesQueryText(JSON.stringify(event), query)))
+            .filter((event) => matchesQueryText(eventSearchText(event), query)))
             .slice(0, limit);
     }
     const query = args.query?.trim() ?? "";
@@ -325,7 +328,7 @@ export function searchStoredSessions(db, rawLogPath, args) {
       AND (?2 IS NULL OR s.cwd = ?2)
       AND (?3 IS NULL OR s.repo_root = ?3)
       AND s.session_id NOT IN (SELECT value FROM json_each(?5))
-      AND e.hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')
+      AND e.hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact', 'PostToolUse')
       ${harnessFilter.sql}
     ORDER BY bm25(event_fts) ASC, e.timestamp DESC
     LIMIT ?4

@@ -4,9 +4,10 @@ import { decodePersistedEvent } from "./event-codec.ts";
 import type { NormalizedEvent } from "./events.ts";
 import { overflowReferenceFromEvent, searchOverflowContent, type OverflowSearchMatch } from "./overflow.ts";
 import { readRawEvents } from "./raw-log.ts";
+import { eventSearchText } from "./storage-context.ts";
 import { parseStringArray, recordValue, rowToSessionSummary } from "./storage-rows.ts";
 import { STORED_EVENT_JSON_SQL } from "./stored-event.ts";
-import { getCurrentStoredSession, summarizeSessions } from "./storage-sessions.ts";
+import { getCurrentStoredSession, isCodexLcmToolEvent, summarizeSessions } from "./storage-sessions.ts";
 export { searchSummaryNodes } from "./storage-summaries.ts";
 import { harnessSet, harnessSqlFragment, matchesHarness, type SearchOverflowArgs, type SearchSessionArgs, type SessionDiscovery, type SessionSearchMatch, type SessionSummary } from "./storage-types.ts";
 import { eventSignalText, isGeneratedSuggestionEvent, isSummarySourceEvent, matchesQueryText, queryTermHitCount, toFtsQueries } from "./summary.ts";
@@ -183,6 +184,7 @@ function isSearchDiscoveryRow(row: unknown, query: string): boolean {
 
 function isSearchDiscoveryEvent(event: NormalizedEvent, query: string): boolean {
   if (isGeneratedSuggestionEvent(event)) return isExplicitSuggestionQuery(query);
+  if (event.hook_event === "PostToolUse") return !isCodexLcmToolEvent(event);
   return isSummarySourceEvent(event);
 }
 
@@ -238,7 +240,7 @@ function searchMatchText(kind: SessionSearchMatch["kind"], value: unknown): stri
   if (kind !== "event") return value;
   try {
     const event = decodePersistedEvent(value);
-    return eventSignalText(event) || `${event.hook_event}: ${JSON.stringify(event.payload)}`;
+    return eventSignalText(event) || eventSearchText(event);
   } catch {
     return value;
   }
@@ -314,7 +316,7 @@ export function searchStoredSessions(db: DatabaseSync | undefined, rawLogPath: s
       .filter((event) => matchesHarness(event, selectedHarnesses))
       .filter((event) => !excludedSessionIds.has(event.session_id))
       .filter((event) => isSearchDiscoveryEvent(event, query))
-      .filter((event) => matchesQueryText(JSON.stringify(event), query)))
+      .filter((event) => matchesQueryText(eventSearchText(event), query)))
       .slice(0, limit);
   }
   const query = args.query?.trim() ?? "";
@@ -348,7 +350,7 @@ export function searchStoredSessions(db: DatabaseSync | undefined, rawLogPath: s
       AND (?2 IS NULL OR s.cwd = ?2)
       AND (?3 IS NULL OR s.repo_root = ?3)
       AND s.session_id NOT IN (SELECT value FROM json_each(?5))
-      AND e.hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')
+      AND e.hook_event IN ('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact', 'PostToolUse')
       ${harnessFilter.sql}
     ORDER BY bm25(event_fts) ASC, e.timestamp DESC
     LIMIT ?4

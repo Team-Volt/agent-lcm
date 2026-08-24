@@ -481,7 +481,7 @@ export function isCodexLcmToolEvent(event) {
     return toolName?.startsWith("mcp__agent_lcm__") ?? false;
 }
 export function isSearchIndexEvent(event) {
-    return isSummarySourceEvent(event) || isGeneratedSuggestionEvent(event);
+    return event.hook_event === "PostToolUse" || isSummarySourceEvent(event) || isGeneratedSuggestionEvent(event);
 }
 export function isSummaryHook(hookEvent) {
     return hookEvent === "UserPromptSubmit" ||

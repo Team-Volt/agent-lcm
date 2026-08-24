@@ -12,10 +12,12 @@ import { getSummaryBackfillSessionIds, rebuildSessionMemorySummary, shouldRebuil
 import { extractEventMetadata, extractSessionMetadata, isCodexLcmToolEvent, isSearchIndexEvent, maxNullable, scalar, summarizeSessions } from "./storage-sessions.js";
 import { SUMMARY_ALGORITHM_VERSION, SUMMARY_NODE_VERSION, isSummarySourceEvent, summaryNodeSearchText, summarySearchText, } from "./summary.js";
 const SUMMARY_SOURCE_HOOKS = "('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')";
+const SEARCH_INDEX_HOOKS = "('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact', 'PostToolUse')";
 const FILE_REF_BACKFILL_KEY = "file_refs_backfilled_v1";
 const DELEGATION_PARENT_BACKFILL_KEY = "delegation_parent_backfilled_v1";
 const EVENT_METADATA_BACKFILL_KEY = "event_metadata_backfilled_v1";
 const EVENT_LOCATOR_METADATA_BACKFILL_KEY = "event_locator_metadata_backfilled_v1";
+const POST_TOOL_USE_SEARCH_BACKFILL_KEY = "post_tool_use_search_backfilled_v1";
 const RAW_LOG_INDEX_STATE_KEY = "raw_log_index_state_v1";
 export class DerivedIndexError extends Error {
     constructor(cause) {
@@ -62,7 +64,7 @@ export function emptyCleanupReport(indexPath) {
 export function inspectIndexForCleanup(db, indexPath) {
     const searchableEvents = db.prepare(`
     SELECT ${STORED_EVENT_JSON_SQL} AS raw_json FROM events
-    WHERE hook_event IN ${SUMMARY_SOURCE_HOOKS}
+    WHERE hook_event IN ${SEARCH_INDEX_HOOKS}
     ORDER BY timestamp ASC, rowid ASC
   `).all()
         .map((row) => decodePersistedEvent(String(recordValue(row).raw_json)))
@@ -227,6 +229,7 @@ export function initializeIndex(db) {
     if (backfillSessionMetadata)
         backfillExistingSessionMetadata(db);
     migrateSearchIndexes(db);
+    backfillPostToolUseSearchIndex(db);
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 }
 function migrateSearchIndexes(db) {
@@ -280,6 +283,41 @@ function migrateSearchIndexes(db) {
     catch (error) {
         if (db.isTransaction)
             db.exec("ROLLBACK");
+        throw error;
+    }
+}
+export function backfillPostToolUseSearchIndex(db) {
+    const marker = recordValue(db.prepare("SELECT value FROM index_metadata WHERE key = ?1").get(POST_TOOL_USE_SEARCH_BACKFILL_KEY));
+    if (marker.value === "1")
+        return;
+    const insert = db.prepare(`
+    INSERT INTO event_fts (rowid, event_id, session_id, cwd, repo_root, hook_event, content)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+  `);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+        const rows = db.prepare(`
+      SELECT rowid, event_id, ${STORED_EVENT_JSON_SQL} AS raw_json FROM events
+      WHERE hook_event = 'PostToolUse' ORDER BY rowid ASC
+    `).all();
+        db.prepare("DELETE FROM event_fts WHERE rowid IN (SELECT rowid FROM events WHERE hook_event = 'PostToolUse')").run();
+        for (const row of rows) {
+            const record = recordValue(row);
+            const event = decodePersistedEvent(String(record.raw_json));
+            if (event.event_id !== String(record.event_id))
+                throw new Error(`Stored event locator mismatch for ${String(record.event_id)}.`);
+            if (isCodexLcmToolEvent(event))
+                continue;
+            insert.run(Number(record.rowid), event.event_id, event.session_id, event.cwd, event.repo_root ?? "", event.hook_event, eventSearchText(event));
+        }
+        db.prepare(`
+      INSERT INTO index_metadata (key, value) VALUES (?1, '1')
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(POST_TOOL_USE_SEARCH_BACKFILL_KEY);
+        db.exec("COMMIT");
+    }
+    catch (error) {
+        db.exec("ROLLBACK");
         throw error;
     }
 }

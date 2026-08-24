@@ -105,6 +105,7 @@ export function parseTimestamp(value, name) {
 }
 export function eventSearchText(event) {
     const metadata = extractEventMetadata(event);
+    const payload = event.hook_event === "PostToolUse" ? event.payload.tool_input : event.payload;
     return [
         event.hook_event,
         event.session_id,
@@ -114,7 +115,7 @@ export function eventSearchText(event) {
         event.tool_name,
         metadata.turn_id,
         metadata.tool_use_id,
-        JSON.stringify(event.payload),
+        JSON.stringify(payload),
     ].filter(Boolean).join("\n");
 }
 export function getRecentContext(db, rawLogPath, args = {}) {
