@@ -12,6 +12,8 @@ import { drainInbox, type DrainInboxReport } from "./inbox.ts";
 import { callTool } from "./mcp-tools.ts";
 import { maintenanceNeeded, runMaintenanceOnce } from "./maintenance.ts";
 import { hasCode, ipcAddress, prepareIpcAddress, readOrCreateToken, sendDaemonRequest, tokenMatches, type DaemonRequest, type DaemonResponse } from "./ipc.ts";
+import { initializeIndex } from "./storage-persistence.ts";
+import { registerStoredEventReader } from "./stored-event.ts";
 import { createStorage, type LcmStorage } from "./storage.ts";
 
 export const CURRENT_DAEMON_VERSION = LEGACY_COMPATIBLE_DAEMON_VERSION;
@@ -38,6 +40,15 @@ export async function startDaemon(config: LcmConfig): Promise<void> {
   try {
     ownsEndpoint = await bindDaemonEndpoint(config, server, token);
     if (!ownsEndpoint) return;
+    if (fs.existsSync(config.indexPath)) {
+      const index = new DatabaseSync(config.indexPath, { timeout: 5_000 });
+      try {
+        registerStoredEventReader(index, config);
+        initializeIndex(index);
+      } finally {
+        index.close();
+      }
+    }
     writePrivate(path.join(config.runtimeDir, PID_FILE), `${JSON.stringify({ pid: process.pid })}\n`);
     writePrivate(path.join(config.runtimeDir, VERSION_FILE), `${daemonVersion()}\n`);
     await serve(config, server, storage, token, () => { orderly = true; });

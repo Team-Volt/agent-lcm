@@ -9,6 +9,8 @@ import { drainInbox } from "./inbox.js";
 import { callTool } from "./mcp-tools.js";
 import { maintenanceNeeded, runMaintenanceOnce } from "./maintenance.js";
 import { hasCode, ipcAddress, prepareIpcAddress, readOrCreateToken, sendDaemonRequest, tokenMatches } from "./ipc.js";
+import { initializeIndex } from "./storage-persistence.js";
+import { registerStoredEventReader } from "./stored-event.js";
 import { createStorage } from "./storage.js";
 export const CURRENT_DAEMON_VERSION = LEGACY_COMPATIBLE_DAEMON_VERSION;
 const PID_FILE = "daemon.pid";
@@ -32,6 +34,16 @@ export async function startDaemon(config) {
         ownsEndpoint = await bindDaemonEndpoint(config, server, token);
         if (!ownsEndpoint)
             return;
+        if (fs.existsSync(config.indexPath)) {
+            const index = new DatabaseSync(config.indexPath, { timeout: 5_000 });
+            try {
+                registerStoredEventReader(index, config);
+                initializeIndex(index);
+            }
+            finally {
+                index.close();
+            }
+        }
         writePrivate(path.join(config.runtimeDir, PID_FILE), `${JSON.stringify({ pid: process.pid })}\n`);
         writePrivate(path.join(config.runtimeDir, VERSION_FILE), `${daemonVersion()}\n`);
         await serve(config, server, storage, token, () => { orderly = true; });

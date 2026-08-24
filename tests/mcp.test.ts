@@ -224,6 +224,58 @@ test("lcm_grep retries globally without redefining the scoped current session", 
   assert.deepEqual(responses[2].result.structuredContent.matches, []);
 });
 
+test("lcm_grep finds Claude PostToolUse input content but not tool responses", () => {
+  // Given
+  const home = tempHome();
+  const captured = runCli(["capture", "--harness", "claude", "PostToolUse"], {
+    input: JSON.stringify({
+      session_id: "post-tool-grep-source",
+      cwd: "/tmp/post-tool-grep",
+      tool_name: "mcp__agentmemory__memory_save",
+      tool_input: { content: "FMC-MAM-Eng-PreProd exact group marker" },
+      tool_response: { content: "mcp-post-tool-response-only-marker" },
+    }),
+    env: { AGENT_LCM_HOME: home },
+  });
+  assertCliOk(captured);
+  const db = new DatabaseSync(path.join(home, "index.sqlite"));
+  db.exec("DELETE FROM event_fts WHERE rowid IN (SELECT rowid FROM events WHERE hook_event = 'PostToolUse')");
+  db.prepare("DELETE FROM index_metadata WHERE key = ?1").run("post_tool_use_search_backfilled_v1");
+  db.close();
+
+  // When
+  const responses = runMcp([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: SUPPORTED_PROTOCOL_VERSION } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "lcm_grep",
+        arguments: {
+          query: "FMC-MAM-Eng-PreProd",
+          contentScope: "both",
+          excludeSessionIds: ["codex:excluded-current-session"],
+          limit: 20,
+        },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "lcm_grep", arguments: { query: "mcp-post-tool-response-only-marker", contentScope: "both" } },
+    },
+  ], { AGENT_LCM_HOME: home });
+
+  // Then
+  assert.deepEqual(
+    responses[1].result.structuredContent.matches.map((match: { session_id: string }) => match.session_id),
+    ["claude:post-tool-grep-source"],
+  );
+  assert.deepEqual(responses[2].result.structuredContent.matches, []);
+});
+
 test("lcm_grep applies memory exclusions before the result limit", () => {
   const home = tempHome();
   const cwd = "/tmp/scoped-grep-memory-limit";

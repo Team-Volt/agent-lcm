@@ -21,7 +21,7 @@ import {
 import { readManifest, segmentStoreState, writeManifestAtomic, type SegmentManifest } from "../src/raw-segments.ts";
 import { sha256 } from "../src/redact.ts";
 import { recordValue } from "../src/storage-rows.ts";
-import { clearVerifiedRawJson, segmentsNeedRawJsonClearing } from "../src/storage-persistence.ts";
+import { backfillPostToolUseSearchIndex, clearVerifiedRawJson, segmentsNeedRawJsonClearing } from "../src/storage-persistence.ts";
 import { registerStoredEventReader } from "../src/stored-event.ts";
 import { createStorage, LcmStorage } from "../src/storage.ts";
 import { clearDerivedSummaries, readJsonl, tempHome } from "./helpers.ts";
@@ -633,6 +633,197 @@ test("appends JSONL and indexes searchable cross-session events", () => {
   assert.deepEqual(matches.map((match) => match.session_id), ["codex:s1"]);
   assert.equal(matches[0].cwd, "/tmp/a");
 
+  storage.close();
+});
+
+test("indexes PostToolUse input without indexing its response across cleanup and rebuild", () => {
+  // Given
+  const home = tempHome();
+  const sessionId = "codex:post-tool-search";
+  const storage = createStorage({ home });
+  storage.ingest(normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: sessionId,
+      cwd: "/tmp/post-tool-search",
+      tool_name: "mcp__agentmemory__memory_save",
+      tool_input: { content: "FMC-MAM-Eng-PreProd input marker" },
+      tool_response: { content: "post-tool-response-only-marker" },
+    }),
+    env: {},
+    now,
+  }));
+
+  // When
+  const beforeCleanup = storage.searchSessions({ query: "FMC-MAM-Eng-PreProd", limit: 5 });
+  const responseMatches = storage.searchSessions({ query: "post-tool-response-only-marker", limit: 5 });
+  storage.cleanupIndex({ apply: true });
+  const afterCleanup = storage.searchSessions({ query: "FMC-MAM-Eng-PreProd", limit: 5 });
+  storage.close();
+  fs.unlinkSync(path.join(home, "index.sqlite"));
+  const rebuilt = createStorage({ home });
+  const afterRebuild = rebuilt.searchSessions({ query: "FMC-MAM-Eng-PreProd", limit: 5 });
+  rebuilt.close();
+
+  // Then
+  assert.deepEqual(beforeCleanup.map((match) => match.session_id), [sessionId]);
+  assert.deepEqual(responseMatches, []);
+  assert.deepEqual(afterCleanup.map((match) => match.session_id), [sessionId]);
+  assert.deepEqual(afterRebuild.map((match) => match.session_id), [sessionId]);
+});
+
+test("backfills PostToolUse search rows when opening an existing index", () => {
+  // Given
+  const home = tempHome();
+  const sessionId = "codex:post-tool-search-upgrade";
+  const storage = createStorage({ home });
+  storage.ingest(normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: sessionId,
+      cwd: "/tmp/post-tool-search-upgrade",
+      tool_name: "Write",
+      tool_input: { content: "existing-post-tool-upgrade-marker" },
+    }),
+    env: {},
+    now,
+  }));
+  storage.close();
+  const db = new DatabaseSync(path.join(home, "index.sqlite"));
+  db.exec("DELETE FROM event_fts WHERE rowid IN (SELECT rowid FROM events WHERE hook_event = 'PostToolUse')");
+  db.prepare("DELETE FROM index_metadata WHERE key = ?1").run("post_tool_use_search_backfilled_v1");
+  db.close();
+
+  // When
+  const upgraded = createStorage({ home });
+  const matches = upgraded.searchSessions({ query: "existing-post-tool-upgrade-marker", limit: 5 });
+  upgraded.close();
+
+  // Then
+  assert.deepEqual(matches.map((match) => match.session_id), [sessionId]);
+});
+
+test("keeps a PostToolUse event indexed when ingestion overlaps the backfill", () => {
+  // Given
+  const home = tempHome();
+  const initial = createStorage({ home });
+  initial.ingest(normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: "codex:post-tool-search-before-backfill",
+      cwd: "/tmp/post-tool-search-backfill-race",
+      tool_name: "Write",
+      tool_input: { content: "post-tool-before-backfill-marker" },
+    }),
+    env: {},
+    now,
+  }));
+  initial.close();
+  const concurrentEvent = normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: "codex:post-tool-search-during-backfill",
+      cwd: "/tmp/post-tool-search-backfill-race",
+      tool_name: "Write",
+      tool_input: { content: "duringbackfillmarker" },
+    }),
+    env: {},
+    now,
+  });
+  const db = new DatabaseSync(path.join(home, "index.sqlite"));
+  registerStoredEventReader(db, loadConfig({ home, env: {} }));
+  db.exec("DELETE FROM event_fts WHERE rowid IN (SELECT rowid FROM events WHERE hook_event = 'PostToolUse')");
+  db.prepare("DELETE FROM index_metadata WHERE key = ?1").run("post_tool_use_search_backfilled_v1");
+  const originalExec = db.exec.bind(db);
+  let insertedDuringBackfill = false;
+  db.exec = (sql: string) => {
+    if (!insertedDuringBackfill && sql === "BEGIN IMMEDIATE") {
+      insertedDuringBackfill = true;
+      const concurrent = createStorage({ home });
+      concurrent.ingest(concurrentEvent);
+      concurrent.close();
+    }
+    return originalExec(sql);
+  };
+
+  // When
+  let indexedEventIds: string[] = [];
+  try {
+    backfillPostToolUseSearchIndex(db);
+    indexedEventIds = db.prepare(`
+      SELECT events.event_id FROM event_fts
+      JOIN events ON events.rowid = event_fts.rowid
+      WHERE event_fts MATCH ?1
+    `)
+      .all("duringbackfillmarker")
+      .map((row) => String(recordValue(row).event_id));
+  } finally {
+    db.close();
+  }
+
+  // Then
+  assert.deepEqual(indexedEventIds, [concurrentEvent.event_id]);
+});
+
+test("keeps existing event search coverage and excludes Agent LCM tool events", () => {
+  // Given
+  const home = tempHome();
+  const storage = createStorage({ home });
+  const events = [
+    ["UserPromptSubmit", { prompt: "existing-prompt-search-marker" }],
+    ["Stop", { last_assistant_message: "existing-stop-search-marker" }],
+    ["PreCompact", { summary: "existing-precompact-search-marker" }],
+    ["PostCompact", { summary: "existing-postcompact-search-marker" }],
+  ] as const;
+  for (const [hookEvent, payload] of events) {
+    storage.ingest(normalizeHookEvent({
+      hookEvent,
+      rawInput: JSON.stringify({ session_id: `codex:${hookEvent}`, cwd: "/tmp/existing-search", ...payload }),
+      env: {},
+      now,
+    }));
+  }
+  storage.ingest(normalizeHookEvent({
+    hookEvent: "UserPromptSubmit",
+    rawInput: JSON.stringify({
+      session_id: "codex:generated-suggestion-search",
+      cwd: "/tmp/existing-search",
+      prompt: "# Overview Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex in this local project: /tmp/existing-search",
+    }),
+    env: {},
+    now,
+  }));
+  storage.ingest(normalizeHookEvent({
+    hookEvent: "PostToolUse",
+    rawInput: JSON.stringify({
+      session_id: "codex:self-tool-search",
+      cwd: "/tmp/existing-search",
+      tool_name: "mcp__agent_lcm__lcm_grep",
+      tool_input: { query: "agent-lcm-self-event-marker" },
+    }),
+    env: {},
+    now,
+  }));
+
+  // When
+  const matches = new Map([
+    "existing-prompt-search-marker",
+    "existing-stop-search-marker",
+    "existing-precompact-search-marker",
+    "existing-postcompact-search-marker",
+    "hyperpersonalized suggestions",
+    "agent-lcm-self-event-marker",
+  ].map((query) => [query, storage.searchSessions({ query, limit: 5 })]));
+
+  // Then
+  for (const marker of [
+    "existing-prompt-search-marker",
+    "existing-stop-search-marker",
+    "existing-precompact-search-marker",
+    "existing-postcompact-search-marker",
+  ]) assert.equal(matches.get(marker)?.length, 1, marker);
+  assert.equal(matches.get("hyperpersonalized suggestions")?.length, 1);
+  assert.deepEqual(matches.get("agent-lcm-self-event-marker"), []);
   storage.close();
 });
 

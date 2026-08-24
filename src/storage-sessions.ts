@@ -575,7 +575,7 @@ export function isCodexLcmToolEvent(event: NormalizedEvent): boolean {
 }
 
 export function isSearchIndexEvent(event: NormalizedEvent): boolean {
-  return isSummarySourceEvent(event) || isGeneratedSuggestionEvent(event);
+  return event.hook_event === "PostToolUse" || isSummarySourceEvent(event) || isGeneratedSuggestionEvent(event);
 }
 
 export function isSummaryHook(hookEvent: string): boolean {
