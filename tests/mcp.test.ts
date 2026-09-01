@@ -8,6 +8,7 @@ import { loadConfig } from "../src/config.ts";
 import { daemonStatus, ensureDaemon, stopDaemon } from "../src/daemon-client.ts";
 import { normalizeHookEvent, type NormalizedEvent } from "../src/events.ts";
 import { publishInboxEvent } from "../src/inbox.ts";
+import { toolResult } from "../src/mcp-result.ts";
 import { assertCliOk, clearDerivedSummaries, readJsonl, runCli, runMcp, tempHome } from "./helpers.ts";
 
 type FramedMcpResponse = {
@@ -38,6 +39,13 @@ test("MCP bridge drains queued events from every harness through the daemon", as
   const matches = responses[1].result.structuredContent.matches as Array<{ harness: string }>;
   assert.deepEqual(matches.map((match) => match.harness).sort(), ["codex", "cursor"]);
   assert.equal((await daemonStatus(config)).running, false);
+});
+
+test("tool results serialize structured content for text-only MCP clients", () => {
+  const structuredContent = { matches: [{ harness: "cursor", snippet: "full result" }] };
+  const result = toolResult("Found 1 matching session.", structuredContent);
+
+  assert.deepEqual(JSON.parse(result.content[0].text.slice(result.content[0].text.indexOf("\n\n") + 2)), structuredContent);
 });
 
 test("Claude capture keeps secrets out of durable and MCP surfaces while draining duplicates and quarantine", async (t) => {
@@ -1264,7 +1272,7 @@ test("MCP pack context biases toward the active thread across cwd mismatches", (
 
   const packed = responses[1].result.structuredContent;
   assert.match(packed.markdown, /Commented on spec PR 12977 that the spec matches intent/u);
-  assert.equal(responses[1].result.content[0].text, "Packed context is in structuredContent.markdown.");
+  assert.match(responses[1].result.content[0].text, /^Packed context is in structuredContent\.markdown\.\n\n\{/u);
   assert.equal(
     packed.sources.some((source: { session_id: string }) => source.session_id === targetSessionId),
     true,

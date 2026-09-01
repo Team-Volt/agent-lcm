@@ -1,6 +1,6 @@
 export function toolResult(text, structuredContent) {
     return {
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: `${text}\n\n${JSON.stringify(structuredContent)}` }],
         structuredContent,
     };
 }
