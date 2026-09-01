@@ -2,7 +2,7 @@ import type { LcmDescription, SummaryNode } from "./storage.ts";
 
 export function toolResult(text: string, structuredContent: unknown) {
   return {
-    content: [{ type: "text", text }],
+    content: [{ type: "text", text: `${text}\n\n${JSON.stringify(structuredContent)}` }],
     structuredContent,
   };
 }
