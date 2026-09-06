@@ -189,7 +189,7 @@ export function storageStats(db, rawLogPath, health, graphNodeCounts, graphEdgeC
     if (!db) {
         return {
             ...health,
-            hook_event_counts: countEventsByHook(readRawEvents(rawLogPath)),
+            hook_event_counts: health.hook_event_counts ?? countEventsByHook(readRawEvents(rawLogPath)),
             summary_nodes_by_depth: {},
             summary_nodes_by_source_type: {},
             graph_nodes_by_kind: {},
@@ -436,7 +436,7 @@ export function getStoredSessionSummary(db, rawLogPath, sessionId) {
   `).get(sessionId);
     return row ? rowToSessionSummary(row) : undefined;
 }
-function countEventsByHook(events) {
+export function countEventsByHook(events) {
     const counts = {};
     for (const event of events)
         counts[event.hook_event] = (counts[event.hook_event] ?? 0) + 1;

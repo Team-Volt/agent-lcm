@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
+import type { NormalizedEvent } from "../src/events.ts";
 import path from "node:path";
 import test from "node:test";
 import { parse } from "jsonc-parser";
@@ -34,6 +36,59 @@ test("hook command publishes a synthetic projectless prompt without opening stor
   assert.equal((lines[0] as { session_id: string }).session_id, "codex:hook-session");
   assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
   assert.equal(fs.existsSync(path.join(home, "index.sqlite")), false);
+});
+
+test("hook command preserves UTF-8 split across stdin chunks", () => {
+  const home = tempHome();
+  const preloadPath = path.join(home, "split-stdin.mjs");
+  fs.writeFileSync(preloadPath, `
+    const iterate = process.stdin[Symbol.asyncIterator].bind(process.stdin);
+    process.stdin[Symbol.asyncIterator] = async function* () {
+      for await (const chunk of { [Symbol.asyncIterator]: iterate }) {
+        for (let offset = 0; offset < chunk.length; offset++) yield chunk.subarray(offset, offset + 1);
+      }
+    };
+  `);
+  const input = JSON.stringify({ session_id: "utf8-chunks", cwd: home, prompt: "Keep 🙂 and 水 intact" }, null, 2) + "\n";
+  try {
+    const result = spawnSync(process.execPath, ["--no-warnings", "--import", preloadPath, "bin/agent-lcm", "hook", "UserPromptSubmit"], {
+      input, encoding: "utf8", timeout: 5_000,
+      env: { ...process.env, AGENT_LCM_HOME: home },
+    });
+    assertCliOk(result);
+    const [event] = readInboxEvents(home) as NormalizedEvent[];
+    assert.equal(event.payload.prompt, "Keep 🙂 and 水 intact");
+    assert.equal(event.raw_input_sha256, createHash("sha256").update(input).digest("hex"));
+    assert.equal(event.original_bytes, Buffer.byteLength(input));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("hook command bounds deeply nested payloads before persistence", () => {
+  const home = tempHome();
+  const input = `{"session_id":"deep-payload","cwd":${JSON.stringify(home)},"data":${"[".repeat(10_000)}"hidden-deep-value"${"]".repeat(10_000)}}`;
+  try {
+    const result = runCli(["hook", "UserPromptSubmit"], {
+      input, env: { AGENT_LCM_HOME: home },
+    });
+    assertCliOk(result);
+    const [event] = readInboxEvents(home) as NormalizedEvent[];
+    const persisted = JSON.stringify(event);
+    assert.equal(event.session_id, "codex:deep-payload");
+    assert.equal(event.original_bytes, Buffer.byteLength(input));
+    assert.equal(event.raw_input_sha256, createHash("sha256").update(input).digest("hex"));
+    assert.match(JSON.stringify(event.truncations), /"kind":"depth"/u);
+    assert.doesNotMatch(persisted, /hidden-deep-value/u);
+    assert.ok(persisted.length < 10_000);
+    assert.equal(fs.existsSync(path.join(home, "events.jsonl")), false);
+    assert.equal(fs.existsSync(path.join(home, "index.sqlite")), false);
+    for (const entry of fs.readdirSync(path.join(home, "overflow"))) {
+      assert.doesNotMatch(fs.readFileSync(path.join(home, "overflow", entry), "utf8"), /hidden-deep-value/u);
+    }
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("capture publishes a mapped harness event before starting the shared daemon", () => {
