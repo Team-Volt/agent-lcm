@@ -211,14 +211,14 @@ async function readStdinWithLimit(limit = DEFAULT_LIMITS.maxOverflowInputBytes) 
     const chunks = [];
     let bytes = 0;
     for await (const chunk of process.stdin) {
-        const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-        bytes += Buffer.byteLength(text, "utf8");
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+        bytes += buffer.length;
         if (bytes > limit) {
             throw new Error(`Hook input exceeds the ${limit} byte limit.`);
         }
-        chunks.push(text);
+        chunks.push(buffer);
     }
-    return chunks.join("");
+    return Buffer.concat(chunks, bytes).toString("utf8");
 }
 function extractStringField(rawInput, key) {
     try {

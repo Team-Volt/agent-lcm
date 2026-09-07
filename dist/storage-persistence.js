@@ -2,14 +2,14 @@ import fs from "node:fs";
 import { decodePersistedEvent } from "./event-codec.js";
 import { extractFileReferences } from "./file-refs.js";
 import { overflowReferenceFromEvent } from "./overflow.js";
-import { rawLogStat, readRawEventIds, readRawEvents, segmentedRawLogState } from "./raw-log.js";
+import { readAllRawEvents, readRawEvents, segmentedRawLogState } from "./raw-log.js";
 import { eventSearchText } from "./storage-context.js";
 import { recordValue, rowToSessionMemorySummary, rowToSummaryNode } from "./storage-rows.js";
 import { createSearchIndexTables, initializeStorageSchema } from "./storage-schema.js";
 import { segmentStorageHealth } from "./raw-segments.js";
 import { STORED_EVENT_JSON_SQL } from "./stored-event.js";
 import { getSummaryBackfillSessionIds, rebuildSessionMemorySummary, shouldRebuildSessionMemorySummary } from "./storage-summaries.js";
-import { extractEventMetadata, extractSessionMetadata, isCodexLcmToolEvent, isSearchIndexEvent, maxNullable, scalar, summarizeSessions } from "./storage-sessions.js";
+import { extractEventMetadata, extractSessionMetadata, isCodexLcmToolEvent, isSearchIndexEvent, maxNullable, scalar, summarizeSessions, countEventsByHook } from "./storage-sessions.js";
 import { SUMMARY_ALGORITHM_VERSION, SUMMARY_NODE_VERSION, isSummarySourceEvent, summaryNodeSearchText, summarySearchText, } from "./summary.js";
 const SUMMARY_SOURCE_HOOKS = "('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact')";
 const SEARCH_INDEX_HOOKS = "('UserPromptSubmit', 'Note', 'Stop', 'PreCompact', 'PostCompact', 'PostToolUse')";
@@ -36,21 +36,13 @@ export function rollbackPreservingError(db, original) {
         return { kind: "unknown", original, rollbackError };
     }
 }
-export function readCachedRawEventIds(rawLogPath, cache) {
-    const stat = rawLogStat(rawLogPath);
-    if (cache && stat && cache.size === stat.size && cache.mtimeMs === stat.mtimeMs && cache.ctimeMs === stat.ctimeMs) {
+export function readCachedRawEventIds(config, cache) {
+    const state = currentRawLogState(config);
+    if (cache && JSON.stringify(cache.state) === JSON.stringify(state)) {
         return { eventIds: cache.eventIds, cache };
     }
-    const eventIds = readRawEventIds(rawLogPath);
-    return { eventIds, cache: createRawEventIdCache(stat, eventIds) };
-}
-export function cacheRawEventIds(rawLogPath, eventIds) {
-    return createRawEventIdCache(rawLogStat(rawLogPath), eventIds);
-}
-function createRawEventIdCache(stat, eventIds) {
-    return stat
-        ? { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, eventIds }
-        : { size: 0, mtimeMs: 0, ctimeMs: 0, eventIds };
+    const eventIds = new Set(Array.from(readAllRawEvents(config), (event) => event.event_id));
+    return { eventIds, cache: { state, eventIds } };
 }
 export function emptyCleanupReport(indexPath) {
     return {
@@ -143,6 +135,7 @@ export function rawHealth(config, indexError) {
         raw_log_exists: fs.existsSync(config.rawLogPath), index_exists: fs.existsSync(config.indexPath),
         index_available: false, ...(indexError ? { index_error: indexError } : {}),
         event_count: rawEvents.length, session_count: summarizeSessions(rawEvents).length,
+        hook_event_counts: countEventsByHook(rawEvents),
     };
 }
 export function clearDerivedIndex(db) {

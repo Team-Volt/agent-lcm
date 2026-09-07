@@ -49,9 +49,19 @@ export function getTopSummaryNodesForSession(db, sessionId, limit = 3) {
   `).all(sessionId, clampSummaryLimit(limit, 3, 20)).map(rowToSummaryNode);
 }
 export function getSummaryNodesForGraph(db, sessionId, limit = 50) {
+    if (!db)
+        return [];
     const cappedLimit = clampSummaryLimit(limit, 50, 500);
-    const nodes = getSummaryNodesForSession(db, sessionId, 2_000);
-    const byId = new Map(nodes.map((node) => [node.node_id, node]));
+    const roots = db.prepare(`
+    SELECT node_id, session_id, depth, summary_text, token_count, source_token_count, source_type,
+           source_ids_json, source_event_ids_json, earliest_at, latest_at, created_at,
+           cwd, repo_root, git_branch, topics_json
+    FROM summary_nodes
+    WHERE session_id = ?1
+    ORDER BY depth DESC, latest_at DESC, earliest_at ASC, node_id ASC
+    LIMIT ?2
+  `).all(sessionId, cappedLimit).map(rowToSummaryNode);
+    const byId = new Map(roots.map((node) => [node.node_id, node]));
     const selected = new Map();
     const addWithLineage = (node) => {
         if (selected.has(node.node_id) || selected.size >= cappedLimit)
@@ -60,18 +70,15 @@ export function getSummaryNodesForGraph(db, sessionId, limit = 50) {
         if (node.source_type !== "nodes")
             return;
         for (const sourceId of node.source_ids) {
-            const sourceNode = byId.get(sourceId);
-            if (!sourceNode)
+            const sourceNode = byId.get(sourceId) ?? getSummaryNode(db, sourceId);
+            if (!sourceNode || sourceNode.session_id !== sessionId)
                 continue;
+            byId.set(sourceId, sourceNode);
             addWithLineage(sourceNode);
             if (selected.size >= cappedLimit)
                 break;
         }
     };
-    const roots = [...nodes].sort((a, b) => b.depth - a.depth ||
-        b.latest_at.localeCompare(a.latest_at) ||
-        a.earliest_at.localeCompare(b.earliest_at) ||
-        a.node_id.localeCompare(b.node_id));
     for (const node of roots) {
         addWithLineage(node);
         if (selected.size >= cappedLimit)

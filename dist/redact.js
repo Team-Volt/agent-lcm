@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_LIMITS } from "./config.js";
 import { redactSecretAssignments, shouldRedactSecretKey } from "./redact-assignments.js";
+const MAX_SANITIZE_DEPTH = 128;
 const TOKEN_PATTERNS = [
     {
         regex: /\b([a-z][a-z0-9+.-]*:\/\/[^:\s/@]*:)(?!\[REDACTED:secret\])([^@\s/]+)(@)/giu,
@@ -19,8 +20,8 @@ const TOKEN_PATTERNS = [
         replacement: (_match, prefix) => `${prefix}_[REDACTED:token]`,
     },
     {
-        regex: /\bghp_[A-Za-z0-9_]{20,}\b/gu,
-        replacement: "ghp_[REDACTED:token]",
+        regex: /\b(gh[pousr]_)[A-Za-z0-9_.-]{20,}\b/gu,
+        replacement: (_match, prefix) => `${prefix}[REDACTED:token]`,
     },
     {
         regex: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gu,
@@ -47,7 +48,7 @@ export function sanitizeForStorage(value, options = {}) {
     const truncations = [];
     const originalBytes = safeJsonByteLength(value);
     const sanitized = sanitizeValue(value, "$", limits, redactions, truncations);
-    const payloadBytes = safeJsonByteLength(sanitized);
+    const payloadBytes = byteLength(JSON.stringify(sanitized) ?? "");
     if (payloadBytes > limits.maxPayloadBytes) {
         const json = JSON.stringify(sanitized);
         const preview = truncateUtf8(json, limits.maxPayloadBytes);
@@ -69,7 +70,7 @@ export function sanitizeForStorage(value, options = {}) {
             redactions,
             truncations,
             originalBytes,
-            sanitizedBytes: safeJsonByteLength(payload),
+            sanitizedBytes: byteLength(JSON.stringify(payload)),
         };
     }
     return {
@@ -80,7 +81,7 @@ export function sanitizeForStorage(value, options = {}) {
         sanitizedBytes: payloadBytes,
     };
 }
-function sanitizeValue(value, path, limits, redactions, truncations) {
+function sanitizeValue(value, path, limits, redactions, truncations, depth = 0) {
     if (value === null || value === undefined)
         return value;
     if (typeof value === "string") {
@@ -92,8 +93,12 @@ function sanitizeValue(value, path, limits, redactions, truncations) {
         return value.toString();
     if (typeof value === "function" || typeof value === "symbol")
         return `[${typeof value}]`;
+    if (depth >= MAX_SANITIZE_DEPTH) {
+        truncations.push({ path, kind: "depth", max_depth: MAX_SANITIZE_DEPTH });
+        return { lcm_truncated: true, kind: "depth", max_depth: MAX_SANITIZE_DEPTH };
+    }
     if (Array.isArray(value)) {
-        return value.map((item, index) => sanitizeValue(item, `${path}[${index}]`, limits, redactions, truncations));
+        return value.map((item, index) => sanitizeValue(item, `${path}[${index}]`, limits, redactions, truncations, depth + 1));
     }
     if (typeof value === "object") {
         const output = {};
@@ -105,7 +110,7 @@ function sanitizeValue(value, path, limits, redactions, truncations) {
                 redactions.push({ path: childPath, reason: "secret-key" });
             }
             else {
-                sanitizedChild = sanitizeValue(child, childPath, limits, redactions, truncations);
+                sanitizedChild = sanitizeValue(child, childPath, limits, redactions, truncations, depth + 1);
             }
             Object.defineProperty(output, key, {
                 value: sanitizedChild,
@@ -165,7 +170,9 @@ function safeJsonByteLength(value) {
     try {
         return byteLength(JSON.stringify(value) ?? "");
     }
-    catch {
-        return byteLength(String(value));
+    catch (error) {
+        if (error instanceof RangeError || error instanceof TypeError)
+            return undefined;
+        throw error;
     }
 }

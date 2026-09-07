@@ -328,6 +328,10 @@ segments with gzip level 1, stores byte locators in SQLite, and removes the
 duplicate full JSON from archived index rows. The index does not keep a second
 full copy of archived event payloads.
 
+Archive reads verify the manifest byte count and SHA-256 checksum before
+returning evidence. The two-segment read cache refreshes when an archive file
+or its manifest record changes. Bulk ingestion syncs each segment batch once.
+
 Raw history is unlimited by default. To expire closed raw segments after a
 fixed number of days, set a positive integer in the process environment or in
 `~/.agent-lcm/.env`:
@@ -337,7 +341,8 @@ AGENT_LCM_RETENTION_DAYS=90
 ```
 
 Finite retention removes exact old event sources but keeps session and summary
-records. Check `config_error` and migration fields with:
+records. Retention maintenance runs only when a closed segment is past the
+cutoff. Check `config_error` and migration fields with:
 
 ```sh
 agent-lcm health --json
@@ -350,6 +355,11 @@ Agent LCM stores session content on the local machine. It redacts common secret
 fields and token formats before publication, strips credential URI passwords,
 and bounds large strings and payloads. Oversized sanitized values use local
 overflow files with hashes and byte counts.
+
+GitHub PAT, OAuth, user, installation, and refresh token formats are redacted.
+Capture preserves UTF-8 across input chunks and records original input byte
+counts. Objects and arrays at nesting depth 128 are replaced with explicit
+depth-truncation markers, including in overflow content.
 
 Redaction lowers risk but cannot prove that arbitrary tool output contains no
 sensitive data. Protect `~/.agent-lcm` as you would protect local source code

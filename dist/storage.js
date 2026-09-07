@@ -7,7 +7,7 @@ import { appendSegmentedEvents, readActiveRawEvents, readAllLocatedRawEvents, re
 import { describeMemory as describeStoredMemory, expandMemory as expandStoredMemory, expandQuery as expandStoredQuery, getContextPlan as readContextPlan, getFileRef as readFileRef, getFileRefsForSession as readFileRefsForSession, getOverflowRef as readOverflowRef, getRecentContext as readRecentContext, parseCursor, parseTimestamp, } from "./storage-context.js";
 import { packContext as packStoredContext } from "./storage-pack.js";
 import { derivedGraphEdgeCounts, derivedGraphNodeCounts, getStoredSessionGraph, } from "./storage-graph.js";
-import { DerivedIndexError, appliedCleanupReport, backfillDelegationParents as runDelegationParentBackfill, backfillFileRefs as runFileRefBackfill, backfillSessionMemorySummaries as runSummaryBackfill, cacheRawEventIds, clearDerivedIndex as clearStoredDerivedIndex, currentRawLogState, emptyCleanupReport, indexedEventsById as readIndexedEventsById, indexedActiveLogIsAppendOnly, indexedRawLogState as readIndexedRawLogState, indexEventInTransaction as indexStoredEventInTransaction, initializeIndex, inspectIndexForCleanup, isRawLogIndexed, knownEventIds as readKnownEventIds, optimizeIndex, previewCleanupReport, rawHealth as readRawHealth, recordRawLogState as storeRawLogState, replaceCleanupSearchIndex, rollbackPreservingError, writableIndexHealth, } from "./storage-persistence.js";
+import { DerivedIndexError, appliedCleanupReport, backfillDelegationParents as runDelegationParentBackfill, backfillFileRefs as runFileRefBackfill, backfillSessionMemorySummaries as runSummaryBackfill, clearDerivedIndex as clearStoredDerivedIndex, currentRawLogState, emptyCleanupReport, indexedEventsById as readIndexedEventsById, indexedActiveLogIsAppendOnly, indexedRawLogState as readIndexedRawLogState, indexEventInTransaction as indexStoredEventInTransaction, initializeIndex, inspectIndexForCleanup, isRawLogIndexed, knownEventIds as readKnownEventIds, optimizeIndex, previewCleanupReport, rawHealth as readRawHealth, readCachedRawEventIds, recordRawLogState as storeRawLogState, replaceCleanupSearchIndex, rollbackPreservingError, writableIndexHealth, } from "./storage-persistence.js";
 import { clampLimit, searchStoredOverflow, searchStoredSessions, } from "./storage-search.js";
 import { getSessionMemorySummary as readSessionMemorySummary, getSummaryNodesForSession as readSummaryNodesForSession, rebuildSessionMemorySummary as materializeSessionMemorySummary, } from "./storage-summaries.js";
 import { getCurrentStoredSession, getStoredSession, listStoredSessions, sortedSessionIds, storageStats, storedUsage, } from "./storage-sessions.js";
@@ -69,7 +69,9 @@ export class LcmStorage {
         if (this.db) {
             return this.db.prepare("SELECT 1 FROM events WHERE event_id = ?1 LIMIT 1").get(eventId) !== undefined;
         }
-        return Array.from(readAllRawEvents(this.config)).some((event) => event.event_id === eventId);
+        const result = readCachedRawEventIds(this.config, this.rawEventIdCache);
+        this.rawEventIdCache = result.cache;
+        return result.eventIds.has(eventId);
     }
     ingest(event) {
         if (this.readOnly) {
@@ -134,7 +136,6 @@ export class LcmStorage {
             }
             if (eventsToAppend.length > 0) {
                 const locations = appendSegmentedEvents(this.config, eventsToAppend);
-                this.storeRawEventIds(rawSeen);
                 return {
                     eventsToAppend,
                     locationsByEventId: new Map(eventsToAppend.map((event, index) => [event.event_id, locations[index]])),
@@ -196,9 +197,6 @@ export class LcmStorage {
     }
     readRawEventIds() {
         return new Set(Array.from(readAllRawEvents(this.config), (event) => event.event_id));
-    }
-    storeRawEventIds(eventIds) {
-        this.rawEventIdCache = cacheRawEventIds(this.config.rawLogPath, eventIds);
     }
     rebuildSessionMemorySummaries(sessionIds) {
         if (!this.db)
