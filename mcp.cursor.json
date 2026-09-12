@@ -4,7 +4,7 @@
     "agent-lcm": {
       "type": "stdio",
       "command": "node",
-      "args": ["${CURSOR_PLUGIN_ROOT}/bin/agent-lcm", "mcp"]
+      "args": ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"]
     }
   }
 }

@@ -67,12 +67,15 @@ test("client hook manifests invoke explicit or detected harness capture", () => 
   assert.deepEqual(readJson("mcp.cursor.json").mcpServers["agent-lcm"], {
     type: "stdio",
     command: "node",
-    args: ["${CURSOR_PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
+    args: ["${PLUGIN_ROOT}/bin/agent-lcm", "mcp"],
   });
+  const cursorMcp = JSON.stringify(readJson("mcp.cursor.json"));
   const cursorHooks = JSON.stringify(readJson("hooks/cursor.json"));
   assert.match(cursorHooks, /capture --harness cursor UserPromptSubmit/u);
-  assert.match(cursorHooks, /\$\{CURSOR_PLUGIN_ROOT\}/u);
-  assert.doesNotMatch(cursorHooks, /\$\{PLUGIN_ROOT\}/u);
+  assert.match(cursorHooks, /\$\{PLUGIN_ROOT\}/u);
+  // Cursor treats unknown ${VAR} tokens as user-filled plugin variables at install.
+  assert.doesNotMatch(cursorMcp, /CURSOR_PLUGIN_ROOT/u);
+  assert.doesNotMatch(cursorHooks, /CURSOR_PLUGIN_ROOT/u);
   const portableHooks = readJson("hooks.json");
   assert.equal(portableHooks.version, 1);
   assert.equal(portableHooks.hooks.sessionStart[0].type, "command");

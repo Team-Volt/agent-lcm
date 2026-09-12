@@ -16,6 +16,11 @@ step.
 
 ## Native install and inspection
 
+The native Cursor package uses `.cursor-plugin/plugin.json`, `hooks/cursor.json`,
+and `mcp.cursor.json`. Hook and MCP commands use `${PLUGIN_ROOT}` so Cursor
+substitutes the plugin directory. Other `${VAR}` tokens are treated as
+user-filled plugin variables and make install ask for additional values.
+
 Open Cursor's Customize page and install Agent LCM if it is available in a
 marketplace you trust. Until it is listed, Cursor documents loading a plugin
 from `~/.cursor/plugins/local`. First run `npm root --global` and confirm the
