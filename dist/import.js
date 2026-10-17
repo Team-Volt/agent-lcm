@@ -1,6 +1,6 @@
 import { daemonRequest, ensureDaemon } from "./daemon-client.js";
 import { readImportedSession } from "./import-formats.js";
-import { importFiles, importSources } from "./import-sources.js";
+import { importFiles, importSources, needsExportHarnesses } from "./import-sources.js";
 const BATCH_SIZE = 5000;
 const DAEMON_REQUEST_OVERHEAD_BYTES = 1024;
 export async function importSessions(options) {
@@ -13,7 +13,7 @@ export async function importSessions(options) {
         events_skipped_duplicate: 0,
         records_rejected: 0,
         failures: [],
-        needs_export: options.all ? ["vscode", "cursor"] : [],
+        needs_export: options.all ? needsExportHarnesses() : [],
     };
     const selections = importSources(options).map((selection) => ({
         ...selection,
