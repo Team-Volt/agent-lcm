@@ -20,6 +20,25 @@ export function readJsonl(filePath: string): unknown[] {
   return raw.split(/\r?\n/u).map((line) => JSON.parse(line));
 }
 
+export function isolatedCliEnv(env: NodeJS.ProcessEnv = {}): {
+  env: NodeJS.ProcessEnv;
+  cleanup: () => void;
+} {
+  const explicitHome = env.HOME ?? env.USERPROFILE;
+  const isolatedHome = explicitHome ?? tempHome("agent-lcm-isolated-user-home-");
+  return {
+    env: {
+      ...process.env,
+      HOME: isolatedHome,
+      USERPROFILE: isolatedHome,
+      ...env,
+    },
+    cleanup: () => {
+      if (explicitHome === undefined) fs.rmSync(isolatedHome, { recursive: true, force: true });
+    },
+  };
+}
+
 export function runCli(args: string[], options: {
   input?: string;
   env?: NodeJS.ProcessEnv;
@@ -27,26 +46,28 @@ export function runCli(args: string[], options: {
   timeout?: number;
   keepDaemon?: boolean;
 } = {}) {
-  const result = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-    input: options.input,
-    env: {
-      ...process.env,
-      ...options.env,
-    },
-    timeout: options.timeout ?? 10_000,
-  });
-  if (options.env?.AGENT_LCM_HOME && args[0] !== "daemon" && !options.keepDaemon) {
-    const cleanup = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "stop"], {
-      cwd: options.cwd ?? path.resolve("."),
+  const isolated = isolatedCliEnv(options.env);
+  try {
+    const result = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", ...args], {
+      cwd: path.resolve("."),
       encoding: "utf8",
-      env: { ...process.env, ...options.env },
-      timeout: Math.max(options.timeout ?? 10_000, 15_000),
+      input: options.input,
+      env: isolated.env,
+      timeout: options.timeout ?? 10_000,
     });
-    assert.equal(cleanup.status, 0, cleanup.stderr);
+    if (options.env?.AGENT_LCM_HOME && args[0] !== "daemon" && !options.keepDaemon) {
+      const cleanup = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "stop"], {
+        cwd: options.cwd ?? path.resolve("."),
+        encoding: "utf8",
+        env: isolated.env,
+        timeout: Math.max(options.timeout ?? 10_000, 15_000),
+      });
+      assert.equal(cleanup.status, 0, cleanup.stderr);
+    }
+    return result;
+  } finally {
+    isolated.cleanup();
   }
-  return result;
 }
 
 export function assertCliOk(result: ReturnType<typeof runCli>): void {
