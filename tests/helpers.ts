@@ -20,6 +20,17 @@ export function readJsonl(filePath: string): unknown[] {
   return raw.split(/\r?\n/u).map((line) => JSON.parse(line));
 }
 
+export function isolatedCliEnv(env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const isolatedHome = path.join(os.tmpdir(), "agent-lcm-isolated-user-home");
+  fs.mkdirSync(isolatedHome, { recursive: true, mode: 0o700 });
+  return {
+    ...process.env,
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
+    ...env,
+  };
+}
+
 export function runCli(args: string[], options: {
   input?: string;
   env?: NodeJS.ProcessEnv;
@@ -27,21 +38,19 @@ export function runCli(args: string[], options: {
   timeout?: number;
   keepDaemon?: boolean;
 } = {}) {
+  const env = isolatedCliEnv(options.env);
   const result = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", ...args], {
     cwd: path.resolve("."),
     encoding: "utf8",
     input: options.input,
-    env: {
-      ...process.env,
-      ...options.env,
-    },
+    env,
     timeout: options.timeout ?? 10_000,
   });
   if (options.env?.AGENT_LCM_HOME && args[0] !== "daemon" && !options.keepDaemon) {
     const cleanup = spawnSync(process.execPath, ["--no-warnings", "bin/agent-lcm", "daemon", "stop"], {
       cwd: options.cwd ?? path.resolve("."),
       encoding: "utf8",
-      env: { ...process.env, ...options.env },
+      env,
       timeout: Math.max(options.timeout ?? 10_000, 15_000),
     });
     assert.equal(cleanup.status, 0, cleanup.stderr);
