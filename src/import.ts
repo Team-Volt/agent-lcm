@@ -2,7 +2,7 @@ import type { LcmConfig } from "./config.ts";
 import { daemonRequest, ensureDaemon } from "./daemon-client.ts";
 import type { NormalizedEvent } from "./events.ts";
 import { readImportedSession } from "./import-formats.ts";
-import { importFiles, importSources } from "./import-sources.ts";
+import { importFiles, importSources, needsExportHarnesses } from "./import-sources.ts";
 import type { ImportHarness, ImportOptions, ImportProgress, ImportReport } from "./import-types.ts";
 import type { IngestManyResult } from "./storage-types.ts";
 
@@ -22,7 +22,7 @@ export async function importSessions(options: ImportOptions): Promise<ImportRepo
     events_skipped_duplicate: 0,
     records_rejected: 0,
     failures: [],
-    needs_export: options.all ? ["vscode", "cursor"] : [],
+    needs_export: options.all ? needsExportHarnesses() : [],
   };
   const selections = importSources(options).map((selection) => ({
     ...selection,

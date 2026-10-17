@@ -1,6 +1,7 @@
 import type { LcmConfig } from "./config.ts";
 
-export type ImportHarness = "codex" | "cursor" | "vscode" | "copilot" | "kiro" | "claude";
+export const IMPORT_HARNESSES = ["codex", "cursor", "vscode", "copilot", "kiro", "claude"] as const;
+export type ImportHarness = (typeof IMPORT_HARNESSES)[number];
 
 export type ImportOptions = {
   harness?: ImportHarness;
@@ -33,5 +34,5 @@ export type ImportReport = {
   events_skipped_duplicate: number;
   records_rejected: number;
   failures: Array<{ source: string; error: string }>;
-  needs_export: Array<"vscode" | "cursor">;
+  needs_export: ImportHarness[];
 };

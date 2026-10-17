@@ -138,7 +138,7 @@ test("all discovers local Codex, Copilot, Kiro, and Claude homes", async (t) => 
   const report = await importSessions({ all: true, config, paths: [root], onProgress: (event) => progress.push(event) });
 
   assert.ok(report.events_imported >= 3);
-  assert.deepEqual(report.needs_export, ["vscode", "cursor"]);
+  assert.deepEqual(report.needs_export, ["cursor", "vscode"]);
   assert.deepEqual(progress[0], {
     phase: "scan",
     totalSessions: 4,
